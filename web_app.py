@@ -362,6 +362,9 @@ def index():
         <button class="pill" onclick="runQuick('docker ps')">docker ps</button>
         <button class="pill" onclick="runQuick('docker compose ps')">docker compose ps</button>
         <button class="pill" onclick="runQuick('ls -la')">ls -la</button>
+        <button class="pill" onclick="runQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
+        <button class="pill" onclick="runQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
+        <button class="pill" onclick="confirmDockerRefresh()">docker refresh</button>
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
     </section>
@@ -573,6 +576,47 @@ def index():
     } finally{
       setBusy(false);
     }
+  }
+
+  function confirmDockerRefresh(){
+    if(!confirm("This will stop containers, hard-reset the repo, and rebuild the orchestrator. Continue?")) return;
+    var s = [
+      "bash <<'SH'",
+      "set -euo pipefail",
+      "",
+      'REPO_DIR="/opt/openclaw-crypto"',
+      'COMPOSE_FILE="docker-compose.orchestrator.yml"',
+      'ENV_SRC="/etc/openclaw-crypto/openclaw.env"',
+      "",
+      'cd "$REPO_DIR"',
+      "",
+      'echo "== Stop containers (releases file locks) =="',
+      'docker compose -f "$COMPOSE_FILE" down --remove-orphans || true',
+      "",
+      'echo "== Update repo to origin/main =="',
+      "git fetch --all --prune",
+      "git checkout main",
+      "git reset --hard origin/main",
+      "",
+      'echo "== Fix permissions so git clean can remove container-created files =="',
+      "if command -v sudo >/dev/null 2>&1; then",
+      '  sudo chown -R "$(id -u):$(id -g)" . || true',
+      "else",
+      '  echo "WARNING: sudo not found."',
+      "fi",
+      "",
+      'echo "== Clean untracked/ignored files =="',
+      "git clean -fdx || { command -v sudo >/dev/null 2>&1 && sudo git clean -fdx; }",
+      "",
+      'echo "== Re-link env and start =="',
+      'ln -sfn "$ENV_SRC" .env',
+      "",
+      'docker compose -f "$COMPOSE_FILE" up -d --build',
+      'docker compose -f "$COMPOSE_FILE" ps',
+      'docker compose -f "$COMPOSE_FILE" logs --tail=200',
+      "SH"
+    ].join("\\n");
+    runQuick(s);
   }
 
   // fetch host label (best-effort)
