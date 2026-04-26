@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from cheap_chat_feature import cheap_chat as _cheap_chat
 from openclaw_control.config import settings
 from openclaw_control.github_tools import (
     ALLOWED_REPOS,
@@ -60,6 +61,12 @@ class VibePlanRequest(BaseModel):
 
 class VibeExecuteRequest(BaseModel):
     command: str
+
+
+class CheapChatRequest(BaseModel):
+    message: str
+    provider: str = "groq"
+    history: list = []  # list of {role, content} dicts
 
 
 def _build_issue_body(req: CopilotRequest) -> str:
@@ -812,6 +819,43 @@ def index():
     .apApproveBtn:hover{background:rgba(34,197,94,.18);}
     .apApproveBtn:disabled{opacity:.4;cursor:not-allowed;}
     .apApproveResult{font-size:11px;margin-top:5px;color:var(--muted);}
+
+    /* Cheap Chat provider bar */
+    .cheapBar{
+      display:none;
+      gap:6px;
+      padding:7px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      flex-wrap:wrap;
+      align-items:center;
+      font-size:12px;
+      color:var(--muted);
+    }
+    .cheapProviderBtn{
+      padding:3px 12px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.04);
+      color:var(--muted);
+      font-size:12px;
+      font-weight:600;
+      cursor:pointer;
+      transition:background .15s,color .15s;
+      font-family:var(--sans);
+      white-space:nowrap;
+    }
+    .cheapProviderBtn.active{
+      background:linear-gradient(180deg,rgba(34,197,94,.95),rgba(22,163,74,.95));
+      color:#fff;
+      border-color:transparent;
+    }
+    .cheapProviderBtn:hover:not(.active){background:rgba(255,255,255,.08);color:var(--text);}
+    .cheapModelLabel{
+      font-size:11px;
+      color:rgba(34,197,94,.7);
+      user-select:none;
+    }
     .backendBanner{
       display:none;
       position:fixed;top:0;left:0;right:0;
@@ -846,6 +890,7 @@ def index():
           <button class="tabBtn" data-agent="vibe">Vibe</button>
           <button class="tabBtn" data-agent="team">Team</button>
           <button class="tabBtn" data-agent="autopilot">Autopilot <span class="apBadge" id="apTabBadge" style="display:none">0</span></button>
+          <button class="tabBtn" data-agent="cheap">💬 Chat</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
       </div>
@@ -857,10 +902,19 @@ def index():
         <button class="teamBtn cancelBtn" id="cancelReviewBtn" style="display:none">✕ Cancel run</button>
       </div>
 
+      <div class="cheapBar" id="cheapBar">
+        <span>Provider:</span>
+        <button class="cheapProviderBtn active" data-provider="groq">Groq</button>
+        <button class="cheapProviderBtn" data-provider="mistral">Mistral</button>
+        <button class="cheapProviderBtn" data-provider="cerebras">Cerebras</button>
+        <span class="cheapModelLabel" id="cheapModelLabel">llama-3.3-70b-versatile</span>
+      </div>
+
       <div id="chat-main" class="chatBody"></div>
       <div id="chat-pnl"  class="chatBody" style="display:none"></div>
       <div id="chat-quant" class="chatBody" style="display:none"></div>
       <div id="chat-coo"  class="chatBody" style="display:none"></div>
+      <div id="chat-cheap" class="chatBody" style="display:none"></div>
 
       <div class="teamFeed" id="teamFeed"></div>
 
@@ -1004,6 +1058,7 @@ def index():
     pnl:   document.getElementById("chat-pnl"),
     quant: document.getElementById("chat-quant"),
     coo:   document.getElementById("chat-coo"),
+    cheap: document.getElementById("chat-cheap"),
   };
   function activeChatPane() { return CHAT_PANES[activeAgent] || null; }
   const terminalEl = document.getElementById("terminal");
@@ -1018,12 +1073,13 @@ def index():
   document.getElementById("imageBtn").onclick = () => imgInput.click();
 
   // --- multi-agent state ---
-  const AGENT_LABELS = {main: "Main AI", pnl: "P&L", quant: "Quant", coo: "COO"};
+  const AGENT_LABELS = {main: "Main AI", pnl: "P&L", quant: "Quant", coo: "COO", cheap: "Cheap Chat"};
   const AGENT_STORE_KEYS = {
     main:  "openclaw_chat_main_v1",
     pnl:   "openclaw_chat_pnl_v1",
     quant: "openclaw_chat_quant_v1",
     coo:   "openclaw_chat_coo_v1",
+    cheap: "openclaw_chat_cheap_v1",
   };
 
   let activeAgent = "main";
@@ -1113,17 +1169,20 @@ def index():
   const teamFeedEl = document.getElementById("teamFeed");
   const vibePadEl  = document.getElementById("vibePad");
   const autopilotPadEl = document.getElementById("autopilotPad");
+  const cheapBarEl = document.getElementById("cheapBar");
   const composerEl = document.querySelector(".chatComposer");
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
     const isVibe = ag === "vibe";
     const isAutopilot = ag === "autopilot";
+    const isCheap = ag === "cheap";
     // Show the right chat pane (or none for team/vibe/autopilot) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
       pane.style.display = (!isTeam && !isVibe && !isAutopilot && key === ag) ? "" : "none";
     }
     teamBtnsBarEl.style.display  = isTeam      ? "flex" : "none";
+    cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
     autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
@@ -1235,6 +1294,40 @@ def index():
     // Direct shell command — route to terminal pane, not to agent
     if (text.startsWith("!")) {
       await runQuick(text.slice(1).trim());
+      return;
+    }
+
+    // Cheap Chat tab — route to /cheap-chat
+    if (activeAgent === "cheap") {
+      setBusy(true);
+      // Build history for the provider (last 20 turns, user+assistant only)
+      const providerHistory = (histories.cheap || [])
+        .slice(-21, -1)  // exclude the message we just pushed
+        .filter(h => h.role === "user" || h.role === "agent")
+        .map(h => ({role: h.role === "agent" ? "assistant" : "user", content: h.text}));
+      try {
+        const res = await fetch(API_BASE + "/cheap-chat", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            message: text,
+            provider: cheapActiveProvider,
+            history: providerHistory,
+          }),
+        });
+        const data = await res.json();
+        const out = data.reply || data.error || "(no response)";
+        addChat("agent", out);
+        histories.cheap.push({role: "agent", text: out});
+        saveHistory("cheap");
+      } catch(err) {
+        const msg = "Web error: " + (err && err.message ? err.message : String(err));
+        addChat("agent", msg);
+        histories.cheap.push({role: "agent", text: msg});
+        saveHistory("cheap");
+      } finally {
+        setBusy(false);
+      }
       return;
     }
 
@@ -1500,6 +1593,28 @@ def index():
     if (!goal) return;
     await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
   };
+
+  // ── Cheap Chat ────────────────────────────────────────────────────────────
+
+  const _CHEAP_PROVIDER_MODELS = {
+    groq:      "llama-3.3-70b-versatile",
+    mistral:   "mistral-small-latest",
+    cerebras:  "llama3.1-70b",
+  };
+
+  let cheapActiveProvider = "groq";
+  const cheapModelLabelEl = document.getElementById("cheapModelLabel");
+
+  document.querySelectorAll(".cheapProviderBtn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      cheapActiveProvider = btn.getAttribute("data-provider");
+      document.querySelectorAll(".cheapProviderBtn").forEach(b =>
+        b.classList.toggle("active", b === btn));
+      if (cheapModelLabelEl) {
+        cheapModelLabelEl.textContent = _CHEAP_PROVIDER_MODELS[cheapActiveProvider] || "";
+      }
+    });
+  });
 
   // ── Team review ──────────────────────────────────────────────────────────────
 
@@ -2221,3 +2336,18 @@ def autopilot_events(cursor: int = 0):
 def autopilot_ack():
     """Acknowledge all findings (clears the unread badge)."""
     return ack_autopilot_findings()
+
+
+# ── Cheap Chat endpoint ───────────────────────────────────────────────────────
+
+@app.post("/cheap-chat")
+def cheap_chat(req: CheapChatRequest):
+    """Send a message to a cheap inference provider and return the reply."""
+    reply = _cheap_chat(
+        message=req.message,
+        provider=req.provider,
+        history=req.history,
+    )
+    if reply.startswith("❌"):
+        return {"error": reply}
+    return {"reply": reply}
