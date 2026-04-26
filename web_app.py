@@ -891,8 +891,10 @@ def copilot_issue(req: CopilotRequest):
             "issue_url": data["html_url"],
             "issue_number": data["number"],
         }
-    except Exception as e:
-        return {"error": str(e)}
+    except _requests.exceptions.RequestException as e:
+        return {"error": f"GitHub API request failed: {type(e).__name__}"}
+    except Exception:
+        return {"error": "Unexpected error creating issue. Check server logs."}
 
 
 @app.get("/copilot/poll/{issue_number}")
