@@ -1,5 +1,4 @@
 import atexit as _atexit
-import shlex
 import subprocess
 import threading as _threading
 import time as _time
@@ -499,8 +498,8 @@ _VIBE_RUNS: dict[str, dict] = {}
 _VIBE_RUNS_LOCK = _threading.Lock()
 
 
-def start_vibe_run(workdir: str, prompt: str) -> str:
-    """Start a Vibe execution in a background thread. Returns run_id."""
+def start_vibe_run(command: str) -> str:
+    """Run an approved shell command on the VPS via SSH in a background thread. Returns run_id."""
     run_id = _uuid.uuid4().hex[:8]
     run: dict = {"status": "running", "output": "", "error": ""}
     with _VIBE_RUNS_LOCK:
@@ -515,50 +514,17 @@ def start_vibe_run(workdir: str, prompt: str) -> str:
                     "Set it in .env to enable remote Vibe execution."
                 )
             return
-        remote_cmd = (
-            "vibe --workdir "
-            + shlex.quote(workdir)
-            + " --prompt "
-            + shlex.quote(prompt)
-        )
-        try:
-            proc = subprocess.run(
-                [
-                    "ssh",
-                    "-o", "BatchMode=yes",
-                    "-o", "ConnectTimeout=5",
-                    settings.ssh_host,
-                    remote_cmd,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=900,
-            )
-            output = (
-                f"exit={proc.returncode}\n"
-                f"STDOUT:\n{proc.stdout}\n"
-                f"STDERR:\n{proc.stderr}"
-            )
-            with _VIBE_RUNS_LOCK:
+        result = run_ssh(command)
+        with _VIBE_RUNS_LOCK:
+            if "error" in result:
+                run["status"] = "error"
+                run["error"] = result["error"]
+            else:
                 run["status"] = "done"
-                run["output"] = output
-        except subprocess.TimeoutExpired:
-            with _VIBE_RUNS_LOCK:
-                run["status"] = "error"
-                run["error"] = "Vibe timed out after 900 seconds."
-        except FileNotFoundError:
-            with _VIBE_RUNS_LOCK:
-                run["status"] = "error"
-                run["error"] = (
-                    "ssh executable not found locally. "
-                    "Ensure OpenSSH client is installed and available on PATH."
+                run["output"] = (
+                    f"STDOUT:\n{result.get('stdout', '')}\n"
+                    f"STDERR:\n{result.get('stderr', '')}"
                 )
-        except Exception as exc:
-            with _VIBE_RUNS_LOCK:
-                run["status"] = "error"
-                run["error"] = f"Vibe SSH error ({type(exc).__name__}). Check server logs."
 
     _threading.Thread(target=_execute, daemon=True).start()
     return run_id
