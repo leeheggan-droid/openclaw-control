@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 from openclaw_control.config import settings
 
@@ -35,7 +36,13 @@ def _repo() -> str:
     return settings.repo_dir or "/opt/openclaw-crypto"
 
 
-def _trade_log_db() -> Path:
+def _quoted_trade_log_db() -> str:
+    """Return the shell-quoted path to the persistent trade log SQLite database.
+
+    Mirrors the resolution logic in trade_log.py. The path is shell-quoted to
+    prevent injection if the env variable contains metacharacters.
+    """
+    return shlex.quote(str(_trade_log_db()))
     """Return the path to the persistent trade log SQLite database.
 
     Mirrors the resolution logic in trade_log.py so probe commands
@@ -69,7 +76,7 @@ def _build_reports() -> dict[str, list[str]]:
         # ── Last trade executed ──────────────────────────────────────────────
         "last_trade": [
             # Primary: read directly from the persistent on-disk trade log SQLite.
-            f"sqlite3 {_trade_log_db()} "
+            f"sqlite3 {_quoted_trade_log_db()} "
             "'SELECT ts,symbol,side,size,fill_price,trade_id FROM trade_executions "
             "ORDER BY id DESC LIMIT 10;' 2>/dev/null || echo '[trade log unavailable]'",
             # Fallback: docker container logs
@@ -82,7 +89,7 @@ def _build_reports() -> dict[str, list[str]]:
         # ── Trade history (last 7 days window in logs) ───────────────────────
         "trade_history_7d": [
             # Primary: read from the persistent on-disk trade log SQLite.
-            f"sqlite3 {_trade_log_db()} "
+            f"sqlite3 {_quoted_trade_log_db()} "
             "'SELECT ts,symbol,side,size,fill_price,trade_id FROM trade_executions "
             "ORDER BY id DESC LIMIT 200;' 2>/dev/null || echo '[trade log unavailable]'",
             # Fallback: docker container logs
@@ -95,7 +102,7 @@ def _build_reports() -> dict[str, list[str]]:
         # ── P&L snapshot ─────────────────────────────────────────────────────
         "pnl_snapshot": [
             # Primary: read from the persistent on-disk P&L log SQLite.
-            f"sqlite3 {_trade_log_db()} "
+            f"sqlite3 {_quoted_trade_log_db()} "
             "'SELECT ts,total_pnl,equity,drawdown,realised_pnl,unrealised_pnl,sharpe_ratio "
             "FROM pnl_snapshots ORDER BY id DESC LIMIT 24;' 2>/dev/null || echo '[pnl log unavailable]'",
             # Fallback: docker container logs
