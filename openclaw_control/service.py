@@ -1,6 +1,7 @@
 import atexit as _atexit
 import hashlib as _hashlib
 import json as _json
+import re as _re
 import subprocess
 import threading as _threading
 import time as _time
@@ -22,6 +23,9 @@ from openclaw_control.agents.quant_agent import quant_agent
 from openclaw_control.agents.coo_agent import coo_agent
 from openclaw_control.agents.vibe_agent import vibe_planner
 from openclaw_control.agents.investigate_agent import investigate_agent
+from openclaw_control.ops import map_loader as _map_loader
+from openclaw_control.memory import agent_memory as _memory
+from openclaw_control import vibe_reports as _vibe_reports
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
@@ -34,6 +38,87 @@ _pnl_session = SQLiteSession("openclaw_pnl_session", session_settings=_SESSION_S
 _quant_session = SQLiteSession("openclaw_quant_session", session_settings=_SESSION_SETTINGS)
 _coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_SETTINGS)
 _vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
+
+# ── Memory constants ──────────────────────────────────────────────────────────
+# Number of leading fingerprint characters used for a quick config-mismatch check.
+# The full fingerprint is 24 hex chars; 12 is enough to detect SSH host / repo_dir
+# changes without requiring an SSH round-trip on every agent call.
+_FINGERPRINT_PREFIX_LEN: int = 12
+
+# Maximum characters stored per report in the agent memory snapshot.
+# Derived summaries only — never raw full logs.
+_MAX_REPORT_SUMMARY_LENGTH: int = 1000
+
+# ── Vibe Evidence Report mechanism ───────────────────────────────────────────
+# Deterministic, read-only SSH command sequences per report_id.
+# Commands are sourced from vibe_reports.py (primary) and the ops map YAML
+# (secondary / legacy). Both are merged; vibe_reports.py takes precedence.
+
+def _report_commands_from_map() -> dict[str, list[str]]:
+    """Build report_id → [commands] from vibe_reports.py and the live ops map YAML.
+
+    vibe_reports.py is the primary source; the YAML data_location_map is merged
+    as a fallback so any operator customisations in the YAML are still honoured.
+    Falls back to vibe_reports.py alone if the map cannot be loaded.
+    """
+    # Primary source: vibe_reports.py (always available)
+    result: dict[str, list[str]] = {
+        rid: _vibe_reports.get_report_commands(rid)
+        for rid in _vibe_reports.VIBE_REPORT_IDS
+    }
+    # Secondary source: ops map YAML (adds any report_ids defined there but not in vibe_reports)
+    try:
+        data = _map_loader.get_map()
+        report_section = data.get("data_location_map", {}).get("report_commands", {})
+        for rid, block in (report_section or {}).items():
+            if rid not in result:
+                cmds = block.get("commands", [])
+                if cmds:
+                    result[rid] = list(cmds)
+    except Exception:
+        pass
+    return result
+
+
+# Regex to detect VIBE_REPORT_REQUEST in agent output.
+_VIBE_REQUEST_RE = _re.compile(r"VIBE_REPORT_REQUEST:\s*(\w+)", _re.IGNORECASE)
+
+
+def run_vibe_report(report_id: str) -> str:
+    """Execute all read-only SSH commands for *report_id* and return combined output.
+
+    Each command's output is separated by a section header.  Returns a message
+    string (not empty) when SSH is not configured or all commands produce no output.
+    """
+    if not settings.ssh_host:
+        return "[SSH not configured — cannot run Vibe report]"
+    commands = _report_commands_from_map().get(report_id.lower())
+    if not commands:
+        valid = ", ".join(_report_commands_from_map().keys())
+        return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
+    sections: list[str] = []
+    for cmd in commands:
+        result = run_ssh(cmd, timeout=15)
+        if "error" in result:
+            sections.append(f"--- {cmd[:60]}... ---\n[SSH error]")
+            continue
+        out = (result.get("stdout") or "").strip()
+        err = (result.get("stderr") or "").strip()
+        body = (out + ("\n" + err if err else "")).strip() or "(empty)"
+        sections.append(f"--- {cmd[:60]}... ---\n{body}")
+    return "\n\n".join(sections)
+
+
+def _is_valid_report_data(report_data: str) -> bool:
+    """Return True if *report_data* contains actual evidence worth storing in memory.
+
+    Filters out empty responses, SSH error messages, and placeholder strings
+    that would pollute the agent memory snapshot with useless content.
+    """
+    if len(report_data) <= 50:
+        return False
+    noise_markers = ("(empty)", "[SSH error]", "[SSH not configured", "[Unknown report_id")
+    return not any(m in report_data for m in noise_markers)
 
 
 def run_ssh(command: str, timeout: int = 10) -> dict:
@@ -192,6 +277,38 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         tail_lines = terminal_tail.splitlines()[-tail_cap:]
         ctx_lines.append("Last terminal output:\n" + "\n".join(tail_lines))
 
+    # Inject ops map core memory for all agents so they know where to look for data.
+    ops_map_summary = _map_loader.get_summary()
+    ctx_lines.append(ops_map_summary)
+
+    # ------------------------------------------------------------------
+    # Evidence-based memory injection (P&L, Quant, COO)
+    # Load the persisted snapshot for this agent and append it as context.
+    # If the environment fingerprint has changed (container restart, git HEAD
+    # change, SSH target change) the snapshot is invalidated before injection.
+    # ------------------------------------------------------------------
+    if name in ("pnl", "quant", "coo"):
+        snap, stored_fp = _memory.load_snapshot_with_fingerprint(name)
+        if snap and stored_fp:
+            # Quick fingerprint check using config-only fields (no SSH round-trip).
+            current_fp_config_only = _memory.compute_fingerprint()
+            # If the config-level component of the fingerprint changed, invalidate.
+            # (Full fingerprint including container start times is updated on each
+            # successful VIBE_REPORT_REQUEST execution below.)
+            if not stored_fp.startswith(current_fp_config_only[:_FINGERPRINT_PREFIX_LEN]):
+                _memory.invalidate(name, reason="SSH target or repo_dir changed")
+                snap = {}
+        if snap:
+            # Summarise the snapshot for prompt injection; never inject raw blobs.
+            mem_lines = ["\n=== AGENT MEMORY (evidence-based, auto-refreshed) ==="]
+            for k, v in snap.items():
+                if isinstance(v, str) and len(v) < 500:
+                    mem_lines.append(f"  [{k}] {v}")
+                elif isinstance(v, (int, float, bool)):
+                    mem_lines.append(f"  [{k}] {v}")
+            mem_lines.append("=== END AGENT MEMORY ===")
+            ctx_lines.append("\n".join(mem_lines))
+
     ctx_header = "\n".join(ctx_lines)
     prompt = f"{ctx_header}\n\n{text}" if ctx_header else text
 
@@ -218,14 +335,59 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
 
     timeout_s = _AGENT_TIMEOUT.get(name, _DEFAULT_TIMEOUT)
 
-    def _call():
-        return Runner.run_sync(agent, prompt, **kwargs)
+    def _call(p: str):
+        return Runner.run_sync(agent, p, **kwargs)
 
-    future = EXECUTOR.submit(_call)
+    future = EXECUTOR.submit(_call, prompt)
     try:
         result = future.result(timeout=timeout_s)
         _record_run_usage(result)
-        return {"agent": name, "output": result.final_output}
+        final_output = result.final_output
+
+        # ------------------------------------------------------------------
+        # VIBE_REPORT_REQUEST intercept (main, pnl, quant agents)
+        # If the agent emits VIBE_REPORT_REQUEST: <report_id>, execute the
+        # corresponding read-only SSH probes and re-run the agent once with
+        # the results injected.  This gives tool-free agents access to live
+        # VPS data without asking the operator to paste logs.
+        # After a successful probe, save a derived summary to agent memory
+        # so subsequent calls don't need to re-probe for the same data.
+        # ------------------------------------------------------------------
+        if name in ("main", "pnl", "quant") and settings.ssh_host:
+            match = _VIBE_REQUEST_RE.search(final_output)
+            if match:
+                report_id = match.group(1).lower()
+                # Validate against the known set before executing any SSH commands.
+                _known_ids = set(_report_commands_from_map().keys())
+                if report_id in _known_ids:
+                    report_data = run_vibe_report(report_id)
+                    augmented_prompt = (
+                        f"{ctx_header}\n\n{text}\n\n"
+                        f"=== VIBE REPORT: {report_id} ===\n{report_data}\n"
+                        f"=== END VIBE REPORT ===\n"
+                        f"Now answer the original question using the report data above."
+                    )
+                    # One follow-up pass; reuse the same session for continuity.
+                    fut2 = EXECUTOR.submit(_call, augmented_prompt)
+                    try:
+                        result2 = fut2.result(timeout=timeout_s)
+                        _record_run_usage(result2)
+                        final_output = result2.final_output
+                        # ── Persist evidence to memory (derived summary only) ──
+                        # Only store if the report returned actual data, not just
+                        # "(empty)" or SSH error lines.
+                        if name in ("pnl", "quant") and _is_valid_report_data(report_data):
+                            ct, gh = _vibe_reports.extract_fingerprint_fields(report_data)
+                            fp = _memory.compute_fingerprint(ct, gh)
+                            existing_snap = _memory.load_snapshot(name)
+                            existing_snap[f"last_{report_id}"] = report_data[:_MAX_REPORT_SUMMARY_LENGTH]
+                            existing_snap[f"last_{report_id}_at"] = datetime.now(_tz.utc).replace(microsecond=0).isoformat()
+                            existing_snap["last_report_id"] = report_id
+                            _memory.save_snapshot(name, existing_snap, fp)
+                    except (FuturesTimeout, Exception):
+                        pass  # fall back to the original output that had the request
+
+        return {"agent": name, "output": final_output}
     except FuturesTimeout:
         if name == "coo":
             return {"agent": name, "output": _coo_partial_memo(workspace)}
@@ -315,6 +477,8 @@ def _build_team_ctx(workspace: dict) -> str:
     if tail:
         capped = "\n".join(tail.splitlines()[-200:])
         lines.append(f"Last terminal output:\n{capped}")
+    # Inject ops map core memory so all team-review agents know data locations.
+    lines.append(_map_loader.get_summary())
     return "\n".join(lines)
 
 
@@ -460,6 +624,8 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         ctx_sources.append("terminal output")
     if "SSH target:" in ctx:
         ctx_sources.append("SSH workspace")
+    if "OPS MAP CORE MEMORY" in ctx:
+        ctx_sources.append("ops map")
     sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
     _push_event(
         run, "main", "message",
@@ -525,6 +691,8 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         ctx_sources.append("terminal output")
     if "SSH target:" in ctx:
         ctx_sources.append("SSH workspace")
+    if "OPS MAP CORE MEMORY" in ctx:
+        ctx_sources.append("ops map")
     sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
     _push_event(
         run, "main", "message",
@@ -963,6 +1131,8 @@ def _autopilot_analyze(evidence: str) -> dict:
         ctx_lines.append(f"SSH target: {settings.ssh_host}")
     if settings.repo_dir:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
+    # Inject ops map so the investigate agent knows where to look and what paths to use.
+    ctx_lines.append(_map_loader.get_summary())
     # Truncate evidence to ~12 000 chars — leaves headroom for system/context tokens
     # given a 16 k-token model context window (roughly 4 chars/token → ~3 000 tokens).
     ctx_lines.append(f"Evidence pack:\n{evidence[:12000]}")
@@ -988,6 +1158,24 @@ def _autopilot_analyze(evidence: str) -> dict:
             tr = parsed.get("target_repo", "")
             if tr not in _GH_ALLOWED_REPOS:
                 parsed["target_repo"] = settings.github_repo or "leeheggan-droid/openclaw-control"
+        # ── Save autopilot evidence fingerprint to memory ──────────────────
+        # Store a derived summary (not raw evidence) so subsequent agent calls
+        # have context about the last investigation cycle.
+        try:
+            ct, gh = _vibe_reports.extract_fingerprint_fields(evidence)
+            fp = _memory.compute_fingerprint(ct, gh)
+            snap = {
+                "last_autopilot_summary": parsed.get("summary", "")[:500],
+                "last_autopilot_needs_action": str(parsed.get("needs_action", False)),
+                "last_autopilot_urgency": parsed.get("urgency", "low"),
+                "last_autopilot_at": datetime.now(_tz.utc).replace(microsecond=0).isoformat(),
+            }
+            for ag in ("pnl", "quant", "coo"):
+                existing = _memory.load_snapshot(ag)
+                existing.update(snap)
+                _memory.save_snapshot(ag, existing, fp)
+        except Exception:
+            pass  # memory is best-effort; never block the autopilot cycle
         return parsed
     except Exception:
         return _FALLBACK

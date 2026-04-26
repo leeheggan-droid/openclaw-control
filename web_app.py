@@ -3,7 +3,7 @@ import os
 
 import requests as _requests
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -15,8 +15,11 @@ from openclaw_control.github_tools import (
     try_assign_copilot as _try_assign_copilot,
     create_github_issue,
 )
+from openclaw_control.ops import map_loader as _map_loader
+from openclaw_control.memory import agent_memory as _memory
 from openclaw_control.service import (
     handle_message, handle_agent_message,
+    run_vibe_report,
     start_team_review, get_team_review_events,
     start_vibe_run, get_vibe_run,
     start_autopilot, stop_autopilot, get_autopilot_status,
@@ -128,6 +131,85 @@ def config():
         "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
         "allowed_repos": sorted(_ALLOWED_REPOS),
     }
+
+
+# ── Ops map endpoint ──────────────────────────────────────────────────────────
+
+@app.get("/ops/map")
+def ops_map():
+    """Return the ops map top-level keys and compressed summary.
+
+    No secrets are included — this is a structural/contract map only.
+    """
+    try:
+        top_keys = _map_loader.get_top_keys()
+    except Exception:
+        top_keys = []
+    return {
+        "top_level_keys": top_keys,
+        "summary": _map_loader.get_summary(),
+    }
+
+
+_VALID_REPORT_IDS = frozenset({"container_health", "last_trade", "trade_history_7d", "pnl_snapshot", "halt_status", "git_head"})
+
+_VALID_MEMORY_AGENTS = frozenset({"pnl", "quant", "coo"})
+
+
+@app.post("/ops/report")
+def ops_report(report_id: str):
+    """Execute the read-only SSH probe sequence for *report_id* and return results.
+
+    Valid report_ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status | git_head
+    """
+    if report_id.lower() not in _VALID_REPORT_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid report_id '{report_id}'. Valid values: {sorted(_VALID_REPORT_IDS)}",
+        )
+    output = run_vibe_report(report_id)
+    return {"report_id": report_id, "output": output}
+
+
+# ── Agent memory endpoints ─────────────────────────────────────────────────────
+
+@app.get("/memory/{agent}")
+def memory_get(agent: str):
+    """Return the evidence-based memory snapshot for *agent*.
+
+    Only derived summaries and flags are returned — no raw logs, no secrets.
+    Valid agents: pnl | quant | coo
+    """
+    if agent.lower() not in _VALID_MEMORY_AGENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown agent '{agent}'. Valid values: {sorted(_VALID_MEMORY_AGENTS)}",
+        )
+    snap, fp = _memory.load_snapshot_with_fingerprint(agent.lower())
+    events = _memory.get_events(agent.lower(), limit=10)
+    return {
+        "agent": agent.lower(),
+        "snapshot": snap,
+        "fingerprint": fp[:12] + "…" if fp else "",
+        "recent_events": events,
+    }
+
+
+@app.post("/memory/{agent}/invalidate")
+def memory_invalidate(agent: str, reason: str = "operator manual invalidation"):
+    """Invalidate (clear) the memory snapshot for *agent*.
+
+    Useful after a container restart, deployment, or when you want the agent to
+    re-probe instead of reusing stale evidence.
+    Valid agents: pnl | quant | coo
+    """
+    if agent.lower() not in _VALID_MEMORY_AGENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown agent '{agent}'. Valid values: {sorted(_VALID_MEMORY_AGENTS)}",
+        )
+    _memory.invalidate(agent.lower(), reason=reason[:200])
+    return {"agent": agent.lower(), "status": "invalidated", "reason": reason[:200]}
 
 
 @app.get("/", response_class=HTMLResponse)

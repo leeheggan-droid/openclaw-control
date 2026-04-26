@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+*.env
+
+# Runtime data files (never commit)
+*.sqlite
+*.db
+.openclaw_memory.sqlite
+agents.db
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
