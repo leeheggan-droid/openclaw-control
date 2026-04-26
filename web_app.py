@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from openclaw_control.config import settings
-from openclaw_control.service import handle_message
+from openclaw_control.service import handle_message, handle_agent_message
 
 app = FastAPI()
 
@@ -19,6 +19,12 @@ class CopilotRequest(BaseModel):
     last_user_msg: str = ""
     last_agent_response: str = ""
     shell_output: str = ""
+
+
+class AgentMessage(BaseModel):
+    agent: str
+    text: str
+    workspace: dict = {}
 
 
 def _gh_headers(token: str) -> dict:
@@ -390,6 +396,37 @@ def index():
     }
     .copilotMsgBtn:hover{background: rgba(34,197,94,.18); color: rgba(230,238,252,.90);}
     .copilotMsgBtn:active{transform: scale(.98);}
+
+    /* Agent tabs (segmented control) */
+    .agentTabs{
+      display:flex;
+      gap:3px;
+      background: rgba(0,0,0,.20);
+      border:1px solid var(--border);
+      border-radius:999px;
+      padding:3px;
+    }
+    .tabBtn{
+      padding:4px 12px;
+      border-radius:999px;
+      border:none;
+      background:transparent;
+      color:var(--muted);
+      font-size:12px;
+      font-weight:600;
+      cursor:pointer;
+      transition:background .15s,color .15s;
+      font-family:var(--sans);
+      white-space:nowrap;
+    }
+    .tabBtn.active{
+      background:linear-gradient(180deg,rgba(34,197,94,.95),rgba(22,163,74,.95));
+      color:#fff;
+    }
+    .tabBtn:hover:not(.active){
+      background:rgba(255,255,255,.06);
+      color:var(--text);
+    }
   </style>
 </head>
 
@@ -400,8 +437,13 @@ def index():
       <div class="cardHeader">
         <div class="title">
           <span style="width:10px;height:10px;border-radius:999px;background:var(--accent);display:inline-block"></span>
-          Agent
-          <span class="badge" id="agentMode">ops</span>
+          Agents
+        </div>
+        <div class="agentTabs">
+          <button class="tabBtn active" data-agent="main">Main</button>
+          <button class="tabBtn" data-agent="pnl">P&amp;L</button>
+          <button class="tabBtn" data-agent="quant">Quant</button>
+          <button class="tabBtn" data-agent="coo">COO</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
       </div>
@@ -483,13 +525,12 @@ def index():
   </div>
 
 <script>
-  // --- state ---
+  // --- DOM references ---
   const chatEl = document.getElementById("chat");
   const terminalEl = document.getElementById("terminal");
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("sendBtn");
   const statusBadge = document.getElementById("statusBadge");
-  const agentModeEl = document.getElementById("agentMode");
   const hostBadge = document.getElementById("hostBadge");
 
   const fileInput = document.getElementById("fileInput");
@@ -497,23 +538,40 @@ def index():
   document.getElementById("attachBtn").onclick = () => fileInput.click();
   document.getElementById("imageBtn").onclick = () => imgInput.click();
 
-  // simple local history (persists across refresh)
-  const storeKey = "openclaw_chat_history_v1";
-  let history = [];
-  try { history = JSON.parse(localStorage.getItem(storeKey) || "[]"); } catch { history = []; }
+  // --- multi-agent state ---
+  const AGENT_LABELS = {main: "Main AI", pnl: "P&L", quant: "Quant", coo: "COO"};
+  const AGENT_STORE_KEYS = {
+    main:  "openclaw_chat_main_v1",
+    pnl:   "openclaw_chat_pnl_v1",
+    quant: "openclaw_chat_quant_v1",
+    coo:   "openclaw_chat_coo_v1",
+  };
 
-  function saveHistory(){
-    localStorage.setItem(storeKey, JSON.stringify(history.slice(-200)));
+  let activeAgent = "main";
+  const histories = {};
+  for (const ag of Object.keys(AGENT_LABELS)) {
+    try { histories[ag] = JSON.parse(localStorage.getItem(AGENT_STORE_KEYS[ag]) || "[]"); }
+    catch { histories[ag] = []; }
   }
 
-  function scrollChatBottom(){
-    chatEl.scrollTop = chatEl.scrollHeight;
-  }
-  function scrollTermBottom(){
-    terminalEl.scrollTop = terminalEl.scrollHeight;
+  // Migrate legacy single-agent history into "main"
+  try {
+    const legacy = JSON.parse(localStorage.getItem("openclaw_chat_history_v1") || "[]");
+    if (legacy.length && !histories.main.length) {
+      histories.main = legacy;
+      saveHistory("main");
+    }
+  } catch {}
+
+  function saveHistory(ag) {
+    localStorage.setItem(AGENT_STORE_KEYS[ag], JSON.stringify((histories[ag] || []).slice(-200)));
   }
 
-  function addChat(role, text, extraHTML){
+  function scrollChatBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
+  function scrollTermBottom()  { terminalEl.scrollTop = terminalEl.scrollHeight; }
+
+  function addChat(role, text, extraHTML) {
+    const agLabel = role === "user" ? "You" : (AGENT_LABELS[activeAgent] || activeAgent);
     const row = document.createElement("div");
     row.className = "msgRow " + (role === "user" ? "user" : "agent");
 
@@ -521,29 +579,31 @@ def index():
 
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = role === "user" ? "You" : "Agent";
+    meta.textContent = agLabel;
     wrap.appendChild(meta);
 
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     bubble.textContent = text || "";
-    if(extraHTML){
+    if (extraHTML) {
       const holder = document.createElement("div");
       holder.innerHTML = extraHTML;
       bubble.appendChild(holder);
     }
     wrap.appendChild(bubble);
 
-    // Add "Fix via Copilot" button below each agent message (skip status messages)
-    if(role === "agent" && text && !/^[⏳✅🚀❌]/.test(text)){
+    // Add "Fix via Copilot" button on substantive agent messages
+    if (role === "agent" && text && !/^[⏳✅🚀❌]/.test(text)) {
       const capturedText = text;
+      const capturedAgent = activeAgent;
       const copBtn = document.createElement("button");
       copBtn.className = "copilotMsgBtn";
       copBtn.textContent = "🤖 Fix via Copilot";
       copBtn.onclick = () => {
-        const lastUser = [...history].reverse().find(h => h.role === "user");
+        const hist = histories[capturedAgent] || [];
+        const lastUser = [...hist].reverse().find(h => h.role === "user");
         const goal = prompt("Describe the goal for Copilot:", (lastUser ? lastUser.text : "").slice(0, 120)) || "";
-        if(!goal) return;
+        if (!goal) return;
         triggerCopilot(goal, lastUser ? lastUser.text : "", capturedText);
       };
       wrap.appendChild(copBtn);
@@ -554,13 +614,25 @@ def index():
     scrollChatBottom();
   }
 
-  function renderHistory(){
+  function renderHistory() {
     chatEl.innerHTML = "";
-    history.forEach(item => addChat(item.role, item.text, item.extraHTML || ""));
+    (histories[activeAgent] || []).forEach(item => addChat(item.role, item.text, item.extraHTML || ""));
   }
   renderHistory();
 
-  function termLine(kind, text){
+  // --- tab switching ---
+  document.querySelectorAll(".tabBtn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const ag = btn.getAttribute("data-agent");
+      if (ag === activeAgent) return;
+      activeAgent = ag;
+      document.querySelectorAll(".tabBtn").forEach(b => b.classList.toggle("active", b === btn));
+      renderHistory();
+    });
+  });
+
+  // --- terminal helpers ---
+  function termLine(kind, text) {
     const div = document.createElement("div");
     div.className = "termLine " + kind;
     div.textContent = text;
@@ -568,18 +640,23 @@ def index():
     scrollTermBottom();
   }
 
-  function clearTerminal(){
-    terminalEl.innerHTML = "";
-  }
+  function clearTerminal() { terminalEl.innerHTML = ""; }
 
-  function setBusy(isBusy){
+  function setBusy(isBusy) {
     statusBadge.textContent = isBusy ? "thinking…" : "ready";
     statusBadge.style.borderColor = isBusy ? "rgba(34,197,94,.55)" : "rgba(255,255,255,.08)";
-    statusBadge.style.color = isBusy ? "rgba(230,238,252,.85)" : "rgba(230,238,252,.65)";
+    statusBadge.style.color      = isBusy ? "rgba(230,238,252,.85)" : "rgba(230,238,252,.65)";
+  }
+
+  function getShellOutput() {
+    return Array.from(terminalEl.querySelectorAll(".termLine"))
+      .map(el => el.textContent)
+      .slice(-200)
+      .join("\\n");
   }
 
   // Auto-grow textarea
-  function autoGrow(){
+  function autoGrow() {
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(inputEl.scrollHeight, 130) + "px";
   }
@@ -588,142 +665,133 @@ def index():
 
   // Send on Enter, newline on Shift+Enter
   inputEl.addEventListener("keydown", (e) => {
-    if(e.key === "Enter" && !e.shiftKey){
-      e.preventDefault();
-      send();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   sendBtn.onclick = () => send();
 
   // Attach file (text)
   fileInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
-    if(!f) return;
-    // Read small text files into the prompt
+    if (!f) return;
     const maxBytes = 200 * 1024;
-    if(f.size > maxBytes){
+    if (f.size > maxBytes) {
       addChat("user", `(attached file too large for inline text: ${f.name}, ${f.size} bytes)`);
-      history.push({role:"user", text:`(attached file too large for inline text: ${f.name})`});
-      saveHistory();
+      histories[activeAgent].push({role:"user", text:`(attached file too large for inline text: ${f.name})`});
+      saveHistory(activeAgent);
       fileInput.value = "";
       return;
     }
     const text = await f.text();
     const extra = `<div class="attachment">FILE: ${escapeHtml(f.name)}\\n\\n${escapeHtml(text)}</div>`;
     addChat("user", `Attached: ${f.name}`, extra);
-    history.push({role:"user", text:`Attached: ${f.name}`, extraHTML: extra});
-    saveHistory();
+    histories[activeAgent].push({role:"user", text:`Attached: ${f.name}`, extraHTML: extra});
+    saveHistory(activeAgent);
     fileInput.value = "";
   };
 
-  // Attach image (preview only in v1)
+  // Attach image (preview)
   imgInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
-    if(!f) return;
+    if (!f) return;
     const url = URL.createObjectURL(f);
     const extra = `<div class="imgPreview"><img src="${url}" alt="attachment"/></div>`;
     addChat("user", `Attached image: ${f.name}`, extra);
-    history.push({role:"user", text:`Attached image: ${f.name}`, extraHTML: extra});
-    saveHistory();
+    histories[activeAgent].push({role:"user", text:`Attached image: ${f.name}`, extraHTML: extra});
+    saveHistory(activeAgent);
     imgInput.value = "";
   };
 
-  function escapeHtml(s){
+  function escapeHtml(s) {
     return (s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
   }
 
-  async function send(textOverride){
+  async function send(textOverride) {
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
-    if(!text) return;
+    if (!text) return;
 
-    // show message in history
     addChat("user", text);
-    history.push({role:"user", text});
-    saveHistory();
+    histories[activeAgent].push({role: "user", text});
+    saveHistory(activeAgent);
 
     inputEl.value = "";
     autoGrow();
 
-    // If direct command, run in terminal pane
-    if(text.startsWith("!")){
+    // Direct shell command — route to terminal pane, not to agent
+    if (text.startsWith("!")) {
       await runQuick(text.slice(1).trim());
       return;
     }
 
-    // Handle /copilot and "fix via copilot:" commands
+    // /copilot command
     const lc = text.toLowerCase();
-    if(lc.startsWith("/copilot") || lc.startsWith("fix via copilot:")){
+    if (lc.startsWith("/copilot") || lc.startsWith("fix via copilot:")) {
       let goal;
-      if(lc.startsWith("/copilot")){
+      if (lc.startsWith("/copilot")) {
         goal = text.slice("/copilot".length).trim();
       } else {
         goal = text.slice("fix via copilot:".length).trim();
       }
-      const prevHistory = history.slice(0, -1);
-      const lastUser = [...prevHistory].reverse().find(h => h.role === "user");
+      const hist = histories[activeAgent];
+      const prevHistory = hist.slice(0, -1);
+      const lastUser  = [...prevHistory].reverse().find(h => h.role === "user");
       const lastAgent = [...prevHistory].reverse().find(h => h.role === "agent");
-      if(!goal) goal = prompt("Describe the goal for Copilot:", lastUser ? lastUser.text.slice(0,120) : "") || "";
-      if(goal) await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
+      if (!goal) goal = prompt("Describe the goal for Copilot:", lastUser ? lastUser.text.slice(0, 120) : "") || "";
+      if (goal) await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
       return;
     }
 
     setBusy(true);
-    agentModeEl.textContent = "ops/analysis";
-
-    try{
-      const res = await fetch("/message", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({text})
+    try {
+      const res = await fetch("/agent/message", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          agent: activeAgent,
+          text,
+          workspace: {terminal_tail: getShellOutput()},
+        })
       });
       const data = await res.json();
-
-      if(data.type === "agent"){
-        const out = data.output || data.error || "(no response)";
-        addChat("agent", out);
-        history.push({role:"agent", text: out});
-        saveHistory();
-      } else if(data.type === "ssh"){
-        const out = (data.stdout || "") + (data.stderr || "") + (data.error || "");
-        termLine("out", out || "[no output]");
-      }
-    } catch(err){
+      const out = data.output || data.error || "(no response)";
+      addChat("agent", out);
+      histories[activeAgent].push({role: "agent", text: out});
+      saveHistory(activeAgent);
+    } catch(err) {
       const msg = "Web error: " + (err && err.message ? err.message : String(err));
       addChat("agent", msg);
-      history.push({role:"agent", text: msg});
-      saveHistory();
-    } finally{
+      histories[activeAgent].push({role: "agent", text: msg});
+      saveHistory(activeAgent);
+    } finally {
       setBusy(false);
     }
   }
 
-  async function runQuick(cmd){
-    // terminal prompt line
+  async function runQuick(cmd) {
     const prompt = `jacks@${hostBadge.textContent || "host"}:$ ${cmd}`;
     termLine("prompt", prompt);
 
     setBusy(true);
-    try{
+    try {
       const res = await fetch("/message", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
         body: JSON.stringify({text: "!" + cmd})
       });
       const data = await res.json();
       const out = (data.stdout || "");
       const err = (data.stderr || data.error || "");
-      if(out) termLine("out", out.trimEnd());
-      if(err) termLine("err", err.trimEnd());
-      if(!out && !err) termLine("out", "[no output]");
-    } catch(err){
+      if (out) termLine("out", out.trimEnd());
+      if (err) termLine("err", err.trimEnd());
+      if (!out && !err) termLine("out", "[no output]");
+    } catch(err) {
       termLine("err", "SSH request failed: " + (err && err.message ? err.message : String(err)));
-    } finally{
+    } finally {
       setBusy(false);
     }
   }
 
-  function confirmDockerRefresh(){
-    if(!confirm("This will stop containers, hard-reset the repo, and rebuild the orchestrator. Continue?")) return;
+  function confirmDockerRefresh() {
+    if (!confirm("This will stop containers, hard-reset the repo, and rebuild the orchestrator. Continue?")) return;
     var s = [
       "bash <<'SH'",
       "set -euo pipefail",
@@ -763,31 +831,24 @@ def index():
     runQuick(s);
   }
 
-  // fetch SSH host label from server config
+  // Fetch SSH host label from server config
   fetch("/config").then(r => r.json()).then(cfg => {
-    if(cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
+    if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
   }).catch(() => {});
 
   // --- Copilot bridge ---
 
-  function getShellOutput(){
-    return Array.from(terminalEl.querySelectorAll(".termLine"))
-      .map(el => el.textContent)
-      .slice(-200)
-      .join("\\n");
-  }
-
-  async function triggerCopilot(goal, lastUserMsg, lastAgentMsg){
-    if(!goal) return;
+  async function triggerCopilot(goal, lastUserMsg, lastAgentMsg) {
+    if (!goal) return;
     const shellOutput = getShellOutput();
 
     const statusMsg = "⏳ Creating Copilot issue on GitHub…";
     addChat("agent", statusMsg);
-    history.push({role:"agent", text: statusMsg});
-    saveHistory();
+    histories[activeAgent].push({role: "agent", text: statusMsg});
+    saveHistory(activeAgent);
 
     let data;
-    try{
+    try {
       const res = await fetch("/copilot", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -799,66 +860,64 @@ def index():
         })
       });
       data = await res.json();
-    } catch(err){
+    } catch(err) {
       const msg = "❌ Copilot error: " + (err && err.message ? err.message : String(err));
       addChat("agent", msg);
-      history.push({role:"agent", text: msg});
-      saveHistory();
+      histories[activeAgent].push({role: "agent", text: msg});
+      saveHistory(activeAgent);
       return;
     }
 
-    if(data.error){
+    if (data.error) {
       const msg = "❌ Copilot issue failed: " + data.error;
       addChat("agent", msg);
-      history.push({role:"agent", text: msg});
-      saveHistory();
+      histories[activeAgent].push({role: "agent", text: msg});
+      saveHistory(activeAgent);
       return;
     }
 
     const issueUrl = data.issue_url;
     const issueNum = data.issue_number;
     let msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl;
-    if(data.assignment === "manual_required"){
+    if (data.assignment === "manual_required") {
       msg += "\\n\\n⚠️ Issue created. Assign Copilot manually in GitHub (Assignees → Copilot).";
     } else {
       msg += "\\n\\nMonitoring for PR…";
     }
     addChat("agent", msg);
-    history.push({role:"agent", text: msg});
-    saveHistory();
+    histories[activeAgent].push({role: "agent", text: msg});
+    saveHistory(activeAgent);
 
     pollForPR(issueNum);
   }
 
-  function pollForPR(issueNumber){
+  function pollForPR(issueNumber) {
     let attempts = 0;
     const maxAttempts = 20; // 20 × 15s = 5 min
     const timer = setInterval(async () => {
       attempts++;
-      if(attempts > maxAttempts){
-        clearInterval(timer);
-        return;
-      }
-      try{
+      if (attempts > maxAttempts) { clearInterval(timer); return; }
+      try {
         const res = await fetch("/copilot/poll/" + issueNumber);
         const data = await res.json();
-        if(data.pr_url){
+        if (data.pr_url) {
           clearInterval(timer);
           const msg = "🚀 Copilot PR created:\\n" + data.pr_url;
           addChat("agent", msg);
-          history.push({role:"agent", text: msg});
-          saveHistory();
+          histories[activeAgent].push({role: "agent", text: msg});
+          saveHistory(activeAgent);
         }
-      } catch{}
+      } catch {}
     }, 15000);
   }
 
   document.getElementById("copilotBtn").onclick = async () => {
-    const lastUser = [...history].reverse().find(h => h.role === "user");
-    const lastAgent = [...history].reverse().find(h => h.role === "agent");
+    const hist = histories[activeAgent] || [];
+    const lastUser  = [...hist].reverse().find(h => h.role === "user");
+    const lastAgent = [...hist].reverse().find(h => h.role === "agent");
     const def = lastUser ? lastUser.text.slice(0, 120) : "";
     const goal = prompt("Describe the goal for Copilot:", def) || "";
-    if(!goal) return;
+    if (!goal) return;
     await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
   };
 </script>
@@ -980,3 +1039,8 @@ def copilot_poll(issue_number: int):
 @app.post("/message")
 def message(msg: Message):
     return handle_message(msg.text)
+
+
+@app.post("/agent/message")
+def agent_message(msg: AgentMessage):
+    return handle_agent_message(msg.agent, msg.text, msg.workspace)
