@@ -15,6 +15,12 @@ Budget states
               Main continues normally; P&L/Quant trim outputs; COO refuses.
 - *exhausted*: daily_spent ≥ DAILY_LIMIT   — same behaviour as *low* (COO already
               refused, so specialists may still return short answers for Main to use).
+
+Thread safety
+-------------
+All public functions acquire *_lock* before reading or writing module state.
+The private ``_maybe_reset`` helper must always be called **inside** a ``with _lock:``
+block; it is never called directly from outside this module.
 """
 
 from __future__ import annotations
@@ -36,6 +42,14 @@ _OUTPUT_COST_PER_TOKEN: float = float(
 DAILY_LIMIT: float = 5.00   # USD
 LOW_THRESHOLD: float = 4.00  # USD — "budget is low" once spend crosses this
 
+# Human-readable message returned by the COO agent when the budget is low.
+# Defined here so the COO system prompt and the service-layer early-exit share
+# the exact same wording.
+COO_BUDGET_MESSAGE: str = (
+    "COO: Daily budget limit reached. Orchestration suspended. "
+    "Please use the P&L or Quant tabs directly, or wait until tomorrow."
+)
+
 # ---------------------------------------------------------------------------
 # Internal state (thread-safe)
 # ---------------------------------------------------------------------------
@@ -45,7 +59,11 @@ _spent: float = 0.0
 
 
 def _maybe_reset() -> None:
-    """Reset counters when the calendar day rolls over.  Must be called inside *_lock*."""
+    """Reset counters when the calendar day rolls over.
+
+    **Must be called while holding *_lock*.**  This is a private helper and is
+    only ever invoked from within ``with _lock:`` blocks in this module.
+    """
     global _day, _spent
     today = date.today()
     if today != _day:

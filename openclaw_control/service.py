@@ -1,8 +1,9 @@
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
-from agents import Runner, SQLiteSession
+from agents import Runner, RunResult, SQLiteSession
 from openclaw_control import budget
+from openclaw_control.budget import COO_BUDGET_MESSAGE
 from openclaw_control.config import settings
 from openclaw_control.agents.controller import controller
 from openclaw_control.agents.analysis_agent import analysis_agent
@@ -102,10 +103,10 @@ _MAX_TURNS: dict[str, int | None] = {
 _BUDGET_LOW_PREFIX = "[BUDGET LOW] "
 
 
-def _record_run_usage(result) -> None:
+def _record_run_usage(result: RunResult) -> None:
     """Extract token counts from a RunResult and update the daily budget tracker."""
-    total_in = sum(r.usage.input_tokens for r in result.raw_responses if r.usage)
-    total_out = sum(r.usage.output_tokens for r in result.raw_responses if r.usage)
+    total_in = sum(r.usage.input_tokens for r in result.raw_responses if r.usage is not None)
+    total_out = sum(r.usage.output_tokens for r in result.raw_responses if r.usage is not None)
     if total_in or total_out:
         budget.record_usage(total_in, total_out)
 
@@ -140,10 +141,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
     if name == "coo" and budget.is_low():
         return {
             "agent": name,
-            "output": (
-                "COO: Daily budget limit reached. Orchestration suspended. "
-                "Please use the P&L or Quant tabs directly, or wait until tomorrow."
-            ),
+            "output": COO_BUDGET_MESSAGE,
         }
 
     # P&L and Quant receive a budget-low prefix so they return shortened outputs.

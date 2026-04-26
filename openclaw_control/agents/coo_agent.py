@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
 
 from agents import Agent, ModelSettings, Runner, function_tool
+from openclaw_control.budget import COO_BUDGET_MESSAGE
 
 
 def _run_agent_in_thread(agent, prompt: str, timeout: int = 20) -> str:
@@ -59,9 +60,8 @@ coo_agent = Agent(
         "- Do NOT execute SSH commands or suggest destructive actions.\n"
         "- Do NOT attempt to call yourself or any other orchestration agent.\n"
         "- If the prompt begins with [BUDGET LOW], do NOT call ask_pnl or ask_quant. Instead, "
-        "respond immediately with:\n"
-        "  'COO: Daily budget limit reached. Orchestration suspended. "
-        "Please use the P&L or Quant tabs directly, or wait until tomorrow.'\n"
+        f"respond immediately with:\n"
+        f"  '{COO_BUDGET_MESSAGE}'\n"
         "\n"
         "Normal output structure:\n"
         "1) Decision memo: what we know / what we don't know\n"
