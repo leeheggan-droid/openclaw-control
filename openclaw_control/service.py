@@ -724,7 +724,7 @@ def _autopilot_gather_evidence() -> str:
 def _autopilot_issue_fingerprint(action_type: str, key: str) -> str:
     """Return a short hex fingerprint for deduplication."""
     raw = f"{action_type}:{key}".encode()
-    return _hashlib.md5(raw).hexdigest()[:12]  # noqa: S324 — non-security use
+    return _hashlib.sha256(raw).hexdigest()[:16]
 
 
 def _autopilot_is_duplicate(fingerprint: str) -> bool:
@@ -748,6 +748,8 @@ def _build_autopilot_issue_body(
     evidence: str,
 ) -> str:
     """Combine the agent-generated body with the full evidence pack."""
+    # Keep only the last 300 lines — enough context for Copilot without hitting
+    # GitHub's 65 535-character issue body limit.
     evidence_lines = (evidence or "").splitlines()[-300:]
     evidence_snippet = "\n".join(evidence_lines) or "(no evidence collected)"
 
@@ -807,7 +809,8 @@ def _autopilot_analyze(evidence: str) -> dict:
         ctx_lines.append(f"SSH target: {settings.ssh_host}")
     if settings.repo_dir:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
-    # Truncate evidence to ~12 000 chars to stay within reasonable context limits
+    # Truncate evidence to ~12 000 chars — leaves headroom for system/context tokens
+    # given a 16 k-token model context window (roughly 4 chars/token → ~3 000 tokens).
     ctx_lines.append(f"Evidence pack:\n{evidence[:12000]}")
     prompt = "\n".join(ctx_lines)
 

@@ -10,7 +10,7 @@ import requests as _requests
 
 from openclaw_control.config import settings
 
-ALLOWED_REPOS: frozenset[str] = frozenset({
+ALLOWED_REPOS = frozenset({
     "leeheggan-droid/openclaw-crypto",
     "leeheggan-droid/alpaca_orb_bite_bot",
     "leeheggan-droid/LinkedIn_Data_Centre_News",

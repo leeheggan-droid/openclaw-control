@@ -1895,7 +1895,7 @@ def index():
       issueLink.href = f.github_issue_url;
       issueLink.target = "_blank";
       issueLink.rel = "noopener noreferrer";
-      issueLink.textContent = "🐛 GitHub issue #" + (f.github_issue_number || "?") + " created automatically";
+      issueLink.textContent = `🐛 GitHub issue #${f.github_issue_number || "?"} created automatically`;
       issueEl.appendChild(issueLink);
       row.appendChild(issueEl);
     }
