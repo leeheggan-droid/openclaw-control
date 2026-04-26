@@ -101,17 +101,60 @@ _VIBE_REQUEST_RE = _re.compile(r"VIBE_REPORT_REQUEST:\s*(\w+)", _re.IGNORECASE)
 def run_vibe_report(report_id: str) -> str:
     """Execute all read-only SSH commands for *report_id* and return combined output.
 
+    For ``last_trade``, ``trade_history_7d``, and ``pnl_snapshot``, the local
+    control-panel SQLite is queried first (no SSH required) and its results are
+    prepended to whatever the SSH commands return.
+
     Each command's output is separated by a section header.  Returns a message
     string (not empty) when SSH is not configured or all commands produce no output.
     """
+    from openclaw_control import trade_log as _tl
+
+    rid = report_id.lower()
+    sections: list[str] = []
+
+    # ── Local control-panel SQLite (no SSH required) ──────────────────────────
+    if rid in ("last_trade", "trade_history_7d"):
+        limit = 10 if rid == "last_trade" else 200
+        rows = _tl.get_recent_trades(limit=limit)
+        if rows:
+            lines = [f"=== LOCAL TRADE LOG ({len(rows)} records, newest first) ==="]
+            for t in rows:
+                line = (
+                    f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
+                    f"  size={t['size']}  price={t['fill_price']}"
+                )
+                if t.get("trade_id"):
+                    line += f"  trade_id={t['trade_id']}"
+                lines.append(line)
+            sections.append("\n".join(lines))
+        else:
+            sections.append(
+                "=== LOCAL TRADE LOG ===\n"
+                "(empty — bot must POST trades to /trades/log on this server for them to appear here)"
+            )
+    elif rid == "pnl_snapshot":
+        rows_pnl = _tl.get_recent_pnl(limit=24)
+        if rows_pnl:
+            lines = [f"=== LOCAL P&L LOG ({len(rows_pnl)} snapshots, newest first) ==="]
+            for p in rows_pnl:
+                kv = [p["ts"]]
+                for k in ("total_pnl", "equity", "drawdown", "sharpe_ratio"):
+                    if p.get(k) is not None:
+                        kv.append(f"{k}={p[k]}")
+                lines.append("  " + "  ".join(kv))
+            sections.append("\n".join(lines))
+
+    # ── SSH commands ──────────────────────────────────────────────────────────
     if not settings.ssh_host:
-        return "[SSH not configured — cannot run Vibe report]"
-    commands = _report_commands_from_map().get(report_id.lower())
-    if commands is None:
+        return "\n\n".join(sections) if sections else "[SSH not configured — cannot run Vibe report]"
+
+    commands = _report_commands_from_map().get(rid)
+    if commands is None and not sections:
         valid = ", ".join(_report_commands_from_map().keys())
         return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
-    sections: list[str] = []
-    for cmd in commands:
+
+    for cmd in (commands or []):
         result = run_ssh(cmd, timeout=15)
         if "error" in result:
             sections.append(f"--- {cmd[:60]}... ---\n[SSH error]")
