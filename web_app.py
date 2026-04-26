@@ -2636,7 +2636,7 @@ def index():
       }
 
       // Split output by section headers (--- cmd... ---) and render each
-      const sections = raw.split(/\n(?=---)/);
+      const sections = raw.split(/\\n(?=---)/);
       sections.forEach(sec => {
         const lines = sec.split("\n");
         const header = lines[0].startsWith("---") ? lines[0].replace(/^---\s*/, "").replace(/\s*---$/, "").trim() : "Results";
