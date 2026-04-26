@@ -53,6 +53,15 @@ _FINGERPRINT_PREFIX_LEN: int = 12
 # Derived summaries only — never raw full logs.
 _MAX_REPORT_SUMMARY_LENGTH: int = 1000
 
+# Maximum character length of a single string value injected from a memory snapshot
+# into agent context.  Keeps prompts within token budgets while still conveying
+# the key derived summary fields.
+_MAX_CONTEXT_STRING_LENGTH: int = 500
+
+# Set of agents for which Vibe probe evidence is persisted to the memory store.
+# When adding a new tool-free agent that uses VIBE_REPORT_REQUEST, include it here.
+_AGENTS_WITH_PROBE_PERSISTENCE: frozenset[str] = frozenset({"pnl", "quant"})
+
 # ── Vibe Evidence Report mechanism ───────────────────────────────────────────
 # Deterministic, read-only SSH command sequences per report_id.
 # Commands are sourced from vibe_reports.py (primary) and the ops map YAML
@@ -306,7 +315,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
             # Summarise the snapshot for prompt injection; never inject raw blobs.
             mem_lines = ["\n=== AGENT MEMORY (evidence-based, auto-refreshed) ==="]
             for k, v in snap.items():
-                if isinstance(v, str) and len(v) < 500:
+                if isinstance(v, str) and len(v) < _MAX_CONTEXT_STRING_LENGTH:
                     mem_lines.append(f"  [{k}] {v}")
                 elif isinstance(v, (int, float, bool)):
                     mem_lines.append(f"  [{k}] {v}")
@@ -322,7 +331,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
                 if sub_snap:
                     sub_lines = [f"\n=== {sub_name.upper()} MEMORY (cached evidence) ==="]
                     for k, v in sub_snap.items():
-                        if isinstance(v, str) and len(v) < 500:
+                        if isinstance(v, str) and len(v) < _MAX_CONTEXT_STRING_LENGTH:
                             sub_lines.append(f"  [{k}] {v}")
                         elif isinstance(v, (int, float, bool)):
                             sub_lines.append(f"  [{k}] {v}")
@@ -658,7 +667,7 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
 
     def _on_probe_success(report_id: str, probe_data: str) -> None:
         """Persist a derived summary to memory after a successful team-review Vibe probe."""
-        if agent_key not in ("pnl", "quant") or not _is_valid_report_data(probe_data):
+        if agent_key not in _AGENTS_WITH_PROBE_PERSISTENCE or not _is_valid_report_data(probe_data):
             return
         ct, gh = _vibe_reports.extract_fingerprint_fields(probe_data)
         fp = _memory.compute_fingerprint(ct, gh)

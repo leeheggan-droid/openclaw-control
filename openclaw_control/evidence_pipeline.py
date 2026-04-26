@@ -27,6 +27,7 @@ dispatch_coo_action(coo_output, run, *, push_event, github_repo,
 from __future__ import annotations
 
 import re
+from typing import Callable, Optional
 
 from trigger_happy_proposals import extract_proposals
 
@@ -46,7 +47,7 @@ def run_with_evidence(
     timeout_s: float,
     ssh_configured: bool,
     agent_key: str,
-    on_probe_success=None,
+    on_probe_success: Optional[Callable[[str, str], None]] = None,
 ) -> tuple[str, bool]:
     """Run *agent* with VIBE_REPORT_REQUEST follow-up for team review.
 
