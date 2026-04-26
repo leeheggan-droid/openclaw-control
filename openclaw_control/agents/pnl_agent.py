@@ -20,7 +20,20 @@ pnl_agent = Agent(
         "2) P&L breakdown: gross / fees / net\n"
         "3) Assumptions: slippage and fee sources\n"
         "4) Next data needed OR next actions (max 5 items)\n"
+        "\n"
+        "Periodic / yearly review:\n"
+        "- If a review period is specified (e.g. '2-year review'), add a section:\n"
+        "  5) Periodic review — state the requested period, extract every P&L data point visible\n"
+        "     in the terminal output, note clearly if the available data covers less than the\n"
+        "     requested period, list the oldest and newest trade timestamps seen, and calculate\n"
+        "     annualised return where possible.\n"
+        "\n"
+        "HALT-state analysis:\n"
+        "- If 'System HALTED' appears in the terminal output, add a dedicated section:\n"
+        "  HALT P&L impact — identify the timestamp trading stopped, quantify opportunity-cost\n"
+        "  exposure (zero revenue since halt), and list the last recorded performance metrics\n"
+        "  (PnL by agent, win rate, Sharpe) from the log.\n"
     ),
-    model_settings=ModelSettings(max_tokens=600),
+    model_settings=ModelSettings(max_tokens=700),
     tools=[],
 )

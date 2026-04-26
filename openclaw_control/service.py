@@ -195,8 +195,8 @@ _TEAM_RUNS_LOCK = _threading.Lock()
 
 DEFAULT_TEAM_PROMPT = (
     "Review the latest workspace context and produce: "
-    "(1) P&L summary, (2) quant critique, "
-    "(3) COO decision memo with 3 next actions max "
+    "(1) P&L summary including any halt-state impact, (2) quant critique including halt trigger "
+    "analysis if applicable, (3) COO decision memo with 3 next actions max "
     "and optionally one /copilot task."
 )
 
@@ -236,9 +236,12 @@ def _build_team_ctx(workspace: dict) -> str:
         lines.append(f"SSH target: {settings.ssh_host}")
     if settings.repo_dir:
         lines.append(f"Repo dir: {settings.repo_dir}")
+    review_period = (workspace.get("review_period") or "").strip()
+    if review_period:
+        lines.append(f"Review period requested: {review_period}")
     tail = (workspace.get("terminal_tail") or "").strip()
     if tail:
-        capped = "\n".join(tail.splitlines()[-120:])
+        capped = "\n".join(tail.splitlines()[-200:])
         lines.append(f"Last terminal output:\n{capped}")
     return "\n".join(lines)
 
