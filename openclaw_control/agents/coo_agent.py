@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, ModelSettings, Runner, function_tool
+from openclaw_control.budget import COO_BUDGET_MESSAGE
 
 
 def _run_agent_in_thread(agent, prompt: str, timeout: int = 20) -> str:
@@ -8,9 +9,10 @@ def _run_agent_in_thread(agent, prompt: str, timeout: int = 20) -> str:
 
     The default timeout (20 s) is intentionally shorter than the outer 25 s hard timeout
     so the COO agent has time to process both sub-agent responses before its own deadline.
+    Sub-agent runs are capped at max_turns=1 (no tools) to prevent self-triggering loops.
     """
     with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(Runner.run_sync, agent, prompt)
+        fut = pool.submit(Runner.run_sync, agent, prompt, max_turns=1)
         try:
             return fut.result(timeout=timeout).final_output
         except _FuturesTimeout:
@@ -22,7 +24,8 @@ def _run_agent_in_thread(agent, prompt: str, timeout: int = 20) -> str:
 @function_tool
 def ask_pnl(text: str) -> str:
     """Query the P&L Agent with a finance, fees, or performance question.
-    Returns the P&L Agent's structured analysis."""
+    Returns the P&L Agent's structured analysis.
+    Call this tool at most ONCE per request."""
     from openclaw_control.agents.pnl_agent import pnl_agent  # avoid circular import at module load
 
     return _run_agent_in_thread(pnl_agent, text)
@@ -31,7 +34,8 @@ def ask_pnl(text: str) -> str:
 @function_tool
 def ask_quant(text: str) -> str:
     """Query the Quant Agent with a statistics, backtesting, or bot-engineering question.
-    Returns the Quant Agent's structured analysis."""
+    Returns the Quant Agent's structured analysis.
+    Call this tool at most ONCE per request."""
     from openclaw_control.agents.quant_agent import quant_agent  # avoid circular import at module load
 
     return _run_agent_in_thread(quant_agent, text)
@@ -48,17 +52,23 @@ coo_agent = Agent(
         "- ask_pnl(text): Query the P&L Agent for financial analysis.\n"
         "- ask_quant(text): Query the Quant Agent for statistical/methodological analysis.\n"
         "\n"
-        "Rules:\n"
-        "- For every decision memo you MUST call BOTH ask_pnl and ask_quant "
-        "before writing the final memo, so the memo explicitly references both viewpoints.\n"
+        "Strict rules:\n"
+        "- Call ask_pnl EXACTLY ONCE and ask_quant EXACTLY ONCE per request. No repeat calls.\n"
+        "- You MUST always produce a final decision memo, even if one or both tools return an error "
+        "or timeout. In that case, note the failure and base your memo on available information.\n"
         "- Keep work practical and outcome-aligned. No over-engineering.\n"
         "- Do NOT execute SSH commands or suggest destructive actions.\n"
+        "- Do NOT attempt to call yourself or any other orchestration agent.\n"
+        "- If the prompt begins with [BUDGET LOW], do NOT call ask_pnl or ask_quant. Instead, "
+        f"respond immediately with:\n"
+        f"  '{COO_BUDGET_MESSAGE}'\n"
         "\n"
-        "Always structure your final output as:\n"
+        "Normal output structure:\n"
         "1) Decision memo: what we know / what we don't know\n"
         "2) Risks & constraints\n"
         "3) Next actions (max 3 items)\n"
         "4) If a code change is needed: a single /copilot-ready task sentence with acceptance criteria\n"
     ),
+    model_settings=ModelSettings(max_tokens=800),
     tools=[ask_pnl, ask_quant],
 )
