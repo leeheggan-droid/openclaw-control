@@ -299,11 +299,87 @@ def _build_team_ctx(workspace: dict) -> str:
     review_period = (workspace.get("review_period") or "").strip()
     if review_period:
         lines.append(f"Review period requested: {review_period}")
+    conv = workspace.get("conversation_history") or []
+    if conv:
+        # Use last 10 messages in chronological order, each capped at 400 chars.
+        # The frontend may send up to 30; the backend constrains to a tighter window
+        # so the context string stays within reasonable token limits for the agents.
+        conv_lines = ["Conversation context:"]
+        for item in conv[-10:]:
+            role = "User" if item.get("role") == "user" else "Agent"
+            text = (item.get("text") or "").strip()[:400]
+            if text:
+                conv_lines.append(f"[{role}] {text}")
+        lines.append("\n".join(conv_lines))
     tail = (workspace.get("terminal_tail") or "").strip()
     if tail:
         capped = "\n".join(tail.splitlines()[-200:])
         lines.append(f"Last terminal output:\n{capped}")
     return "\n".join(lines)
+
+
+def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
+    """Probe the server with read-only SSH commands, emitting one feed event per probe.
+
+    Each command streams its label and result snippet into the 'vibe' feed as it
+    completes — giving the same step-by-step building feel as the Autopilot tab.
+    Returns the full aggregated snapshot string for injection into agent prompts.
+    """
+    if not settings.ssh_host:
+        _push_event(run, "vibe", "message", "SSH not configured — snapshot skipped")
+        return ""
+
+    _push_event(run, "vibe", "start", "")
+    sections: list[str] = []
+    t_deadline = _time.monotonic() + timeout_s
+    repo = settings.repo_dir or "/opt/openclaw-crypto"
+
+    PROBES = [
+        (
+            "uptime",
+            "uptime 2>/dev/null || echo '[unavailable]'",
+            4,
+        ),
+        (
+            "docker status",
+            "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.State}}' "
+            "2>/dev/null || echo '[docker unavailable]'",
+            5,
+        ),
+        (
+            "log highlights",
+            "(docker logs --tail=30 openclaw-orchestrator 2>&1 | "
+            "grep -iE 'HALT|error|pnl|trade|signal|warning' | tail -n 20) "
+            "2>/dev/null || echo '[no matches]'",
+            7,
+        ),
+        (
+            "git log",
+            f"cd {repo} && git log -n 5 --oneline 2>/dev/null || echo '[unavailable]'",
+            5,
+        ),
+    ]
+
+    for label, cmd, t in PROBES:
+        if _time.monotonic() >= t_deadline:
+            _push_event(run, "vibe", "message", "⏱ Time budget low — remaining probes skipped")
+            break
+        # Emit the "asking…" line so the feed shows intent before the SSH round-trip
+        _push_event(run, "vibe", "message", f"📡 {label}…")
+        r = run_ssh(cmd, timeout=t)
+        if "error" in r:
+            _push_event(run, "vibe", "message", f"  ↳ [SSH error]")
+            continue
+        out = (r.get("stdout") or "").strip()
+        if out:
+            snippet = "\n".join(out.splitlines()[:12])
+            _push_event(run, "vibe", "message", f"  ↳ {snippet}")
+            sections.append(f"=== {label} ===\n{out}")
+        else:
+            _push_event(run, "vibe", "message", f"  ↳ (no output)")
+
+    _push_event(run, "vibe", "done", "")
+    return "\n\n".join(sections).strip()
 
 
 def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
@@ -326,9 +402,34 @@ def _make_agent_prompt(user_prompt: str, ctx: str, bprefix: str = "") -> str:
 
 
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
+    # Narrate exactly what context was assembled
+    ctx_sources = []
+    if "Conversation context:" in ctx:
+        ctx_sources.append("conversation history")
+    if "Last terminal output:" in ctx:
+        ctx_sources.append("terminal output")
+    if "SSH target:" in ctx:
+        ctx_sources.append("SSH workspace")
+    sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
+    _push_event(
+        run, "main", "message",
+        f"📋 Context sources: {sources_str}\n"
+        f"🎯 Objective: {user_prompt[:300]}",
+    )
+
+    # Explore the live server — each probe streams into the feed as it completes
+    rem = deadline - _time.monotonic()
+    vibe_snap = ""
+    if rem > 12:
+        vibe_snap = _gather_vibe_snapshot(run, min(10.0, rem - 10))
+    else:
+        _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
+
+    enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
+
     bprefix = _BUDGET_LOW_PREFIX if budget.is_low() else ""
-    pnl_prompt = _make_agent_prompt(user_prompt, ctx, bprefix)
-    quant_prompt = _make_agent_prompt(user_prompt, ctx, bprefix)
+    pnl_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
+    quant_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
 
     # Submit P&L and Quant in parallel
     _push_event(run, "pnl", "start", "")
@@ -371,7 +472,7 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         return
 
     coo_prompt = (
-        f"{ctx}\n\n=== P&L Report ===\n{pnl_out}\n\n"
+        f"{enhanced_ctx}\n\n=== P&L Report ===\n{pnl_out}\n\n"
         f"=== Quant Report ===\n{quant_out}\n\n"
         f"=== Directive ===\n{user_prompt}"
     )
@@ -382,13 +483,38 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
 
 
 def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
+    # Narrate exactly what context was assembled
+    ctx_sources = []
+    if "Conversation context:" in ctx:
+        ctx_sources.append("conversation history")
+    if "Last terminal output:" in ctx:
+        ctx_sources.append("terminal output")
+    if "SSH target:" in ctx:
+        ctx_sources.append("SSH workspace")
+    sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
+    _push_event(
+        run, "main", "message",
+        f"📋 Context sources: {sources_str}\n"
+        f"🎯 Objective: {user_prompt[:300]}",
+    )
+
+    # Explore the live server — each probe streams into the feed as it completes
+    rem = deadline - _time.monotonic()
+    vibe_snap = ""
+    if rem > 18:
+        vibe_snap = _gather_vibe_snapshot(run, min(14.0, rem - 14))
+    else:
+        _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
+
+    enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
+
     bprefix = _BUDGET_LOW_PREFIX if budget.is_low() else ""
 
     # ── Round 1 ───────────────────────────────────────────────────────────────
     _push_event(run, "system", "message", "── Round 1 ──")
 
-    pnl_prompt = _make_agent_prompt(user_prompt, ctx, bprefix)
-    quant_prompt = _make_agent_prompt(user_prompt, ctx, bprefix)
+    pnl_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
+    quant_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
 
     _push_event(run, "pnl", "start", "Round 1")
     _push_event(run, "quant", "start", "Round 1")
@@ -429,7 +555,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         return
 
     coo_r1_prompt = (
-        f"{ctx}\n\n=== P&L Report (Round 1) ===\n{pnl_r1}\n\n"
+        f"{enhanced_ctx}\n\n=== P&L Report (Round 1) ===\n{pnl_r1}\n\n"
         f"=== Quant Report (Round 1) ===\n{quant_r1}\n\n"
         f"=== Directive ===\n{user_prompt}"
     )
@@ -451,8 +577,8 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         f"=== COO Round 1 Memo ===\n{coo_r1}\n\n"
         f"=== Original directive ===\n{user_prompt}"
     )
-    pnl_r2_prompt = _make_agent_prompt(revise_directive, ctx, bprefix)
-    quant_r2_prompt = _make_agent_prompt(revise_directive, ctx, bprefix)
+    pnl_r2_prompt = _make_agent_prompt(revise_directive, enhanced_ctx, bprefix)
+    quant_r2_prompt = _make_agent_prompt(revise_directive, enhanced_ctx, bprefix)
 
     _push_event(run, "pnl", "start", "Round 2")
     _push_event(run, "quant", "start", "Round 2")
@@ -493,7 +619,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         return
 
     coo_final_prompt = (
-        f"{ctx}\n\n=== P&L (Round 1) ===\n{pnl_r1}\n\n"
+        f"{enhanced_ctx}\n\n=== P&L (Round 1) ===\n{pnl_r1}\n\n"
         f"=== Quant (Round 1) ===\n{quant_r1}\n\n"
         f"=== COO Round 1 Memo ===\n{coo_r1}\n\n"
         f"=== P&L (Round 2, revised) ===\n{pnl_r2}\n\n"
@@ -514,11 +640,32 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
     with _TEAM_RUNS_LOCK:
         _TEAM_RUNS[run_id] = run
 
-    timeout = 25 if mode == "quick" else 45
-    user_prompt = (prompt or "").strip() or DEFAULT_TEAM_PROMPT
+    timeout = 35 if mode == "quick" else 65
+
+    # Determine user prompt: explicit prompt > last user message from conversation > default
+    user_prompt = (prompt or "").strip()
+    if not user_prompt:
+        conv = workspace.get("conversation_history") or []
+        for item in reversed(conv):
+            if item.get("role") == "user":
+                user_prompt = (item.get("text") or "").strip()[:500]
+                break
+    user_prompt = user_prompt or DEFAULT_TEAM_PROMPT
+
     ctx = _build_team_ctx(workspace)
 
-    _push_event(run, "system", "run-start", f"mode={mode}")
+    # Narrate context assembly into the feed before the orchestration thread starts
+    conv = workspace.get("conversation_history") or []
+    conv_count = sum(1 for m in conv if m.get("role") == "user")
+    ctx_note_parts = [f"mode={mode}"]
+    if conv_count:
+        ctx_note_parts.append(
+            f"building context string from {conv_count} user message(s) "
+            f"— last 10 in chronological order, each truncated to 400 chars"
+        )
+    if workspace.get("terminal_tail"):
+        ctx_note_parts.append("terminal tail included")
+    _push_event(run, "system", "run-start", " · ".join(ctx_note_parts))
 
     def _orchestrate() -> None:
         deadline = _time.monotonic() + timeout

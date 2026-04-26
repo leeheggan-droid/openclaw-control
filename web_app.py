@@ -559,6 +559,8 @@ def index():
     .feedAgent.pnl   {background:rgba(59,130,246,.18);color:#93c5fd;}
     .feedAgent.quant {background:rgba(167,139,250,.18);color:#c4b5fd;}
     .feedAgent.coo   {background:rgba(34,197,94,.18);color:#86efac;}
+    .feedAgent.main  {background:rgba(251,146,60,.18);color:rgba(251,146,60,.9);}
+    .feedAgent.vibe  {background:rgba(45,212,191,.18);color:rgba(45,212,191,.9);}
     .feedAgent.system{background:rgba(156,163,175,.15);color:#9ca3af;}
     .feedType{
       font-size:10px;
@@ -1181,7 +1183,7 @@ def index():
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
       pane.style.display = (!isTeam && !isVibe && !isAutopilot && key === ag) ? "" : "none";
     }
-    teamBtnsBarEl.style.display  = isTeam      ? "flex" : "none";
+    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot) ? "flex" : "none";
     cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
@@ -1619,7 +1621,7 @@ def index():
   // ── Team review ──────────────────────────────────────────────────────────────
 
   const TEAM_FEED_KEY = "openclaw_team_feed_v1";
-  const AGENT_DISPLAY = {pnl: "P&L", quant: "Quant", coo: "COO", system: "System"};
+  const AGENT_DISPLAY = {main: "Main", pnl: "P&L", quant: "Quant", coo: "COO", vibe: "Vibe", system: "System"};
 
   const teamBtnsBarEl     = document.getElementById("teamBtnsBar");
   const quickReviewBtn    = document.getElementById("quickReviewBtn");
@@ -1719,12 +1721,33 @@ def index():
     teamPollCursor = 0;
 
     const period = reviewPeriod || "";
+
+    // Capture conversation history from the current tab (not from the Team tab itself)
+    const sourceAgent = (activeAgent === "team") ? "main" : activeAgent;
+    const convHistory = (histories[sourceAgent] || [])
+      .slice(-30)
+      .filter(h => h.role === "user" || h.role === "agent")
+      .map(h => ({role: h.role, text: (h.text || "").slice(0, 600)}));
+
+    // Determine prompt: typed text in input > last user message in history > ask user
+    let userPrompt = inputEl.value.trim();
+    if (!userPrompt) {
+      const lastUserMsg = convHistory.slice().reverse().find(h => h.role === "user");
+      if (!lastUserMsg) {
+        // No conversation context at all — ask the user for a brief objective
+        const input = window.prompt("Please describe what you want reviewed:");
+        if (!input || !input.trim()) return;
+        userPrompt = input.trim();
+      }
+      // Else: leave userPrompt empty; backend will extract from conversation history
+    }
+
     const defaultPrompt = period
       ? `Produce a ${period} periodic review: (1) P&L summary with halt-state impact, ` +
         `(2) quant critique with halt trigger analysis, (3) COO recommendation. ` +
         `Clearly state if available data covers less than the requested period.`
       : "";
-    const userPrompt = inputEl.value.trim() || defaultPrompt;
+    const finalPrompt = userPrompt || defaultPrompt;
     const termTail   = getShellOutput();
 
     setTeamRunning(true);
@@ -1741,9 +1764,12 @@ def index():
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
           mode,
-          prompt: userPrompt,
+          prompt: finalPrompt,
           review_period: period,
-          workspace: {terminal_tail: termTail},
+          workspace: {
+            terminal_tail: termTail,
+            conversation_history: convHistory,
+          },
         }),
       });
       const data = await res.json();
