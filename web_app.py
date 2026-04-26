@@ -1891,6 +1891,18 @@ def index():
       row.appendChild(resultEl);
     }
 
+    if (f.github_issue_url) {
+      const issueEl = document.createElement("div");
+      issueEl.className = "apAction";
+      const issueLink = document.createElement("a");
+      issueLink.href = f.github_issue_url;
+      issueLink.target = "_blank";
+      issueLink.rel = "noopener noreferrer";
+      issueLink.textContent = "🐛 GitHub issue #" + (f.github_issue_number || "?") + " created automatically";
+      issueEl.appendChild(issueLink);
+      row.appendChild(issueEl);
+    }
+
     return row;
   }
 

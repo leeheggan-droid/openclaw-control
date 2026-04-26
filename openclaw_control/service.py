@@ -7,6 +7,8 @@ import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone as _tz
 
+import requests as _requests
+
 from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession, SessionSettings
 from openclaw_control import budget
 from openclaw_control.budget import COO_BUDGET_MESSAGE
@@ -622,6 +624,78 @@ _INVESTIGATE_CMD = (
     "echo '[no openclaw-orchestrator container]')"
 )
 
+# GitHub API headers helper (mirrors web_app.py — kept local to avoid circular imports).
+def _gh_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _autopilot_open_github_issue(summary: str, recommended_action: str, ssh_output: str) -> dict | None:
+    """Create a GitHub issue for an autopilot-detected anomaly.
+
+    Returns a dict with ``issue_url`` and ``issue_number`` on success, or
+    ``None`` when the token is missing or the API call fails.
+    """
+    token = settings.github_token
+    if not token:
+        return None
+
+    repo_full = settings.github_repo or "leeheggan-droid/openclaw-control"
+    parts = repo_full.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    owner, repo = parts
+
+    title = f"[Autopilot] {summary[:80]}"
+
+    ssh_lines = (ssh_output or "").splitlines()[-100:]
+    ssh_snippet = "\n".join(ssh_lines) or "(no SSH output)"
+
+    body_lines = [
+        "## Autopilot Anomaly",
+        "",
+        f"> {summary}",
+        "",
+        "## Recommended Action",
+        recommended_action or "(see SSH output)",
+        "",
+        "## Context",
+        f"- **Host:** {settings.ssh_host or '(not configured)'}",
+        f"- **Repo:** {settings.repo_dir or '(not configured)'}",
+        "- **Triggered by:** OpenClaw Autopilot (automated investigation)",
+        "",
+        "## Constraints",
+        "- No secrets or credentials added to source code",
+        "- No destructive operations introduced",
+        "- Changes limited to the minimum required by the issue",
+        "- Match existing code style and conventions",
+        "",
+        "## Acceptance Criteria",
+        "- [ ] Anomaly resolved as described above",
+        "- [ ] Local test passed: `git pull; uvicorn web_app:app --reload;` then verified in browser",
+        "",
+        "## SSH Output (last 100 lines)",
+        "```",
+        ssh_snippet,
+        "```",
+    ]
+    body = "\n".join(body_lines)
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+    payload = {"title": title, "body": body, "labels": ["autopilot", "bug"]}
+
+    try:
+        r = _requests.post(url, json=payload, headers=_gh_headers(token), timeout=15)
+        if not r.ok:
+            return None
+        data = r.json()
+        return {"issue_url": data["html_url"], "issue_number": data["number"]}
+    except Exception:
+        return None
+
 
 def _autopilot_push_event(kind: str, message: str) -> None:
     """Append a progress event to the autopilot events list. Thread-safe."""
@@ -657,6 +731,7 @@ def _autopilot_analyze(raw: str) -> dict:
             "urgency": "low",
             "summary": "Budget exhausted — AI analysis skipped.",
             "recommended_action": "",
+            "action_type": "none",
         }
 
     ctx_lines = []
@@ -674,13 +749,18 @@ def _autopilot_analyze(raw: str) -> dict:
     try:
         result = fut.result(timeout=20)
         _record_run_usage(result)
-        return _json.loads(result.final_output)
+        parsed = _json.loads(result.final_output)
+        # Back-fill action_type when the model omits it (e.g. on budget-skipped runs).
+        if "action_type" not in parsed:
+            parsed["action_type"] = "none" if not parsed.get("needs_action") else "vibe_action"
+        return parsed
     except Exception:
         return {
             "needs_action": False,
             "urgency": "low",
             "summary": "Analysis unavailable.",
             "recommended_action": "",
+            "action_type": "none",
         }
 
 
@@ -744,7 +824,7 @@ def _autopilot_run_once() -> None:
     finding = _autopilot_analyze(raw)
 
     if not finding.get("needs_action"):
-        # All clear — update timestamps, no further action
+        # All clear — resolve silently, update timestamps only
         _autopilot_push_event("clear", f"✅ All clear — {finding.get('summary', 'system healthy')}")
         with _AUTOPILOT_LOCK:
             interval = _AUTOPILOT_STATE["interval"]
@@ -756,17 +836,46 @@ def _autopilot_run_once() -> None:
     summary = finding.get("summary", "")
     recommended = finding.get("recommended_action", "")
     urgency = finding.get("urgency", "low")
+    action_type = finding.get("action_type", "vibe_action")
 
-    # Phase 3: Conclude — generate a concrete remediation command
     _autopilot_push_event("conclude", f"⚠️ Issue detected ({urgency.upper()}): {summary}")
-    _autopilot_push_event("conclude", "💡 Generating remediation command…")
 
-    vibe_command = _autopilot_conclude(summary, recommended)
+    # Phase 3: Conclude — branch by action_type
+    vibe_command = ""
+    github_issue_url = ""
+    github_issue_number = None
 
-    if vibe_command:
-        _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
-        _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
+    if action_type == "github_issue":
+        # Code/config change needed → open a GitHub issue automatically
+        _autopilot_push_event("escalate", "📂 Code/config change required — opening GitHub issue…")
+        issue = _autopilot_open_github_issue(summary, recommended, raw)
+        if issue:
+            github_issue_url = issue["issue_url"]
+            github_issue_number = issue["issue_number"]
+            _autopilot_push_event(
+                "escalate",
+                f"✅ GitHub issue #{github_issue_number} created: {github_issue_url}",
+            )
+        else:
+            _autopilot_push_event(
+                "escalate",
+                "⚠️ Could not create GitHub issue (GITHUB_TOKEN missing or API error) — operator must act manually.",
+            )
+
+    elif action_type == "vibe_action":
+        # State change needed → generate a Vibe command and queue for operator approval
+        _autopilot_push_event("conclude", "💡 Generating remediation command…")
+        vibe_command = _autopilot_conclude(summary, recommended)
+        if vibe_command:
+            _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
+            _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
+        else:
+            action_text = recommended or "(see finding)"
+            _autopilot_push_event("escalate", f"📋 Recommended action: {action_text}")
+            _autopilot_push_event("escalate", "⏳ Operator review required.")
+
     else:
+        # Unexpected action_type — surface as a plain finding for manual review
         action_text = recommended or "(see finding)"
         _autopilot_push_event("escalate", f"📋 Recommended action: {action_text}")
         _autopilot_push_event("escalate", "⏳ Operator review required.")
@@ -781,7 +890,10 @@ def _autopilot_run_once() -> None:
             "urgency": urgency,
             "summary": summary,
             "recommended_action": recommended,
+            "action_type": action_type,
             "vibe_command": vibe_command,
+            "github_issue_url": github_issue_url,
+            "github_issue_number": github_issue_number,
             "acked": False,
         }
         _AUTOPILOT_STATE["findings"].append(entry)
@@ -790,6 +902,7 @@ def _autopilot_run_once() -> None:
         _AUTOPILOT_STATE["unread"] += 1
         _AUTOPILOT_STATE["last_run"] = _now_iso()
         _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
+
 
 
 def _autopilot_loop(stop_event: _threading.Event) -> None:
