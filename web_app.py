@@ -735,7 +735,10 @@ def index():
         <button class="teamBtn cancelBtn" id="cancelReviewBtn" style="display:none">✕ Cancel run</button>
       </div>
 
-      <div class="chatBody" id="chat"></div>
+      <div id="chat-main" class="chatBody"></div>
+      <div id="chat-pnl"  class="chatBody" style="display:none"></div>
+      <div id="chat-quant" class="chatBody" style="display:none"></div>
+      <div id="chat-coo"  class="chatBody" style="display:none"></div>
 
       <div class="teamFeed" id="teamFeed"></div>
 
@@ -850,7 +853,13 @@ def index():
 
 <script>
   // --- DOM references ---
-  const chatEl = document.getElementById("chat");
+  const CHAT_PANES = {
+    main:  document.getElementById("chat-main"),
+    pnl:   document.getElementById("chat-pnl"),
+    quant: document.getElementById("chat-quant"),
+    coo:   document.getElementById("chat-coo"),
+  };
+  function activeChatPane() { return CHAT_PANES[activeAgent] || null; }
   const terminalEl = document.getElementById("terminal");
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("sendBtn");
@@ -888,10 +897,13 @@ def index():
   } catch {}
 
   function saveHistory(ag) {
-    localStorage.setItem(AGENT_STORE_KEYS[ag], JSON.stringify((histories[ag] || []).slice(-200)));
+    localStorage.setItem(AGENT_STORE_KEYS[ag], JSON.stringify((histories[ag] || []).slice(-100)));
   }
 
-  function scrollChatBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
+  function scrollChatBottom() {
+    const pane = activeChatPane();
+    if (pane) pane.scrollTop = pane.scrollHeight;
+  }
   function scrollTermBottom()  { terminalEl.scrollTop = terminalEl.scrollHeight; }
 
   function addChat(role, text, extraHTML) {
@@ -934,15 +946,22 @@ def index():
     }
 
     row.appendChild(wrap);
-    chatEl.appendChild(row);
+    const pane = activeChatPane();
+    if (pane) pane.appendChild(row);
     scrollChatBottom();
   }
 
-  function renderHistory() {
-    chatEl.innerHTML = "";
-    (histories[activeAgent] || []).forEach(item => addChat(item.role, item.text, item.extraHTML || ""));
+  function _renderHistoryIntoPane(ag) {
+    const pane = CHAT_PANES[ag];
+    if (!pane) return;
+    const savedAgent = activeAgent;
+    activeAgent = ag;
+    (histories[ag] || []).forEach(item => addChat(item.role, item.text, item.extraHTML || ""));
+    activeAgent = savedAgent;
+    pane.scrollTop = pane.scrollHeight;
   }
-  renderHistory();
+  // One-time initial render of all per-tab histories
+  for (const ag of Object.keys(CHAT_PANES)) { _renderHistoryIntoPane(ag); }
 
   // --- tab switching ---
   const teamFeedEl = document.getElementById("teamFeed");
@@ -952,14 +971,15 @@ def index():
   function showAgentTab(ag) {
     const isTeam = ag === "team";
     const isVibe = ag === "vibe";
-    chatEl.style.display         = (isTeam || isVibe) ? "none" : "";
+    // Show the right chat pane (or none for team/vibe) — no re-render
+    for (const [key, pane] of Object.entries(CHAT_PANES)) {
+      pane.style.display = (!isTeam && !isVibe && key === ag) ? "" : "none";
+    }
     teamFeedEl.style.display     = isTeam ? "flex" : "none";
     vibePadEl.style.display      = isVibe ? "flex" : "none";
     composerEl.style.display     = (isTeam || isVibe) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
-    } else if (!isVibe) {
-      renderHistory();
     }
   }
 
@@ -1345,7 +1365,7 @@ def index():
   } catch { teamFeedEvents = []; }
 
   function saveTeamFeed() {
-    localStorage.setItem(TEAM_FEED_KEY, JSON.stringify(teamFeedEvents.slice(-500)));
+    localStorage.setItem(TEAM_FEED_KEY, JSON.stringify(teamFeedEvents.slice(-200)));
   }
 
   function _nowIso() {
