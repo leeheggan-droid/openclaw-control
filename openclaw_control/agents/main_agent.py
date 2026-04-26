@@ -47,37 +47,87 @@ def _delegate_to_agent(agent, prompt: str, timeout: int = 12) -> str:
 
 @function_tool
 def get_trade_history(limit: int = 20) -> str:
-    """Retrieve the most recent trade executions from the local persistent trade log.
+    """Retrieve the most recent trade executions.
+
+    Lookup order:
+    1. Local persistent SQLite trade log (fastest — populated when bot POSTs to /trades/log).
+    2. Kraken REST API  (TradesHistory endpoint) — used when local log is empty.
+    3. Alpaca REST API  (filled orders endpoint) — used when local log and Kraken are empty.
 
     Use this when the user asks about:
     - Recent trades (crypto or Alpaca)
     - Last N trades
     - Trade history or trade count
 
-    Returns a formatted list of trades, or a message explaining how to populate the log
-    if no trades have been recorded yet.
+    Returns a formatted list of trades from whichever source has data.
     """
     from openclaw_control import trade_log as _tl  # lazy import avoids circular load
-    rows = _tl.get_recent_trades(limit=min(max(1, limit), 100))
-    if not rows:
-        return (
-            "No trades found in the local trade log. "
-            "The bot must POST individual trade executions to this server's /trades/log endpoint "
-            "for them to appear here. "
-            "For raw VPS log data instead, emit: VIBE_REPORT_REQUEST: last_trade"
-        )
-    lines = [f"Recent trades ({len(rows)} records, newest first):"]
-    for t in rows:
-        line = (
-            f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
-            f"  size={t['size']}  price={t['fill_price']}"
-        )
-        if t.get("trade_id"):
-            line += f"  trade_id={t['trade_id']}"
-        if t.get("source"):
-            line += f"  src={t['source']}"
-        lines.append(line)
-    return "\n".join(lines)
+    from openclaw_control.tools.exchange_tools import fetch_kraken_trades, fetch_alpaca_trades
+
+    limit = min(max(1, limit), 100)
+
+    # ── 1. Local SQLite log ───────────────────────────────────────────────────
+    rows = _tl.get_recent_trades(limit=limit)
+    if rows:
+        lines = [f"Recent trades — source: local log ({len(rows)} records, newest first):"]
+        for t in rows:
+            line = (
+                f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
+                f"  size={t['size']}  price={t['fill_price']}"
+            )
+            if t.get("trade_id"):
+                line += f"  trade_id={t['trade_id']}"
+            if t.get("source"):
+                line += f"  src={t['source']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    # ── 2. Kraken REST API ────────────────────────────────────────────────────
+    kraken_result = fetch_kraken_trades(limit=limit)
+    if isinstance(kraken_result, list) and kraken_result:
+        lines = [f"Recent trades — source: Kraken API ({len(kraken_result)} records, newest first):"]
+        for t in kraken_result:
+            line = (
+                f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
+                f"  size={t['size']}  price={t['fill_price']}"
+            )
+            if t.get("trade_id"):
+                line += f"  trade_id={t['trade_id']}"
+            if t.get("fee") is not None:
+                line += f"  fee={t['fee']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    # ── 3. Alpaca REST API ────────────────────────────────────────────────────
+    alpaca_result = fetch_alpaca_trades(limit=limit)
+    if isinstance(alpaca_result, list) and alpaca_result:
+        lines = [f"Recent trades — source: Alpaca API ({len(alpaca_result)} records, newest first):"]
+        for t in alpaca_result:
+            line = (
+                f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
+                f"  size={t['size']}  price={t['fill_price']}"
+            )
+            if t.get("trade_id"):
+                line += f"  trade_id={t['trade_id']}"
+            lines.append(line)
+        return "\n".join(lines)
+
+    # ── Nothing found anywhere — report each source's outcome ────────────────
+    kraken_note = (
+        kraken_result if isinstance(kraken_result, str)
+        else "Kraken API returned 0 trades."
+    )
+    alpaca_note = (
+        alpaca_result if isinstance(alpaca_result, str)
+        else "Alpaca API returned 0 trades."
+    )
+    return (
+        "No trades found in any source:\n"
+        f"  Local log:  empty (bot must POST to /trades/log to populate).\n"
+        f"  Kraken API: {kraken_note}\n"
+        f"  Alpaca API: {alpaca_note}\n"
+        "For raw VPS container log data, use run_vibe_report('last_trade')."
+    )
 
 
 @function_tool
@@ -203,9 +253,11 @@ main_agent = Agent(
         "     git_head             — current git HEAD on the VPS repo\n"
         "   Example: run_vibe_report('container_health')\n"
         "\n"
-        "2. get_trade_history(limit)  — query the LOCAL control-panel trade log (SQLite)\n"
+        "2. get_trade_history(limit)  — query trade history (LOCAL log → Kraken API → Alpaca API, auto-fallback)\n"
         "   Use for: 'show me the last N trades', 'what trades have been made?'\n"
-        "   Call this first for trade history; if empty, use run_vibe_report('last_trade') for VPS logs.\n"
+        "   This is the FIRST tool to call for any trade history question.\n"
+        "   It checks the local SQLite log first; if empty it automatically queries Kraken, then Alpaca.\n"
+        "   Only use run_vibe_report('last_trade') if all three sources return empty.\n"
         "\n"
         "3. get_pnl_history(limit)    — query the LOCAL control-panel P&L snapshot log\n"
         "   Use for: 'show P&L history', 'what is the equity over time?'\n"

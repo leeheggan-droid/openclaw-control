@@ -22,5 +22,10 @@ class Settings:
     # Trade log / inactivity alerting
     trade_inactivity_hours: int = int(os.getenv("OPENCLAW_TRADE_INACTIVITY_HOURS", "12"))
     alert_webhook_url: str = os.getenv("OPENCLAW_ALERT_WEBHOOK_URL", "")
+    # Exchange API credentials (read-only trade history)
+    kraken_api_key: str = os.getenv("KRAKEN_API_KEY", "")
+    kraken_api_secret: str = os.getenv("KRAKEN_API_SECRET", "")
+    alpaca_api_key: str = os.getenv("ALPACA_API_KEY", os.getenv("APCA_API_KEY_ID", ""))
+    alpaca_api_secret: str = os.getenv("ALPACA_API_SECRET", os.getenv("APCA_API_SECRET_KEY", ""))
 
 settings = Settings()
