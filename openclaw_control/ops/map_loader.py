@@ -36,6 +36,9 @@ REQUIRED_KEYS: frozenset[str] = frozenset({
 })
 
 # Maximum characters for the compressed summary injected into agent prompts.
+# At ~4 chars/token this is roughly 750 tokens — a small, fixed overhead that
+# leaves plenty of headroom in a 16 k-token context window for the agent's
+# actual task, terminal output, and response.
 _MAX_SUMMARY_LENGTH: int = 3000
 
 # ---------------------------------------------------------------------------

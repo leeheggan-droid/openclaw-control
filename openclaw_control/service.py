@@ -39,6 +39,16 @@ _quant_session = SQLiteSession("openclaw_quant_session", session_settings=_SESSI
 _coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_SETTINGS)
 _vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
 
+# ── Memory constants ──────────────────────────────────────────────────────────
+# Number of leading fingerprint characters used for a quick config-mismatch check.
+# The full fingerprint is 24 hex chars; 12 is enough to detect SSH host / repo_dir
+# changes without requiring an SSH round-trip on every agent call.
+_FINGERPRINT_PREFIX_LEN: int = 12
+
+# Maximum characters stored per report in the agent memory snapshot.
+# Derived summaries only — never raw full logs.
+_MAX_REPORT_SUMMARY_LENGTH: int = 1000
+
 # ── Vibe Evidence Report mechanism ───────────────────────────────────────────
 # Deterministic, read-only SSH command sequences per report_id.
 # Commands are sourced from vibe_reports.py (primary) and the ops map YAML
@@ -98,6 +108,17 @@ def run_vibe_report(report_id: str) -> str:
         sections.append(f"--- {cmd[:60]}... ---\n{body}")
     return "\n\n".join(sections)
 
+
+def _is_valid_report_data(report_data: str) -> bool:
+    """Return True if *report_data* contains actual evidence worth storing in memory.
+
+    Filters out empty responses, SSH error messages, and placeholder strings
+    that would pollute the agent memory snapshot with useless content.
+    """
+    if len(report_data) <= 50:
+        return False
+    noise_markers = ("(empty)", "[SSH error]", "[SSH not configured", "[Unknown report_id")
+    return not any(m in report_data for m in noise_markers)
 
 
 def run_ssh(command: str, timeout: int = 10) -> dict:
@@ -274,7 +295,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
             # If the config-level component of the fingerprint changed, invalidate.
             # (Full fingerprint including container start times is updated on each
             # successful VIBE_REPORT_REQUEST execution below.)
-            if not stored_fp.startswith(current_fp_config_only[:12]):
+            if not stored_fp.startswith(current_fp_config_only[:_FINGERPRINT_PREFIX_LEN]):
                 _memory.invalidate(name, reason="SSH target or repo_dir changed")
                 snap = {}
         if snap:
@@ -355,11 +376,11 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
                         # ── Persist evidence to memory (derived summary only) ──
                         # Only store if the report returned actual data, not just
                         # "(empty)" or SSH error lines.
-                        if name in ("pnl", "quant") and len(report_data) > 50 and "(empty)" not in report_data and "[SSH error]" not in report_data:
+                        if name in ("pnl", "quant") and _is_valid_report_data(report_data):
                             ct, gh = _vibe_reports.extract_fingerprint_fields(report_data)
                             fp = _memory.compute_fingerprint(ct, gh)
                             existing_snap = _memory.load_snapshot(name)
-                            existing_snap[f"last_{report_id}"] = report_data[:1000]
+                            existing_snap[f"last_{report_id}"] = report_data[:_MAX_REPORT_SUMMARY_LENGTH]
                             existing_snap[f"last_{report_id}_at"] = datetime.now(_tz.utc).replace(microsecond=0).isoformat()
                             existing_snap["last_report_id"] = report_id
                             _memory.save_snapshot(name, existing_snap, fp)
@@ -536,7 +557,7 @@ def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
         # cancel() is a no-op on already-running futures; the thread will finish naturally.
         return f"[{agent.name} timed out]", True
     except Exception as exc:
-        return f"[{agent.name} error: {type(exc).__name__}]", False
+        return f"[{agent.name} error: {type(exc).__name__}]", True
 
 
 def _make_agent_prompt(user_prompt: str, ctx: str, bprefix: str = "") -> str:
@@ -723,13 +744,13 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         f"=== Directive ===\n{user_prompt}"
     )
     _push_event(run, "coo", "start", "Round 1")
-    coo_r1, r1_timeout = _run_for_team(_team_coo, coo_r1_prompt, timeout_s=rem)
+    coo_r1, r1_timed_out = _run_for_team(_team_coo, coo_r1_prompt, timeout_s=rem)
     _push_event(run, "coo", "message", coo_r1)
     _push_event(run, "coo", "done", "Round 1")
 
     # ── Round 2 (if time permits) ─────────────────────────────────────────────
     rem = deadline - _time.monotonic()
-    if rem < 6 or r1_timeout:
+    if rem < 6 or r1_timed_out:
         _push_event(run, "system", "message", "Round 2 skipped — time budget exhausted")
         return
 

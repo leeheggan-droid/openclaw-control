@@ -54,7 +54,8 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── Last trade executed ──────────────────────────────────────────────
         "last_trade": [
-            # Check common container names in priority order
+            # alpaca_orb_bite_bot is the primary trading bot container; fall back
+            # to openclaw-orchestrator which may also log trade events.
             "docker logs --tail=2000 alpaca_orb_bite_bot 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -20",
             "docker logs --tail=2000 openclaw-orchestrator 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -20",
             f"find {repo} -name '*.log' 2>/dev/null | xargs grep -l 'trade\\|fill\\|executed' 2>/dev/null | head -3",
@@ -63,6 +64,8 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── Trade history (last 7 days window in logs) ───────────────────────
         "trade_history_7d": [
+            # Same dual-container fallback as last_trade; 5 000-line window to
+            # capture up to ~7 days of activity depending on log verbosity.
             "docker logs --tail=5000 alpaca_orb_bite_bot 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -100",
             "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -100",
             f"find {repo} -name '*.db' -o -name '*.csv' 2>/dev/null | head -5",
@@ -71,6 +74,7 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── P&L snapshot ─────────────────────────────────────────────────────
         "pnl_snapshot": [
+            # Same dual-container fallback; P&L keywords cover most log formats.
             "docker logs --tail=500 alpaca_orb_bite_bot 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity|return|profit|loss' | tail -30",
             "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity|return|profit|loss' | tail -30",
             f"find {repo} -name 'pnl*' -o -name 'performance*' -o -name 'equity*' 2>/dev/null | head -5",
@@ -79,6 +83,7 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── HALT / safety state ──────────────────────────────────────────────
         "halt_status": [
+            # Same dual-container fallback; HALT keywords cover safety / risk checks.
             "docker logs --tail=200 alpaca_orb_bite_bot 2>&1 | grep -iE 'HALT|HALTED|risk|bypass|multiplier|paused|stopped' | tail -20",
             "docker logs --tail=200 openclaw-orchestrator 2>&1 | grep -iE 'HALT|HALTED|risk|bypass|multiplier|paused|stopped' | tail -20",
             (

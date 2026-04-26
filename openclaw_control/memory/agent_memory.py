@@ -53,8 +53,15 @@ from openclaw_control.config import settings
 # ---------------------------------------------------------------------------
 # Database location
 # ---------------------------------------------------------------------------
+# Prefer an explicit env var so the path is configurable without code changes.
+# Fall back to the current working directory so the file lands next to the
+# server entry point (web_app.py / main.py) regardless of where this module
+# lives in the package tree.
 
-_DB_PATH = Path(__file__).parent.parent.parent / ".openclaw_memory.sqlite"
+_DB_PATH = Path(
+    os.environ.get("OPENCLAW_MEMORY_DB", "")
+    or Path.cwd() / ".openclaw_memory.sqlite"
+)
 
 # ---------------------------------------------------------------------------
 # Thread safety
