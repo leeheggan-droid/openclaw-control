@@ -1115,6 +1115,37 @@ def index():
     .apApproveBtn:disabled{opacity:.4;cursor:not-allowed;}
     .apApproveResult{font-size:11px;margin-top:5px;color:var(--muted);}
 
+    /* Main tab quick-action suggestion chips */
+    .mainSuggestsBar{
+      display:none;
+      gap:6px;
+      padding:7px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      flex-wrap:wrap;
+      align-items:center;
+      font-size:12px;
+      color:var(--muted);
+    }
+    .suggestChip{
+      padding:4px 11px;
+      border-radius:999px;
+      border:1px solid rgba(34,197,94,.25);
+      background:rgba(34,197,94,.06);
+      color:rgba(230,238,252,.75);
+      font-size:12px;
+      cursor:pointer;
+      font-family:var(--sans);
+      transition:background .15s,color .15s,border-color .15s;
+      white-space:nowrap;
+    }
+    .suggestChip:hover{
+      background:rgba(34,197,94,.15);
+      color:var(--text);
+      border-color:rgba(34,197,94,.45);
+    }
+    .suggestChip:active{transform:scale(.98);}
+
     /* Cheap Chat provider bar */
     .cheapBar{
       display:none;
@@ -1377,6 +1408,18 @@ def index():
         <button class="cheapProviderBtn" data-provider="mistral">Mistral</button>
         <button class="cheapProviderBtn" data-provider="cerebras">Cerebras</button>
         <span class="cheapModelLabel" id="cheapModelLabel">llama-3.3-70b-versatile</span>
+      </div>
+
+      <!-- Main tab quick-action suggestion chips -->
+      <div class="mainSuggestsBar" id="mainSuggestsBar">
+        <span>Ask:</span>
+        <button class="suggestChip" data-suggest="What's the total P&L for crypto and Alpaca trades?">📊 Total P&amp;L</button>
+        <button class="suggestChip" data-suggest="Show me the latest crypto trades from the bot.">🔄 Crypto trades</button>
+        <button class="suggestChip" data-suggest="What is the Alpaca bot's current P&L and status?">📈 Alpaca P&amp;L</button>
+        <button class="suggestChip" data-suggest="Check the system and container health — is the bot running?">🏥 System health</button>
+        <button class="suggestChip" data-suggest="What are the recent git commits across my repos?">🗂 Git status</button>
+        <button class="suggestChip" data-suggest="What are the latest crypto news and BTC price?">🌐 Crypto news</button>
+        <button class="suggestChip" data-suggest="Is the bot halted? What triggered it?">🛑 Halt status</button>
       </div>
 
       <div id="chat-main" class="chatBody"></div>
@@ -1698,6 +1741,7 @@ def index():
   const analyticsPadEl = document.getElementById("analyticsPad");
   const memoryPadEl    = document.getElementById("memoryPad");
   const cheapBarEl = document.getElementById("cheapBar");
+  const mainSuggestsBarEl = document.getElementById("mainSuggestsBar");
   const composerEl = document.querySelector(".chatComposer");
 
   function showAgentTab(ag) {
@@ -1707,11 +1751,14 @@ def index():
     const isAnalytics = ag === "analytics";
     const isCheap = ag === "cheap";
     const isMemory = ag === "memory";
+    const isMain = ag === "main";
     // Show the right chat pane (or none for team/vibe/autopilot/analytics/memory) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
       pane.style.display = (!isTeam && !isVibe && !isAutopilot && !isAnalytics && !isMemory && key === ag) ? "" : "none";
     }
-    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot && !isAnalytics && !isMemory) ? "flex" : "none";
+    // Main tab gets its own suggest bar instead of the team review buttons
+    teamBtnsBarEl.style.display  = (!isMain && !isVibe && !isAutopilot && !isAnalytics && !isMemory) ? "flex" : "none";
+    mainSuggestsBarEl.style.display = isMain ? "flex" : "none";
     cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
@@ -1739,6 +1786,21 @@ def index():
       showAgentTab(ag);
     });
   });
+
+  // --- Quick-action suggestion chips (Main tab) ---
+  document.querySelectorAll(".suggestChip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const text = chip.getAttribute("data-suggest") || "";
+      if (!text) return;
+      inputEl.value = text;
+      autoGrow();
+      inputEl.focus();
+    });
+  });
+
+  // Initialise main tab suggest bar visibility on page load (default tab is main)
+  if (mainSuggestsBarEl) mainSuggestsBarEl.style.display = "flex";
+  if (teamBtnsBarEl) teamBtnsBarEl.style.display = "none";
 
   // --- terminal helpers ---
   function termLine(kind, text) {
