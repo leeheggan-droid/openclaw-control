@@ -635,16 +635,41 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
     )
 
 
-def _dispatch_team_action(coo_output: str, run: dict) -> None:
-    """Dispatch COO next-action proposals to the team feed when budget allows."""
-    if budget.is_low():
-        return
-    _dispatch_coo_action(
+# ── Proposal deduplication (24-hour fingerprint cache) ────────────────────────
+# Maps proposal fingerprint → wall-clock expiry (epoch seconds).
+# Entries are lazily evicted when the cache grows large.
+
+_PROPOSAL_FPS: dict[str, float] = {}
+_PROPOSAL_FPS_TTL: float = 86400.0   # 24 hours
+
+
+def _seen_proposal_recently(fp: str) -> bool:
+    """Return True if *fp* is still within its 24 h TTL window."""
+    exp = _PROPOSAL_FPS.get(fp)
+    return exp is not None and _time.time() < exp
+
+
+def _record_proposal_fp(fp: str) -> None:
+    """Record *fp* with a 24 h expiry; evict stale entries when cache grows large."""
+    if len(_PROPOSAL_FPS) > 500:
+        now = _time.time()
+        stale = [k for k, v in _PROPOSAL_FPS.items() if v <= now]
+        for k in stale:
+            del _PROPOSAL_FPS[k]
+    _PROPOSAL_FPS[fp] = _time.time() + _PROPOSAL_FPS_TTL
+
+
+
+    seen = {fp for fp in _PROPOSAL_FPS if _seen_proposal_recently(fp)}
+    emitted = _dispatch_coo_action(
         coo_output, run,
         push_event=_push_event,
-        github_repo=settings.github_repo,
+        github_repo=None,           # determined from memo content; do not guess
         allowed_repos=_GH_ALLOWED_REPOS,
+        seen_fps=seen,
     )
+    for fp in emitted:
+        _record_proposal_fp(fp)
 
 
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
