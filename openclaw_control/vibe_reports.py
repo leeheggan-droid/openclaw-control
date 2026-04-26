@@ -22,7 +22,10 @@ Public API
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
+from pathlib import Path
 from openclaw_control.config import settings
 
 # ---------------------------------------------------------------------------
@@ -33,6 +36,25 @@ def _repo() -> str:
     return settings.repo_dir or "/opt/openclaw-crypto"
 
 
+def _trade_log_db() -> Path:
+    """Return the path to the persistent trade log SQLite database.
+
+    Mirrors the resolution logic in trade_log.py so probe commands
+    always reference the correct file regardless of env configuration.
+    """
+    return Path(
+        os.environ.get("OPENCLAW_TRADE_LOG_DB", "")
+        or Path.cwd() / ".openclaw_trades.sqlite"
+    )
+
+
+def _quoted_trade_log_db() -> str:
+    """Return the shell-quoted path to the persistent trade log SQLite database.
+
+    Mirrors the resolution logic in trade_log.py. The path is shell-quoted to
+    prevent injection if the env variable contains metacharacters.
+    """
+    return shlex.quote(str(_trade_log_db()))
 # ---------------------------------------------------------------------------
 # Report definitions
 # ---------------------------------------------------------------------------
@@ -54,7 +76,11 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── Last trade executed ──────────────────────────────────────────────
         "last_trade": [
-            # Primary: docker container logs — covers both crypto and Alpaca bots.
+            # Primary: read directly from the persistent on-disk trade log SQLite.
+            f"sqlite3 {_quoted_trade_log_db()} "
+            "'SELECT ts,symbol,side,size,fill_price,trade_id FROM trade_executions "
+            "ORDER BY id DESC LIMIT 10;' 2>/dev/null || echo '[trade log unavailable]'",
+            # Fallback: docker container logs — covers both crypto and Alpaca bots.
             "docker logs --tail=2000 alpaca_orb_bite_bot 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -20",
             "docker logs --tail=2000 openclaw-orchestrator 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -20",
             f"find {repo} -name '*.log' 2>/dev/null | xargs grep -l 'trade\\|fill\\|executed' 2>/dev/null | head -3",
@@ -63,7 +89,11 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── Trade history (last 7 days window in logs) ───────────────────────
         "trade_history_7d": [
-            # Primary: docker container logs — broad window for both bots.
+            # Primary: read from the persistent on-disk trade log SQLite.
+            f"sqlite3 {_quoted_trade_log_db()} "
+            "'SELECT ts,symbol,side,size,fill_price,trade_id FROM trade_executions "
+            "ORDER BY id DESC LIMIT 200;' 2>/dev/null || echo '[trade log unavailable]'",
+            # Fallback: docker container logs — broad window for both bots.
             "docker logs --tail=5000 alpaca_orb_bite_bot 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -100",
             "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'fill|filled|executed|order|trade' | tail -100",
             f"find {repo} -name '*.db' -o -name '*.csv' 2>/dev/null | head -5",
@@ -72,7 +102,11 @@ def _build_reports() -> dict[str, list[str]]:
 
         # ── P&L snapshot ─────────────────────────────────────────────────────
         "pnl_snapshot": [
-            # Primary: docker container logs for both bots.
+            # Primary: read from the persistent on-disk P&L log SQLite.
+            f"sqlite3 {_quoted_trade_log_db()} "
+            "'SELECT ts,total_pnl,equity,drawdown,realised_pnl,unrealised_pnl,sharpe_ratio "
+            "FROM pnl_snapshots ORDER BY id DESC LIMIT 24;' 2>/dev/null || echo '[pnl log unavailable]'",
+            # Fallback: docker container logs for both bots.
             "docker logs --tail=500 alpaca_orb_bite_bot 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity|return|profit|loss' | tail -30",
             "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity|return|profit|loss' | tail -30",
             f"find {repo} -name 'pnl*' -o -name 'performance*' -o -name 'equity*' 2>/dev/null | head -5",

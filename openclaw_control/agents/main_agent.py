@@ -5,6 +5,30 @@ from agents import Agent, Runner, function_tool
 from openclaw_control.tools.web_search import web_search
 
 
+@function_tool
+def run_vibe_report(report_id: str) -> str:
+    """Fetch live system data from the VPS via SSH and return the raw results.
+
+    Use this whenever you need real-time server evidence — do NOT ask the operator
+    to paste logs or relay data manually; call this tool instead.
+
+    Valid report_id values
+    ----------------------
+    container_health     — docker container status + restart counts
+    last_trade           — last 10 executed trades (VPS SQLite then VPS docker logs fallback)
+    trade_history_7d     — last 200 trades (VPS SQLite then VPS docker logs fallback)
+    pnl_snapshot         — P&L, equity, drawdown, Sharpe snapshots
+    halt_status          — HALT / risk / paused state from logs + container inspect
+    per_trade_analytics  — gross/net P&L, fees, slippage, reason codes per trade
+    git_head             — current git HEAD SHA on the VPS repo
+
+    Returns the SSH output as plain text. If SSH is not configured, returns a
+    message explaining that so you can inform the operator.
+    """
+    from openclaw_control.service import run_vibe_report as _run  # lazy — avoids circular load
+    return _run(report_id)
+
+
 def _delegate_to_agent(agent, prompt: str, timeout: int = 12) -> str:
     """Run a specialist agent synchronously with a timeout, in a fresh thread.
 
@@ -102,7 +126,7 @@ def get_trade_history(limit: int = 20) -> str:
         f"  Local log:  empty (bot must POST to /trades/log to populate).\n"
         f"  Kraken API: {kraken_note}\n"
         f"  Alpaca API: {alpaca_note}\n"
-        "For raw VPS container log data, emit: VIBE_REPORT_REQUEST: last_trade"
+        "For raw VPS container log data, use run_vibe_report('last_trade')."
     )
 
 
@@ -215,27 +239,39 @@ main_agent = Agent(
         "═══════════════════════════════════\n"
         "YOUR TOOLS\n"
         "═══════════════════════════════════\n"
-        "You have five tools. Use them proactively:\n"
+        "You have six tools. Use them proactively — never ask the operator to do what a tool can do:\n"
         "\n"
-        "1. get_trade_history(limit)  — query trade history (LOCAL log → Kraken API → Alpaca API, auto-fallback)\n"
+        "1. run_vibe_report(report_id) — fetch live VPS system data via SSH directly\n"
+        "   Use for: container health, last trades, P&L snapshots, halt status, git HEAD\n"
+        "   Valid report_id values:\n"
+        "     container_health     — docker container status + restart counts\n"
+        "     last_trade           — last 10 executed trades\n"
+        "     trade_history_7d     — last 200 trades\n"
+        "     pnl_snapshot         — P&L, equity, drawdown, Sharpe\n"
+        "     halt_status          — HALT / risk / paused state\n"
+        "     per_trade_analytics  — gross/net P&L, fees, slippage, reason codes\n"
+        "     git_head             — current git HEAD on the VPS repo\n"
+        "   Example: run_vibe_report('container_health')\n"
+        "\n"
+        "2. get_trade_history(limit)  — query trade history (LOCAL log → Kraken API → Alpaca API, auto-fallback)\n"
         "   Use for: 'show me the last N trades', 'what trades have been made?'\n"
         "   This is the FIRST tool to call for any trade history question.\n"
         "   It checks the local SQLite log first; if empty it automatically queries Kraken, then Alpaca.\n"
-        "   Only emit VIBE_REPORT_REQUEST: last_trade if all three sources return empty.\n"
+        "   Only use run_vibe_report('last_trade') if all three sources return empty.\n"
         "\n"
-        "2. get_pnl_history(limit)    — query the LOCAL control-panel P&L snapshot log\n"
+        "3. get_pnl_history(limit)    — query the LOCAL control-panel P&L snapshot log\n"
         "   Use for: 'show P&L history', 'what is the equity over time?'\n"
-        "   If empty, emit VIBE_REPORT_REQUEST: pnl_snapshot for VPS container data.\n"
+        "   If empty, use run_vibe_report('pnl_snapshot') for VPS container data.\n"
         "\n"
-        "3. ask_pnl(text)    — delegate to the P&L specialist agent\n"
-        "   Use for: P&L totals, fees, trade attribution, Sharpe, drawdown\n"
+        "4. ask_pnl(text)    — delegate to the P&L specialist agent\n"
+        "   Use for: P&L totals, fees, trade attribution, Sharpe, drawdown analysis\n"
         "   Example: ask_pnl('What is the total net P&L for crypto and Alpaca trades?')\n"
         "\n"
-        "4. ask_quant(text)  — delegate to the Quant specialist agent\n"
+        "5. ask_quant(text)  — delegate to the Quant specialist agent\n"
         "   Use for: strategy quality, backtesting critique, statistical validity\n"
         "   Example: ask_quant('Is the ORB strategy statistically sound given current win rate?')\n"
         "\n"
-        "5. web_search(query) — search the web via Brave\n"
+        "6. web_search(query) — search the web via Brave\n"
         "   Use for: live crypto prices, exchange status, news, docs\n"
         "   Example: web_search('BTC price today'), web_search('Kraken API status')\n"
         "\n"
@@ -243,22 +279,23 @@ main_agent = Agent(
         "RULES\n"
         "═══════════════════════════════════\n"
         "- NEVER say 'use the P&L tab' or 'switch to Quant' — call the tool yourself and report back.\n"
-        "- NEVER ask the operator to paste logs or relay data manually.\n"
+        "- NEVER ask the operator to paste logs, relay data, or relay command output.\n"
         "- NEVER fabricate metrics or trade outcomes.\n"
-        "- NEVER execute SSH commands yourself — propose them prefixed with '!' or use VIBE_REPORT_REQUEST.\n"
-        "- For live VPS system data, emit: VIBE_REPORT_REQUEST: <report_id>\n"
-        "  Valid ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status\n"
+        "- NEVER execute SSH commands yourself — for pre-defined data pulls use run_vibe_report;\n"
+        "  for ad-hoc operator-run commands propose them prefixed with '!'.\n"
         "- Budget constraints that apply to other agents do NOT apply to you.\n"
-        "- Propose shell commands prefixed with '!' when the user needs to inspect the system.\n"
         "- Do NOT ask for P&L or trade data if the user is asking a general question — use judgment.\n"
         "- Keep responses concise unless the question warrants depth.\n"
         "\n"
         "═══════════════════════════════════\n"
         "TOOL SEQUENCING\n"
         "═══════════════════════════════════\n"
+        "- For system health questions, start with run_vibe_report('container_health').\n"
+        "- For trade/P&L questions, call run_vibe_report('last_trade') or run_vibe_report('pnl_snapshot')\n"
+        "  then pass the raw data to ask_pnl for structured analysis.\n"
         "- For compound questions (e.g. 'total P&L for crypto AND Alpaca'), call ask_pnl once with the full question.\n"
         "- For questions needing both P&L and strategy insight, call ask_pnl then ask_quant.\n"
-        "- For market context + system state, use web_search + VIBE_REPORT_REQUEST.\n"
+        "- For market context + system state, use web_search + run_vibe_report.\n"
         "- Always synthesise the tool responses into a single clear answer — don't just paste raw tool output.\n"
         "\n"
         f"{_REPO_CAPABILITY_MAP}\n"
@@ -266,7 +303,9 @@ main_agent = Agent(
         "═══════════════════════════════════\n"
         "VIBE / SHELL INTELLIGENCE\n"
         "═══════════════════════════════════\n"
-        "Use OPS_MAP_CORE_MEMORY (injected into every message) for exact commands.\n"
+        "Use run_vibe_report for pre-defined read-only probe sets (fastest, no operator action needed).\n"
+        "Use '!' prefix for ad-hoc one-off commands the operator runs manually in the terminal.\n"
+        "Use OPS_MAP_CORE_MEMORY (injected into every message) for exact command references.\n"
         "Common useful '!' commands:\n"
         "  !docker ps\n"
         "  !docker logs --tail=200 openclaw-orchestrator\n"
@@ -278,5 +317,5 @@ main_agent = Agent(
         "that applies to the VPS (openclaw-crypto, alpaca_orb_bite_bot if on same host).\n"
         "openclaw-control is on the operator's local machine — they must run git pull locally.\n"
     ),
-    tools=[ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history],
+    tools=[run_vibe_report, ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history],
 )

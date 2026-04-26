@@ -150,7 +150,7 @@ def run_vibe_report(report_id: str) -> str:
         return "\n\n".join(sections) if sections else "[SSH not configured — cannot run Vibe report]"
 
     commands = _report_commands_from_map().get(rid)
-    if not commands and not sections:
+    if commands is None and not sections:
         valid = ", ".join(_report_commands_from_map().keys())
         return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
 
@@ -377,7 +377,7 @@ _COO_DETAIL_KEYWORDS = frozenset(["detailed", "full review", "deep dive"])
 # Main has a longer budget because it may call ask_pnl + ask_quant + web_search
 # in the same turn, each of which takes several seconds.
 _AGENT_TIMEOUT: dict[str, int] = {
-    "main": 45,
+    "main": 60,
     "coo": 15,
 }
 _DEFAULT_TIMEOUT = 25
