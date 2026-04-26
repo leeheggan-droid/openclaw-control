@@ -1749,6 +1749,7 @@ def index():
   const cheapBarEl = document.getElementById("cheapBar");
   const mainSuggestsBarEl = document.getElementById("mainSuggestsBar");
   const composerEl = document.querySelector(".chatComposer");
+  const teamBtnsBarEl = document.getElementById("teamBtnsBar");
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
@@ -2267,7 +2268,6 @@ def index():
   const TEAM_FEED_KEY = "openclaw_team_feed_v1";
   const AGENT_DISPLAY = {main: "Main", pnl: "P&L", quant: "Quant", coo: "COO", vibe: "Vibe", system: "System"};
 
-  const teamBtnsBarEl     = document.getElementById("teamBtnsBar");
   const quickReviewBtn    = document.getElementById("quickReviewBtn");
   const detailedReviewBtn = document.getElementById("detailedReviewBtn");
   const yearlyReviewBtn   = document.getElementById("yearlyReviewBtn");
