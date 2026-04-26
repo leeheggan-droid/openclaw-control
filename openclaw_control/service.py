@@ -522,6 +522,20 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
             f"cd {repo} && git log -n 5 --oneline 2>/dev/null || echo '[unavailable]'",
             5,
         ),
+        (
+            "trade log files",
+            f"find {repo} -maxdepth 5 \\( -name 'trade*.csv' -o -name '*trades*.csv' "
+            f"-o -name 'pnl*.csv' -o -name '*pnl*.csv' \\) 2>/dev/null | head -n 6 "
+            f"| xargs -r tail -n 25 2>/dev/null || echo '[no trade log files found]'",
+            6,
+        ),
+        (
+            "trade/pnl log grep",
+            "(docker logs --tail=100 openclaw-orchestrator 2>&1 | "
+            "grep -iE 'trade|pnl|net|gross|fee|slippage|profit|loss' | tail -n 30) "
+            "2>/dev/null || echo '[no trade/pnl matches]'",
+            7,
+        ),
     ]
 
     for label, cmd, t in PROBES:
@@ -547,7 +561,11 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
 
 
 def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
-    """Submit agent to the team executor (single pass, no session). Returns (output, timed_out)."""
+    """Submit agent to the team executor (single pass, no session). Returns (output, is_error).
+
+    is_error is True for both timeouts and exceptions so callers can use a single flag
+    to distinguish successful agent output from failure sentinels.
+    """
     fut = _TEAM_EXECUTOR.submit(Runner.run_sync, agent, prompt, max_turns=1)
     try:
         res = fut.result(timeout=max(1.0, timeout_s))
@@ -563,6 +581,38 @@ def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
 def _make_agent_prompt(user_prompt: str, ctx: str, bprefix: str = "") -> str:
     body = f"{ctx}\n\n{user_prompt}" if ctx else user_prompt
     return (bprefix + body) if bprefix else body
+
+
+def _push_agent_result(run: dict, agent_key: str, output: str, is_error: bool, label: str = "") -> None:
+    """Push events for a completed _run_for_team call.
+
+    Emits an 'error' event when is_error is True (timeout or exception),
+    otherwise emits a 'message' + 'done' pair so the feed reflects the phase gate.
+    """
+    if is_error:
+        _push_event(run, agent_key, "error", output)
+    else:
+        _push_event(run, agent_key, "message", output)
+        _push_event(run, agent_key, "done", label)
+
+
+def _evidence_gate(run: dict, vibe_snap: str) -> bool:
+    """Return True if downstream agents may proceed; False (with explicit failure event) if not.
+
+    When SSH is configured but Vibe returned no evidence data, the review must stop
+    rather than letting agents fabricate analysis from an empty context.
+    When SSH is not configured the user is working offline; agents may still use
+    whatever workspace context was provided (terminal tail, conversation history).
+    """
+    if settings.ssh_host and not vibe_snap:
+        _push_event(
+            run, "vibe", "error",
+            "❌ Evidence collection failed — SSH is configured but Vibe returned no data.\n"
+            "Review cannot proceed without live server evidence to avoid hallucinated analysis.\n"
+            "Check SSH connectivity and retry.",
+        )
+        return False
+    return True
 
 
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
@@ -583,7 +633,7 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         f"🎯 Objective: {user_prompt[:300]}",
     )
 
-    # Explore the live server — each probe streams into the feed as it completes
+    # Phase 1: Vibe — collect live server evidence before any agent runs
     rem = deadline - _time.monotonic()
     vibe_snap = ""
     if rem > 12:
@@ -591,13 +641,9 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
-    # Evidence gate: warn if SSH is configured but Vibe returned no data.
-    if not vibe_snap and settings.ssh_host:
-        _push_event(
-            run, "vibe", "message",
-            "⚠️ No live server evidence returned — analysis may be incomplete. "
-            "Check SSH connectivity and container name (expected: openclaw-orchestrator).",
-        )
+    # Evidence gate — block downstream agents if SSH is configured but returned nothing
+    if not _evidence_gate(run, vibe_snap):
+        return
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -605,41 +651,21 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
     pnl_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
     quant_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
 
-    # Submit P&L and Quant in parallel
+    # Phase 2: P&L — sequential; Quant does not start until P&L completes
     _push_event(run, "pnl", "start", "")
+    pnl_out, pnl_to = _run_for_team(pnl_agent, pnl_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "pnl", pnl_out, pnl_to)
+
+    # Phase 3: Quant — gates on P&L completing
+    rem = deadline - _time.monotonic()
+    if rem < 3:
+        _push_event(run, "quant", "error", "[Quant skipped — time budget exhausted after P&L]")
+        return
     _push_event(run, "quant", "start", "")
-    pnl_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, pnl_agent, pnl_prompt, max_turns=1)
-    quant_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, quant_agent, quant_prompt, max_turns=1)
+    quant_out, quant_to = _run_for_team(quant_agent, quant_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "quant", quant_out, quant_to)
 
-    pnl_out = ""
-    try:
-        r = pnl_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        pnl_out = r.final_output
-        _push_event(run, "pnl", "message", pnl_out)
-        _push_event(run, "pnl", "done", "")
-    except FuturesTimeout:
-        pnl_out = "[P&L timed out]"
-        _push_event(run, "pnl", "error", pnl_out)
-    except Exception as exc:
-        pnl_out = f"[P&L error: {type(exc).__name__}]"
-        _push_event(run, "pnl", "error", pnl_out)
-
-    quant_out = ""
-    try:
-        r = quant_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        quant_out = r.final_output
-        _push_event(run, "quant", "message", quant_out)
-        _push_event(run, "quant", "done", "")
-    except FuturesTimeout:
-        quant_out = "[Quant timed out]"
-        _push_event(run, "quant", "error", quant_out)
-    except Exception as exc:
-        quant_out = f"[Quant error: {type(exc).__name__}]"
-        _push_event(run, "quant", "error", quant_out)
-
-    # COO synthesis — uses remaining time budget
+    # Phase 4: COO synthesis — gates on Quant completing
     rem = deadline - _time.monotonic()
     if rem < 3:
         _push_event(run, "coo", "error", "[COO skipped — time budget exhausted]")
@@ -674,7 +700,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         f"🎯 Objective: {user_prompt[:300]}",
     )
 
-    # Explore the live server — each probe streams into the feed as it completes
+    # Phase 1: Vibe — collect live server evidence before any agent runs
     rem = deadline - _time.monotonic()
     vibe_snap = ""
     if rem > 18:
@@ -682,13 +708,9 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
-    # Evidence gate: warn if SSH is configured but Vibe returned no data.
-    if not vibe_snap and settings.ssh_host:
-        _push_event(
-            run, "vibe", "message",
-            "⚠️ No live server evidence returned — analysis may be incomplete. "
-            "Check SSH connectivity and container name (expected: openclaw-orchestrator).",
-        )
+    # Evidence gate — block downstream agents if SSH is configured but returned nothing
+    if not _evidence_gate(run, vibe_snap):
+        return
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -700,42 +722,24 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
     pnl_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
     quant_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
 
+    # Phase 2a: P&L Round 1 — sequential gate
     _push_event(run, "pnl", "start", "Round 1")
-    _push_event(run, "quant", "start", "Round 1")
-    pnl_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, pnl_agent, pnl_prompt, max_turns=1)
-    quant_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, quant_agent, quant_prompt, max_turns=1)
+    pnl_r1, pnl_r1_to = _run_for_team(pnl_agent, pnl_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "pnl", pnl_r1, pnl_r1_to, "Round 1")
 
-    pnl_r1 = ""
-    try:
-        r = pnl_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        pnl_r1 = r.final_output
-        _push_event(run, "pnl", "message", pnl_r1)
-        _push_event(run, "pnl", "done", "Round 1")
-    except FuturesTimeout:
-        pnl_r1 = "[P&L R1 timed out]"
-        _push_event(run, "pnl", "error", pnl_r1)
-    except Exception as exc:
-        pnl_r1 = f"[P&L R1 error: {type(exc).__name__}]"
-        _push_event(run, "pnl", "error", pnl_r1)
-
-    quant_r1 = ""
-    try:
-        r = quant_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        quant_r1 = r.final_output
-        _push_event(run, "quant", "message", quant_r1)
-        _push_event(run, "quant", "done", "Round 1")
-    except FuturesTimeout:
-        quant_r1 = "[Quant R1 timed out]"
-        _push_event(run, "quant", "error", quant_r1)
-    except Exception as exc:
-        quant_r1 = f"[Quant R1 error: {type(exc).__name__}]"
-        _push_event(run, "quant", "error", quant_r1)
-
+    # Phase 2b: Quant Round 1 — gates on P&L Round 1 completing
     rem = deadline - _time.monotonic()
     if rem < 3:
-        _push_event(run, "coo", "error", "[COO R1 timed out — time budget exhausted]")
+        _push_event(run, "quant", "error", "[Quant R1 skipped — time budget exhausted after P&L R1]")
+        return
+    _push_event(run, "quant", "start", "Round 1")
+    quant_r1, quant_r1_to = _run_for_team(quant_agent, quant_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "quant", quant_r1, quant_r1_to, "Round 1")
+
+    # Phase 2c: COO Round 1 — gates on Quant Round 1 completing
+    rem = deadline - _time.monotonic()
+    if rem < 3:
+        _push_event(run, "coo", "error", "[COO R1 skipped — time budget exhausted]")
         return
 
     coo_r1_prompt = (
@@ -744,13 +748,13 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         f"=== Directive ===\n{user_prompt}"
     )
     _push_event(run, "coo", "start", "Round 1")
-    coo_r1, r1_timed_out = _run_for_team(_team_coo, coo_r1_prompt, timeout_s=rem)
+    coo_r1, r1_is_error = _run_for_team(_team_coo, coo_r1_prompt, timeout_s=rem)
     _push_event(run, "coo", "message", coo_r1)
     _push_event(run, "coo", "done", "Round 1")
 
     # ── Round 2 (if time permits) ─────────────────────────────────────────────
     rem = deadline - _time.monotonic()
-    if rem < 6 or r1_timed_out:
+    if rem < 6 or r1_is_error:
         _push_event(run, "system", "message", "Round 2 skipped — time budget exhausted")
         return
 
@@ -764,42 +768,24 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
     pnl_r2_prompt = _make_agent_prompt(revise_directive, enhanced_ctx, bprefix)
     quant_r2_prompt = _make_agent_prompt(revise_directive, enhanced_ctx, bprefix)
 
+    # Phase 3a: P&L Round 2 — sequential gate
     _push_event(run, "pnl", "start", "Round 2")
-    _push_event(run, "quant", "start", "Round 2")
-    pnl_r2_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, pnl_agent, pnl_r2_prompt, max_turns=1)
-    quant_r2_fut = _TEAM_EXECUTOR.submit(Runner.run_sync, quant_agent, quant_r2_prompt, max_turns=1)
+    pnl_r2, pnl_r2_to = _run_for_team(pnl_agent, pnl_r2_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "pnl", pnl_r2, pnl_r2_to, "Round 2")
 
-    pnl_r2 = ""
-    try:
-        r = pnl_r2_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        pnl_r2 = r.final_output
-        _push_event(run, "pnl", "message", pnl_r2)
-        _push_event(run, "pnl", "done", "Round 2")
-    except FuturesTimeout:
-        pnl_r2 = "[P&L R2 timed out]"
-        _push_event(run, "pnl", "error", pnl_r2)
-    except Exception as exc:
-        pnl_r2 = f"[P&L R2 error: {type(exc).__name__}]"
-        _push_event(run, "pnl", "error", pnl_r2)
-
-    quant_r2 = ""
-    try:
-        r = quant_r2_fut.result(timeout=max(1.0, deadline - _time.monotonic()))
-        _record_run_usage(r)
-        quant_r2 = r.final_output
-        _push_event(run, "quant", "message", quant_r2)
-        _push_event(run, "quant", "done", "Round 2")
-    except FuturesTimeout:
-        quant_r2 = "[Quant R2 timed out]"
-        _push_event(run, "quant", "error", quant_r2)
-    except Exception as exc:
-        quant_r2 = f"[Quant R2 error: {type(exc).__name__}]"
-        _push_event(run, "quant", "error", quant_r2)
-
+    # Phase 3b: Quant Round 2 — gates on P&L Round 2 completing
     rem = deadline - _time.monotonic()
     if rem < 3:
-        _push_event(run, "coo", "error", "[COO final timed out — time budget exhausted]")
+        _push_event(run, "quant", "error", "[Quant R2 skipped — time budget exhausted after P&L R2]")
+        return
+    _push_event(run, "quant", "start", "Round 2")
+    quant_r2, quant_r2_to = _run_for_team(quant_agent, quant_r2_prompt, max(1.0, deadline - _time.monotonic()))
+    _push_agent_result(run, "quant", quant_r2, quant_r2_to, "Round 2")
+
+    # Phase 3c: COO final — gates on Quant Round 2 completing
+    rem = deadline - _time.monotonic()
+    if rem < 3:
+        _push_event(run, "coo", "error", "[COO final skipped — time budget exhausted]")
         return
 
     coo_final_prompt = (
@@ -817,6 +803,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
     _push_event(run, "coo", "done", "Round 2 (final)")
 
 
+
 def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
     """Start a team review orchestration run in a background thread. Returns run_id."""
     run_id = _uuid.uuid4().hex[:8]
@@ -824,7 +811,11 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
     with _TEAM_RUNS_LOCK:
         _TEAM_RUNS[run_id] = run
 
-    timeout = 35 if mode == "quick" else 65
+    # Sequential execution (Vibe → P&L → Quant → COO) requires more wall-clock time
+    # than the former parallel P&L+Quant approach.  Budgets are raised accordingly:
+    # quick: 55 s (was 35 s) — Vibe(10) + P&L(15) + Quant(15) + COO(10) + slack(5)
+    # detailed: 110 s (was 65 s) — Vibe(14) + R1(P&L+Q+COO ~45) + R2(P&L+Q+COO ~45) + slack(6)
+    timeout = 55 if mode == "quick" else 110
 
     # Determine user prompt: explicit prompt > last user message from conversation > default
     user_prompt = (prompt or "").strip()
