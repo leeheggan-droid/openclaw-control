@@ -722,7 +722,7 @@ def start_autopilot(interval: int | None = None) -> dict:
     with _AUTOPILOT_LOCK:
         if _AUTOPILOT_STATE["running"]:
             return {"status": "already_running"}
-        effective = max(30, interval or settings.autopilot_interval)
+        effective = max(30, interval or settings.autopilot_interval)  # 30 s floor prevents accidental tight loops
         _AUTOPILOT_STATE["interval"] = effective
         _AUTOPILOT_STATE["running"] = True
         _AUTOPILOT_STOP = _threading.Event()

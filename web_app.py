@@ -1170,8 +1170,7 @@ def index():
   async function send(textOverride) {
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
     if (!text) return;
-    if (activeAgent === "team") return; // composer hidden on team tab
-    if (activeAgent === "vibe" || activeAgent === "autopilot") return;
+    if (["team", "vibe", "autopilot"].includes(activeAgent)) return; // composer hidden on these tabs
 
     addChat("user", text);
     histories[activeAgent].push({role: "user", text});
@@ -1872,7 +1871,7 @@ def index():
         if (fd.findings && fd.findings.length) {
           apEmptyEl.style.display = "none";
           fd.findings.forEach(f => {
-            apFeedEl.insertBefore(apRenderFinding(f), apEmptyEl.nextSibling);
+            apFeedEl.appendChild(apRenderFinding(f));
           });
           apFindingCursor += fd.findings.length;
           apFeedEl.scrollTop = apFeedEl.scrollHeight;
