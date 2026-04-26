@@ -22,7 +22,7 @@ from openclaw_control.agents.main_agent import main_agent
 from openclaw_control.agents.pnl_agent import pnl_agent
 from openclaw_control.agents.quant_agent import quant_agent
 from openclaw_control.agents.coo_agent import coo_agent
-from openclaw_control.agents.vibe_agent import vibe_planner
+from openclaw_control.agents.vibe_agent import vibe_planner, vibe_evaluator
 from openclaw_control.agents.investigate_agent import investigate_agent
 from openclaw_control.ops import map_loader as _map_loader
 from openclaw_control.memory import agent_memory as _memory
@@ -1196,6 +1196,88 @@ def get_vibe_run(run_id: str) -> dict:
         if run is None:
             return {"status": "not_found", "output": "", "error": ""}
         return dict(run)
+
+
+# ── Vibe iterative AI evaluation ──────────────────────────────────────────────
+
+# Timeout (seconds) for a single vibe_evaluator call.
+_VIBE_NEXT_TIMEOUT = 25
+
+
+def handle_vibe_next(goal: str, history: list[dict], workspace: dict) -> dict:
+    """Call the vibe_evaluator agent with the goal and conversation history.
+
+    ``history`` is a list of ``{"command": str, "output": str}`` dicts,
+    each entry representing one command that was already run and its SSH output.
+
+    Returns a dict with either:
+      ``{"done": True, "answer": "..."}``  — goal fully answered
+    or
+      ``{"done": False, "command": "...", "reason": "..."}``  — next command needed
+    or an error dict when the agent fails.
+    """
+    _FALLBACK: dict = {
+        "done": True,
+        "answer": "Could not evaluate results — please review the command output manually.",
+    }
+
+    if budget.is_exhausted():
+        return {
+            "done": True,
+            "answer": "Budget exhausted — AI evaluation skipped. Please review the output above.",
+        }
+
+    ctx_lines: list[str] = []
+    if settings.ssh_host:
+        ctx_lines.append(f"SSH target: {settings.ssh_host}")
+    if settings.repo_dir:
+        ctx_lines.append(f"Repo dir: {settings.repo_dir}")
+    ctx_lines.append(_map_loader.get_summary())
+
+    terminal_tail = (workspace.get("terminal_tail") or "").strip()
+    if terminal_tail:
+        ctx_lines.append("Last terminal output:\n" + "\n".join(terminal_tail.splitlines()[-200:]))
+
+    ctx_lines.append(f"GOAL: {goal}")
+
+    if history:
+        history_parts: list[str] = []
+        for i, step in enumerate(history, start=1):
+            cmd = step.get("command", "(unknown)")
+            out = (step.get("output") or "").strip()
+            # Truncate individual outputs to keep prompt manageable.
+            if len(out) > 3000:
+                out = out[:3000] + "\n… (truncated)"
+            history_parts.append(f"Step {i}:\n  command: {cmd}\n  output:\n{out}")
+        ctx_lines.append("HISTORY:\n" + "\n\n".join(history_parts))
+    else:
+        ctx_lines.append("HISTORY: (none — no commands have been run yet)")
+
+    prompt = "\n".join(ctx_lines)
+
+    def _call():
+        return Runner.run_sync(vibe_evaluator, prompt, max_turns=1)
+
+    fut = EXECUTOR.submit(_call)
+    try:
+        result = fut.result(timeout=_VIBE_NEXT_TIMEOUT)
+        _record_run_usage(result)
+        parsed = _json.loads(result.final_output)
+        # Normalise keys
+        if parsed.get("done"):
+            return {"done": True, "answer": parsed.get("answer", "(no answer provided)")}
+        cmd = (parsed.get("command") or "").strip()
+        if not cmd:
+            return _FALLBACK
+        return {
+            "done": False,
+            "command": cmd,
+            "reason": parsed.get("reason", ""),
+        }
+    except _json.JSONDecodeError:
+        return _FALLBACK
+    except Exception:
+        return _FALLBACK
 
 
 # ── Autopilot investigate loop ────────────────────────────────────────────────
