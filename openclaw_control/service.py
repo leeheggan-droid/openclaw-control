@@ -8,6 +8,7 @@ import time as _time
 import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone as _tz
+from typing import NamedTuple
 
 from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession, SessionSettings
 from openclaw_control import budget
@@ -132,6 +133,107 @@ def _is_valid_report_data(report_data: str) -> bool:
         return False
     noise_markers = ("(empty)", "[SSH error]", "[SSH not configured", "[Unknown report_id")
     return not any(m in report_data for m in noise_markers)
+
+
+# ── Vibe snapshot consolidation ───────────────────────────────────────────────
+
+class _VibeSnapshot(NamedTuple):
+    """Result of a consolidated Vibe snapshot collection."""
+    snapshot: str                       # Full concatenated evidence text
+    authoritative_evidence_source: str  # Label of the strongest probe
+    evidence_summary: str               # ≤20 lines from the authoritative source
+    any_usable: bool                    # True when at least one probe yielded real data
+
+
+# Lines that carry no evidential value (probe fallback markers).
+_NOISE_LINE_RE = _re.compile(
+    r"^\s*(\[no [^\]]+\]"
+    r"|\[(?:un|docker un)available\]"
+    r"|\[SSH error\]"
+    r"|\(empty\)"
+    r"|)\s*$",
+    _re.IGNORECASE,
+)
+
+# Keywords that indicate financially meaningful content.
+_FINANCIAL_KW_RE = _re.compile(
+    r"\b(pnl|trade|fill|filled|executed|order|profit|loss|equity"
+    r"|sharpe|drawdown|return|net|gross|fee|slippage|signal)\b",
+    _re.IGNORECASE,
+)
+
+# Source-type weight — higher = more authoritative for financial analysis.
+_SOURCE_WEIGHTS: dict[str, int] = {
+    "trade log files":          10,
+    "performance analyser logs": 8,
+    "trade/pnl log grep":        6,
+    "log since window":          5,
+    "log highlights":            3,
+    "docker status":             2,
+    "git log":                   1,
+    "uptime":                    0,
+}
+
+# Shell grep pattern reused across secondary probes for consistency.
+_FINANCIAL_GREP_PATTERN = "trade|pnl|net|gross|fee|slippage|profit|loss"
+
+
+def _real_lines(content: str) -> list[str]:
+    """Return lines from *content* that are not pure noise markers."""
+    return [l for l in content.splitlines() if l.strip() and not _NOISE_LINE_RE.match(l)]
+
+
+def _is_usable_probe_output(content: str) -> bool:
+    """Return True if *content* contains at least one non-noise line."""
+    return bool(_real_lines(content))
+
+
+def _probe_strength(label: str, content: str) -> int:
+    """Score a probe result for evidence ranking (higher = stronger)."""
+    lines = _real_lines(content)
+    if not lines:
+        return 0
+    base = len(lines)
+    financial_bonus = 2 * sum(1 for l in lines if _FINANCIAL_KW_RE.search(l))
+    source_bonus = _SOURCE_WEIGHTS.get(label, 0)
+    return base + financial_bonus + source_bonus
+
+
+def _consolidate_evidence(
+    probe_results: list[tuple[str, str]],
+) -> tuple[str, str, str, bool]:
+    """Consolidate probe results into (snapshot, auth_source, evidence_summary, any_usable).
+
+    Each element of *probe_results* is (label, content).
+    Ranking: source weight + line count + financial keyword bonus.
+    The authoritative source is the highest-ranked usable probe.
+    Evidence summary is the first 20 meaningful lines of the authoritative content.
+    """
+    # Build full snapshot text (existing format kept intact)
+    sections = [
+        f"=== {label} ===\n{content}"
+        for label, content in probe_results
+        if content
+    ]
+    snapshot = "\n\n".join(sections).strip()
+
+    # Rank probes; skip zero-score (no usable data)
+    scored = [
+        (label, content, _probe_strength(label, content))
+        for label, content in probe_results
+    ]
+    scored.sort(key=lambda x: x[2], reverse=True)
+
+    any_usable = scored[0][2] > 0 if scored else False
+
+    if not any_usable:
+        return snapshot, "", "", False
+
+    auth_label, auth_content, _ = scored[0]
+    summary_lines = _real_lines(auth_content)[:20]
+    evidence_summary = "\n".join(summary_lines)
+
+    return snapshot, auth_label, evidence_summary, True
 
 
 def run_ssh(command: str, timeout: int = 10) -> dict:
@@ -529,23 +631,27 @@ def _build_team_ctx(workspace: dict) -> str:
     return "\n".join(lines)
 
 
-def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
-    """Probe the server with read-only SSH commands, emitting one feed event per probe.
+def _gather_vibe_snapshot(run: dict, timeout_s: float) -> _VibeSnapshot:
+    """Probe the server with primary + secondary read-only SSH probes.
 
-    Each command streams its label and result snippet into the 'vibe' feed as it
-    completes — giving the same step-by-step building feel as the Autopilot tab.
-    Returns the full aggregated snapshot string for injection into agent prompts.
+    Primary probes (status, highlights, file discovery) and secondary probes
+    (trade/pnl log grep, --since window, performance_analyser logs) are always
+    attempted within the available time budget.
+
+    Each probe streams its label and result snippet into the 'vibe' feed.
+    Returns a consolidated _VibeSnapshot with the authoritative evidence source
+    and a ≤20-line evidence summary derived from the strongest probe result.
     """
     if not settings.ssh_host:
         _push_event(run, "vibe", "message", "SSH not configured — snapshot skipped")
-        return ""
+        return _VibeSnapshot("", "", "", False)
 
     _push_event(run, "vibe", "start", "")
-    sections: list[str] = []
     t_deadline = _time.monotonic() + timeout_s
     repo = settings.repo_dir or "/opt/openclaw-crypto"
 
-    PROBES = [
+    # ── Primary probes: status + highlights + file discovery ─────────────────
+    PRIMARY_PROBES: list[tuple[str, str, int]] = [
         (
             "uptime",
             "uptime 2>/dev/null || echo '[unavailable]'",
@@ -576,35 +682,65 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
             f"| xargs -r tail -n 25 2>/dev/null || echo '[no trade log files found]'",
             6,
         ),
+    ]
+
+    # ── Secondary probes: trade/pnl log grep + --since window ────────────────
+    SECONDARY_PROBES: list[tuple[str, str, int]] = [
         (
             "trade/pnl log grep",
-            "(docker logs --tail=100 openclaw-orchestrator 2>&1 | "
-            "grep -iE 'trade|pnl|net|gross|fee|slippage|profit|loss' | tail -n 30) "
+            f"(docker logs --tail=100 openclaw-orchestrator 2>&1 | "
+            f"grep -iE '{_FINANCIAL_GREP_PATTERN}' | tail -n 30) "
             "2>/dev/null || echo '[no trade/pnl matches]'",
             7,
         ),
+        (
+            "performance analyser logs",
+            "(docker logs --tail=200 performance_analyser 2>&1 | "
+            "grep -iE 'pnl|trade|return|sharpe|equity|profit|loss' | tail -n 30) "
+            "2>/dev/null || echo '[no matches]'",
+            7,
+        ),
+        (
+            "log since window",
+            f"(docker logs --since 48h openclaw-orchestrator 2>&1 | "
+            f"grep -iE '{_FINANCIAL_GREP_PATTERN}' | tail -n 30) "
+            "2>/dev/null || echo '[no matches]'",
+            8,
+        ),
     ]
 
-    for label, cmd, t in PROBES:
+    probe_results: list[tuple[str, str]] = []
+
+    for label, cmd, t in PRIMARY_PROBES + SECONDARY_PROBES:
         if _time.monotonic() >= t_deadline:
             _push_event(run, "vibe", "message", "⏱ Time budget low — remaining probes skipped")
             break
-        # Emit the "asking…" line so the feed shows intent before the SSH round-trip
         _push_event(run, "vibe", "message", f"📡 {label}…")
         r = run_ssh(cmd, timeout=t)
         if "error" in r:
-            _push_event(run, "vibe", "message", f"  ↳ [SSH error]")
+            _push_event(run, "vibe", "message", "  ↳ [SSH error]")
+            probe_results.append((label, ""))
             continue
         out = (r.get("stdout") or "").strip()
         if out:
             snippet = "\n".join(out.splitlines()[:12])
             _push_event(run, "vibe", "message", f"  ↳ {snippet}")
-            sections.append(f"=== {label} ===\n{out}")
+            probe_results.append((label, out))
         else:
-            _push_event(run, "vibe", "message", f"  ↳ (no output)")
+            _push_event(run, "vibe", "message", "  ↳ (no output)")
+            probe_results.append((label, ""))
 
     _push_event(run, "vibe", "done", "")
-    return "\n\n".join(sections).strip()
+
+    snapshot, auth_source, evidence_summary, any_usable = _consolidate_evidence(probe_results)
+
+    if auth_source:
+        _push_event(
+            run, "vibe", "message",
+            f"✅ Authoritative evidence source: {auth_source}",
+        )
+
+    return _VibeSnapshot(snapshot, auth_source, evidence_summary, any_usable)
 
 
 def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
@@ -643,23 +779,42 @@ def _push_agent_result(run: dict, agent_key: str, output: str, is_error: bool, l
         _push_event(run, agent_key, "done", label)
 
 
-def _evidence_gate(run: dict, vibe_snap: str) -> bool:
+def _evidence_gate(run: dict, vs: _VibeSnapshot) -> bool:
     """Return True if downstream agents may proceed; False (with explicit failure event) if not.
 
-    When SSH is configured but Vibe returned no evidence data, the review must stop
-    rather than letting agents fabricate analysis from an empty context.
+    Proceeds if *any* probe yielded usable evidence (secondary probes can override
+    empty primary probes).  Fails only when SSH is configured but ALL probes are
+    empty or errored, to prevent hallucinated analysis.
     When SSH is not configured the user is working offline; agents may still use
     whatever workspace context was provided (terminal tail, conversation history).
     """
-    if settings.ssh_host and not vibe_snap:
+    if settings.ssh_host and not vs.any_usable:
         _push_event(
             run, "vibe", "error",
-            "❌ Evidence collection failed — SSH is configured but Vibe returned no data.\n"
+            "❌ Evidence collection failed — SSH is configured but all probes returned no data.\n"
             "Review cannot proceed without live server evidence to avoid hallucinated analysis.\n"
             "Check SSH connectivity and retry.",
         )
         return False
     return True
+
+
+def _build_enhanced_ctx(ctx: str, vs: _VibeSnapshot) -> str:
+    """Build the agent context string from base *ctx* and a consolidated *_VibeSnapshot*.
+
+    Always includes the full snapshot text so agents have all raw evidence.
+    Appends a dedicated Evidence Summary block (authoritative source + ≤20 key lines)
+    so P&L / Quant / COO prompts know which source to cite.
+    """
+    if not vs.snapshot:
+        return ctx
+    parts = [ctx, "=== Live Server Snapshot ===", vs.snapshot]
+    if vs.authoritative_evidence_source and vs.evidence_summary:
+        parts.append(
+            f"=== Evidence Summary (authoritative: {vs.authoritative_evidence_source}) ===\n"
+            f"{vs.evidence_summary}"
+        )
+    return "\n\n".join(parts)
 
 
 def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> tuple[str, bool]:
@@ -755,17 +910,17 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
 
     # Phase 1: Vibe — collect live server evidence before any agent runs
     rem = deadline - _time.monotonic()
-    vibe_snap = ""
+    vs = _VibeSnapshot("", "", "", False)
     if rem > 12:
-        vibe_snap = _gather_vibe_snapshot(run, min(10.0, rem - 10))
+        vs = _gather_vibe_snapshot(run, min(10.0, rem - 10))
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
-    # Evidence gate — block downstream agents if SSH is configured but returned nothing
-    if not _evidence_gate(run, vibe_snap):
+    # Evidence gate — block downstream agents if SSH is configured but all probes failed
+    if not _evidence_gate(run, vs):
         return
 
-    enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
+    enhanced_ctx = _build_enhanced_ctx(ctx, vs)
 
     bprefix = _BUDGET_LOW_PREFIX if budget.is_low() else ""
     pnl_prompt = _make_agent_prompt(user_prompt, enhanced_ctx, bprefix)
@@ -823,17 +978,17 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
 
     # Phase 1: Vibe — collect live server evidence before any agent runs
     rem = deadline - _time.monotonic()
-    vibe_snap = ""
+    vs = _VibeSnapshot("", "", "", False)
     if rem > 18:
-        vibe_snap = _gather_vibe_snapshot(run, min(14.0, rem - 14))
+        vs = _gather_vibe_snapshot(run, min(14.0, rem - 14))
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
-    # Evidence gate — block downstream agents if SSH is configured but returned nothing
-    if not _evidence_gate(run, vibe_snap):
+    # Evidence gate — block downstream agents if SSH is configured but all probes failed
+    if not _evidence_gate(run, vs):
         return
 
-    enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
+    enhanced_ctx = _build_enhanced_ctx(ctx, vs)
 
     bprefix = _BUDGET_LOW_PREFIX if budget.is_low() else ""
 
