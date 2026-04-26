@@ -1136,8 +1136,9 @@ def index():
     <section class="card" id="leftCard">
       <div class="cardHeader">
         <div class="title">
-          <span style="width:10px;height:10px;border-radius:999px;background:var(--accent);display:inline-block"></span>
+          <span id="repoSwatch" style="width:10px;height:10px;border-radius:999px;background:var(--accent);display:inline-block;transition:background .3s ease,box-shadow .3s ease"></span>
           Agents
+          <span id="repoThemeLabel" style="font-size:11px;font-weight:500;color:var(--muted);opacity:.75;display:none"></span>
         </div>
         <div class="agentTabs">
           <button class="tabBtn active" data-agent="main">Main</button>
@@ -1762,15 +1763,58 @@ def index():
     return sel && ALLOWED_REPOS.includes(sel) ? sel : autoDetectRepo();
   }
 
+  // ── Repo colour themes ───────────────────────────────────────────────────────
+  // Each repo gets a distinct hue applied as a subtle background tint on the
+  // left chat card so the operator can instantly see which repo is in context.
+  const REPO_THEMES = {
+    "leeheggan-droid/openclaw-crypto":         { accent: "#22c55e", bg: "rgba(34,197,94,.055)",  border: "rgba(34,197,94,.30)",  label: "openclaw-crypto"         },
+    "leeheggan-droid/alpaca_orb_bite_bot":     { accent: "#3b82f6", bg: "rgba(59,130,246,.06)",  border: "rgba(59,130,246,.30)",  label: "alpaca_orb_bite_bot"     },
+    "leeheggan-droid/LinkedIn_Data_Centre_News":{ accent: "#f59e0b", bg: "rgba(245,158,11,.055)", border: "rgba(245,158,11,.30)", label: "LinkedIn_Data_Centre_News"},
+    "leeheggan-droid/openclaw-control":        { accent: "#a855f7", bg: "rgba(168,85,247,.055)", border: "rgba(168,85,247,.30)", label: "openclaw-control"        },
+  };
+  const _DEFAULT_REPO_THEME = { accent: "#a855f7", bg: "rgba(168,85,247,.055)", border: "rgba(168,85,247,.30)", label: "" };
+
+  const leftCardEl      = document.getElementById("leftCard");
+  const repoSwatchEl    = document.getElementById("repoSwatch");
+  const repoThemeLabelEl= document.getElementById("repoThemeLabel");
+
+  function applyRepoTheme(repo) {
+    const theme = REPO_THEMES[repo] || _DEFAULT_REPO_THEME;
+    // Tint the left card border
+    if (leftCardEl) {
+      leftCardEl.style.borderColor = theme.border;
+      leftCardEl.style.boxShadow   = `0 10px 30px rgba(0,0,0,.35), 0 0 0 1px ${theme.border}`;
+    }
+    // Tint all chat pane backgrounds
+    for (const pane of Object.values(CHAT_PANES)) {
+      if (pane) pane.style.background = theme.bg;
+    }
+    // Update the swatch dot colour
+    if (repoSwatchEl) {
+      repoSwatchEl.style.background  = theme.accent;
+      repoSwatchEl.style.boxShadow   = `0 0 6px ${theme.accent}`;
+    }
+    // Show the repo label next to "Agents"
+    if (repoThemeLabelEl) {
+      repoThemeLabelEl.textContent   = theme.label;
+      repoThemeLabelEl.style.color   = theme.accent;
+      repoThemeLabelEl.style.display = "";
+    }
+  }
+
   function updateRepoBadge() {
     if (!repoBadgeEl) return;
     const sel = repoSelectEl ? repoSelectEl.value : "";
     if (sel && ALLOWED_REPOS.includes(sel)) {
       repoBadgeEl.textContent = "";
+      repoBadgeEl.style.color = (REPO_THEMES[sel] || {}).accent || "";
+      applyRepoTheme(sel);
     } else {
       const detected = autoDetectRepo();
       const short = detected.split("/")[1] || detected;
       repoBadgeEl.textContent = "→ " + short;
+      repoBadgeEl.style.color = (REPO_THEMES[detected] || {}).accent || "";
+      applyRepoTheme(detected);
     }
   }
 
