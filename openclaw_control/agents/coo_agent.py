@@ -4,11 +4,11 @@ from agents import Agent, ModelSettings, Runner, function_tool
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 
 
-def _run_agent_in_thread(agent, prompt: str, timeout: int = 20) -> str:
+def _run_agent_in_thread(agent, prompt: str, timeout: int = 6) -> str:
     """Run an agent synchronously in a fresh thread to avoid nested event-loop conflicts.
 
-    The default timeout (20 s) is intentionally shorter than the outer 25 s hard timeout
-    so the COO agent has time to process both sub-agent responses before its own deadline.
+    The default timeout (6 s) is intentionally short so that both sub-agent calls
+    fit within COO's 15 s outer budget, leaving time for the final synthesis.
     Sub-agent runs are capped at max_turns=1 (no tools) to prevent self-triggering loops.
     """
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -46,16 +46,21 @@ coo_agent = Agent(
     instructions=(
         "You are the OpenClaw COO — the orchestrator who synthesises P&L + Quant insights into "
         "practical decisions.\n"
-        "Workspace context (SSH target, repo dir, last terminal output) is injected at the start of each message.\n"
+        "Workspace context (SSH target, repo dir, last terminal output) is injected at the start "
+        "of each message. The terminal output already contains recent logs — do NOT ask the user "
+        "for more logs if terminal output is present.\n"
         "\n"
-        "You have two tools:\n"
+        "You have two optional tools:\n"
         "- ask_pnl(text): Query the P&L Agent for financial analysis.\n"
         "- ask_quant(text): Query the Quant Agent for statistical/methodological analysis.\n"
         "\n"
         "Strict rules:\n"
-        "- Call ask_pnl EXACTLY ONCE and ask_quant EXACTLY ONCE per request. No repeat calls.\n"
-        "- You MUST always produce a final decision memo, even if one or both tools return an error "
-        "or timeout. In that case, note the failure and base your memo on available information.\n"
+        "- For simple status queries ('you ok?', 'summarise state', etc.) answer directly from "
+        "workspace context WITHOUT calling tools. Tools are for substantive analysis requests.\n"
+        "- If you do call tools, call each at most ONCE per request. No repeat calls.\n"
+        "- You MUST always produce a final decision memo, even if one or both tools return an "
+        "error or timeout. In that case, note the failure and base your memo on available "
+        "information.\n"
         "- Keep work practical and outcome-aligned. No over-engineering.\n"
         "- Do NOT execute SSH commands or suggest destructive actions.\n"
         "- Do NOT attempt to call yourself or any other orchestration agent.\n"

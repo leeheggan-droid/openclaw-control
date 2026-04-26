@@ -6,7 +6,7 @@ import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone as _tz
 
-from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession
+from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession, SessionSettings
 from openclaw_control import budget
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 from openclaw_control.config import settings
@@ -21,13 +21,15 @@ from openclaw_control.agents.vibe_agent import vibe_planner
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
-_ops_session = SQLiteSession("openclaw_ops_session")
-_analysis_session = SQLiteSession("openclaw_analysis_session")
-_main_session = SQLiteSession("openclaw_main_session")
-_pnl_session = SQLiteSession("openclaw_pnl_session")
-_quant_session = SQLiteSession("openclaw_quant_session")
-_coo_session = SQLiteSession("openclaw_coo_session")
-_vibe_session = SQLiteSession("openclaw_vibe_session")
+_SESSION_SETTINGS = SessionSettings(limit=100)
+
+_ops_session = SQLiteSession("openclaw_ops_session", session_settings=_SESSION_SETTINGS)
+_analysis_session = SQLiteSession("openclaw_analysis_session", session_settings=_SESSION_SETTINGS)
+_main_session = SQLiteSession("openclaw_main_session", session_settings=_SESSION_SETTINGS)
+_pnl_session = SQLiteSession("openclaw_pnl_session", session_settings=_SESSION_SETTINGS)
+_quant_session = SQLiteSession("openclaw_quant_session", session_settings=_SESSION_SETTINGS)
+_coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_SETTINGS)
+_vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
 
 
 def run_ssh(command: str) -> dict:
@@ -111,6 +113,47 @@ _MAX_TURNS: dict[str, int | None] = {
 # Budget prefix injected into P&L / Quant prompts when the daily budget is low.
 _BUDGET_LOW_PREFIX = "[BUDGET LOW] "
 
+# Per-agent terminal_tail line caps for workspace injection.
+# COO gets a tighter cap by default; keywords in the user message can override it.
+_TERMINAL_TAIL_CAPS: dict[str, int] = {
+    "main":  200,
+    "pnl":   200,
+    "quant": 200,
+    "coo":   100,
+    "vibe":  200,
+}
+_COO_DETAIL_KEYWORDS = frozenset(["detailed", "full review", "deep dive"])
+
+# Outer timeout (seconds) per agent.  COO has a shorter soft budget so the
+# fallback partial memo is delivered promptly instead of hanging until 25 s.
+_AGENT_TIMEOUT: dict[str, int] = {
+    "coo": 15,
+}
+_DEFAULT_TIMEOUT = 25
+
+
+def _coo_partial_memo(workspace: dict) -> str:
+    """Return a partial COO decision memo when the agent times out."""
+    ssh_target = settings.ssh_host or "(not configured)"
+    repo_dir = settings.repo_dir or "(not configured)"
+    tail = (workspace.get("terminal_tail") or "").strip()
+    tail_lines = tail.splitlines()[-5:] if tail else []
+    tail_snippet = "\n".join(tail_lines) if tail_lines else "(none)"
+    return (
+        "COO PARTIAL MEMO [timed out — 15 s budget exceeded]\n\n"
+        "What we know:\n"
+        f"- SSH target: {ssh_target}\n"
+        f"- Repo dir: {repo_dir}\n"
+        f"- Last terminal lines:\n{tail_snippet}\n\n"
+        "What we don't know:\n"
+        "- P&L and Quant sub-agent results (timed out before completion)\n\n"
+        "Next actions (max 3):\n"
+        "1. Use ⚡ Quick team review for a full parallel synthesis\n"
+        "2. Re-send your prompt — COO context may have been too large\n"
+        "3. Review terminal output for immediate signals\n\n"
+        "For deeper synthesis, use the Team Review tab."
+    )
+
 
 def _record_run_usage(result: RunResult) -> None:
     """Extract token counts from a RunResult and update the daily budget tracker."""
@@ -129,6 +172,11 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
 
     agent, session = entry
 
+    # Per-agent terminal_tail cap; COO gets a larger cap if the user asks for detail.
+    tail_cap = _TERMINAL_TAIL_CAPS.get(name, 200)
+    if name == "coo" and any(kw in text.lower() for kw in _COO_DETAIL_KEYWORDS):
+        tail_cap = 200
+
     # Build workspace context header (server-authoritative values + client terminal tail)
     ctx_lines = []
     if settings.ssh_host:
@@ -137,7 +185,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
     terminal_tail = (workspace.get("terminal_tail") or "").strip()
     if terminal_tail:
-        tail_lines = terminal_tail.splitlines()[-200:]
+        tail_lines = terminal_tail.splitlines()[-tail_cap:]
         ctx_lines.append("Last terminal output:\n" + "\n".join(tail_lines))
 
     ctx_header = "\n".join(ctx_lines)
@@ -164,16 +212,20 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
     if max_turns is not None:
         kwargs["max_turns"] = max_turns
 
+    timeout_s = _AGENT_TIMEOUT.get(name, _DEFAULT_TIMEOUT)
+
     def _call():
         return Runner.run_sync(agent, prompt, **kwargs)
 
     future = EXECUTOR.submit(_call)
     try:
-        result = future.result(timeout=25)
+        result = future.result(timeout=timeout_s)
         _record_run_usage(result)
         return {"agent": name, "output": result.final_output}
     except FuturesTimeout:
-        return {"agent": name, "error": "Agent timed out after 25 s. Please try again."}
+        if name == "coo":
+            return {"agent": name, "output": _coo_partial_memo(workspace)}
+        return {"agent": name, "error": f"Agent timed out after {timeout_s} s. Please try again."}
     except Exception as e:
         # Return only the exception type to avoid leaking internal stack traces
         return {"agent": name, "error": f"Agent error ({type(e).__name__}). Check server logs."}
