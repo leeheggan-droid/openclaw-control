@@ -281,9 +281,10 @@ def _send_inactivity_alert(status: dict[str, Any]) -> None:
     window_h = status.get("window_hours")
     last = status.get("last_trade_ts") or "never"
 
+    inactive_str = f"{inactive_h:.1f}h" if inactive_h is not None else "unknown (no trades ever recorded)"
     msg = (
         f"[OpenClaw] Trade inactivity alert: no trades recorded for "
-        f"{inactive_h:.1f}h (window={window_h}h). Last trade: {last}."
+        f"{inactive_str} (window={window_h}h). Last trade: {last}."
     )
     _logger.warning(msg)
 
@@ -345,9 +346,14 @@ def _scheduler_loop(pnl_probe_fn=None) -> None:
             if status["is_inactive"]:
                 now = datetime.now(_tz.utc)
                 cooldown = timedelta(hours=_ALERT_COOLDOWN_HOURS)
-                if _last_alert_sent is None or (now - _last_alert_sent) >= cooldown:
+                with _SCHEDULER_LOCK:
+                    should_alert = (
+                        _last_alert_sent is None or (now - _last_alert_sent) >= cooldown
+                    )
+                    if should_alert:
+                        _last_alert_sent = now
+                if should_alert:
                     _send_inactivity_alert(status)
-                    _last_alert_sent = now
 
             # ── Hourly P&L snapshot ───────────────────────────────────────────
             if time.monotonic() >= next_pnl_snapshot:

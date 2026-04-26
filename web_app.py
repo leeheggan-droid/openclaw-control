@@ -28,6 +28,7 @@ from openclaw_control.service import (
     get_autopilot_findings, ack_autopilot_findings, get_autopilot_events,
 )
 from openclaw_control import trade_log as _trade_log
+from openclaw_control.trade_log import now_iso as _trade_log_now_iso
 
 
 @asynccontextmanager
@@ -2717,8 +2718,7 @@ def trades_log(req: TradeLogRequest):
 
     ``ts`` defaults to the current UTC time when omitted.
     """
-    from openclaw_control.trade_log import now_iso  # local import keeps it DRY
-    ts = (req.ts or "").strip() or now_iso()
+    ts = (req.ts or "").strip() or _trade_log_now_iso()
     row_id = _trade_log.log_trade(
         ts=ts,
         symbol=req.symbol,
@@ -2748,8 +2748,7 @@ def pnl_log(req: PnlLogRequest):
 
     ``ts`` defaults to the current UTC time when omitted.
     """
-    from openclaw_control.trade_log import now_iso
-    ts = (req.ts or "").strip() or now_iso()
+    ts = (req.ts or "").strip() or _trade_log_now_iso()
     row_id = _trade_log.log_pnl_snapshot(
         ts=ts,
         total_pnl=req.total_pnl,
