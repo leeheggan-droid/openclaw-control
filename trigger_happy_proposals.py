@@ -40,6 +40,13 @@ _COPILOT_TASK_RE = re.compile(
 # Minimum action text length to skip trivially short or empty lines.
 _MIN_ACTION_LEN = 8
 
+# Maximum length of the GitHub issue title (GitHub enforces 256 chars but
+# shorter titles are more readable in list views).
+_MAX_ISSUE_TITLE_LEN = 72
+
+# Length of the lowercase deduplication key used to detect near-duplicate actions.
+_DEDUP_KEY_LEN = 80
+
 
 def extract_proposals(
     coo_output: str,
@@ -70,13 +77,13 @@ def extract_proposals(
         text = action_text.strip()
         if not text or len(text) < _MIN_ACTION_LEN:
             return
-        key = text.lower()[:80]
+        key = text.lower()[:_DEDUP_KEY_LEN]
         if key in seen:
             return
         seen.add(key)
         proposals.append({
             "type": "proposal",
-            "title": text[:72],
+            "title": text[:_MAX_ISSUE_TITLE_LEN],
             "body": build_proposal_issue_body(coo_output, text),
             "repo": github_repo if not repo_ambiguous else None,
             "repo_ambiguous": repo_ambiguous,
