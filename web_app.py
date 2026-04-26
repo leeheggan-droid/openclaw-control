@@ -3,6 +3,8 @@ import os
 
 import requests as _requests
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -25,8 +27,20 @@ from openclaw_control.service import (
     start_autopilot, stop_autopilot, get_autopilot_status,
     get_autopilot_findings, ack_autopilot_findings, get_autopilot_events,
 )
+from openclaw_control import trade_log as _trade_log
+from openclaw_control.trade_log import now_iso as _trade_log_now_iso
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Start background services when the server boots."""
+    _trade_log.start_scheduler(
+        pnl_probe_fn=lambda: run_vibe_report("pnl_snapshot"),
+    )
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 
 class Message(BaseModel):
@@ -78,6 +92,27 @@ class CheapChatRequest(BaseModel):
     message: str
     provider: str = "groq"
     history: list[dict] = []  # list of {role, content} dicts
+
+
+class TradeLogRequest(BaseModel):
+    ts: str = ""          # ISO-8601 UTC; server time used when empty
+    symbol: str
+    side: str             # 'buy' | 'sell'
+    size: float
+    fill_price: float
+    trade_id: str = ""
+    source: str = "api"
+
+
+class PnlLogRequest(BaseModel):
+    ts: str = ""          # ISO-8601 UTC; server time used when empty
+    total_pnl: float | None = None
+    equity: float | None = None
+    drawdown: float | None = None
+    realised_pnl: float | None = None
+    unrealised_pnl: float | None = None
+    sharpe_ratio: float | None = None
+    source: str = "api"
 
 
 def _build_issue_body(req: CopilotRequest) -> str:
@@ -2673,6 +2708,80 @@ def autopilot_events(cursor: int = 0):
 def autopilot_ack():
     """Acknowledge all findings (clears the unread badge)."""
     return ack_autopilot_findings()
+
+
+# ── Trade log endpoints ───────────────────────────────────────────────────────
+
+@app.post("/trades/log")
+def trades_log(req: TradeLogRequest):
+    """Persist a trade execution to the on-disk trade log.
+
+    ``ts`` defaults to the current UTC time when omitted.
+    """
+    ts = (req.ts or "").strip() or _trade_log_now_iso()
+    row_id = _trade_log.log_trade(
+        ts=ts,
+        symbol=req.symbol,
+        side=req.side,
+        size=req.size,
+        fill_price=req.fill_price,
+        trade_id=req.trade_id,
+        source=req.source,
+    )
+    return {"id": row_id, "ts": ts, "status": "logged"}
+
+
+@app.get("/trades")
+def trades_get(limit: int = 50):
+    """Return the most recent trade executions from the persistent log.
+
+    ``limit`` is capped at 500 to prevent accidental large responses.
+    """
+    limit = max(1, min(limit, 500))
+    rows = _trade_log.get_recent_trades(limit=limit)
+    return {"trades": rows, "count": len(rows)}
+
+
+@app.post("/pnl/log")
+def pnl_log(req: PnlLogRequest):
+    """Persist a P&L snapshot to the on-disk log.
+
+    ``ts`` defaults to the current UTC time when omitted.
+    """
+    ts = (req.ts or "").strip() or _trade_log_now_iso()
+    row_id = _trade_log.log_pnl_snapshot(
+        ts=ts,
+        total_pnl=req.total_pnl,
+        equity=req.equity,
+        drawdown=req.drawdown,
+        realised_pnl=req.realised_pnl,
+        unrealised_pnl=req.unrealised_pnl,
+        sharpe_ratio=req.sharpe_ratio,
+        source=req.source,
+    )
+    return {"id": row_id, "ts": ts, "status": "logged"}
+
+
+@app.get("/pnl")
+def pnl_get(limit: int = 50):
+    """Return the most recent P&L snapshots from the persistent log.
+
+    ``limit`` is capped at 500 to prevent accidental large responses.
+    """
+    limit = max(1, min(limit, 500))
+    rows = _trade_log.get_recent_pnl(limit=limit)
+    return {"snapshots": rows, "count": len(rows)}
+
+
+@app.get("/trades/health")
+def trades_health():
+    """Return the current trade inactivity health status.
+
+    ``is_inactive`` is True when no trade has been recorded within the
+    configured window (default 12 h, override with
+    OPENCLAW_TRADE_INACTIVITY_HOURS env var).
+    """
+    return _trade_log.get_inactivity_status()
 
 
 # ── Cheap Chat endpoint ───────────────────────────────────────────────────────
