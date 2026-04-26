@@ -1,4 +1,5 @@
 import atexit as _atexit
+import shlex
 import subprocess
 import threading as _threading
 import time as _time
@@ -506,9 +507,29 @@ def start_vibe_run(workdir: str, prompt: str) -> str:
         _VIBE_RUNS[run_id] = run
 
     def _execute() -> None:
+        if not settings.ssh_host:
+            with _VIBE_RUNS_LOCK:
+                run["status"] = "error"
+                run["error"] = (
+                    "OPENCLAW_SSH_HOST is not configured. "
+                    "Set it in .env to enable remote Vibe execution."
+                )
+            return
+        remote_cmd = (
+            "vibe --workdir "
+            + shlex.quote(workdir)
+            + " --prompt "
+            + shlex.quote(prompt)
+        )
         try:
             proc = subprocess.run(
-                ["vibe", "--workdir", workdir, "--prompt", prompt],
+                [
+                    "ssh",
+                    "-o", "BatchMode=yes",
+                    "-o", "ConnectTimeout=5",
+                    settings.ssh_host,
+                    remote_cmd,
+                ],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -531,13 +552,13 @@ def start_vibe_run(workdir: str, prompt: str) -> str:
             with _VIBE_RUNS_LOCK:
                 run["status"] = "error"
                 run["error"] = (
-                    "vibe executable not found. "
-                    "Ensure Vibe is installed and available on PATH."
+                    "ssh executable not found locally. "
+                    "Ensure OpenSSH client is installed and available on PATH."
                 )
         except Exception as exc:
             with _VIBE_RUNS_LOCK:
                 run["status"] = "error"
-                run["error"] = f"Vibe error ({type(exc).__name__}). Check server logs."
+                run["error"] = f"Vibe SSH error ({type(exc).__name__}). Check server logs."
 
     _threading.Thread(target=_execute, daemon=True).start()
     return run_id

@@ -1515,12 +1515,14 @@ def index():
 
   let vibeRunId   = null;
   let vibePollTimer = null;
+  let vibeSshHost = "";
 
-  // Pre-fill workdir from server config
+  // Pre-fill workdir and capture ssh_host from server config
   fetch("/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.vibe_workdir && !vibeWorkdirEl.value) {
       vibeWorkdirEl.value = cfg.vibe_workdir;
     }
+    if (cfg && cfg.ssh_host) vibeSshHost = cfg.ssh_host;
   }).catch(() => {});
 
   function vibeFeedAppend(text, kind) {
@@ -1539,8 +1541,9 @@ def index():
   }
 
   function showVibeApproval(workdir, prompt) {
+    const prefix = vibeSshHost ? "ssh " + vibeSshHost + " " : "";
     vibeApprovalCmdEl.textContent =
-      "vibe --workdir " + workdir + " --prompt " + JSON.stringify(prompt);
+      prefix + "vibe --workdir " + workdir + " --prompt " + JSON.stringify(prompt);
     vibeApprovalBannerEl.style.display = "flex";
     vibeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
   }
