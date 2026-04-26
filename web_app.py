@@ -3042,7 +3042,7 @@ def index():
         _statCard("Trades", trades.length, ""),
         _statCard("Buys / Sells", buys + " / " + sells, ""),
         _statCard("Total P&L",
-          latestPnl != null ? (latestPnl >= 0 ? "+" : "") + latestPnl.toFixed(4) : "—",
+          latestPnl != null ? (latestPnl >= 0 ? "+" : "") + latestPnl.toFixed(2) : "—",
           latestPnl != null ? (latestPnl >= 0 ? "pos" : "neg") : ""),
         _statCard("Equity", latestEq != null ? latestEq.toFixed(2) : "—", ""),
         _statCard("Drawdown",
@@ -3082,17 +3082,17 @@ def index():
           "<th>Size</th><th>Fill Price</th><th>Trade ID</th><th>Source</th>" +
           "</tr></thead>";
         const tbody = document.createElement("tbody");
-        // Show newest first (up to 100 rows)
-        [...trades].reverse().slice(0, 100).forEach(t => {
+        // Show newest first (up to 100 rows); trades is already chronological so slice the tail
+        trades.slice(-100).reverse().forEach(t => {
           const tr = document.createElement("tr");
           const sideClass = (t.side || "").toLowerCase() === "buy" ? "buy" : "sell";
           tr.innerHTML =
-            "<td>" + (t.id != null ? t.id : "") + "</td>" +
+            "<td>" + escapeHtml(String(t.id != null ? t.id : "")) + "</td>" +
             "<td>" + escapeHtml((t.ts || "").replace("T", " ").slice(0, 19)) + "</td>" +
             "<td>" + escapeHtml(t.symbol || "") + "</td>" +
             "<td><span class='tradeSide " + sideClass + "'>" + escapeHtml(t.side || "") + "</span></td>" +
-            "<td>" + (t.size != null ? t.size : "") + "</td>" +
-            "<td>" + (t.fill_price != null ? t.fill_price : "") + "</td>" +
+            "<td>" + escapeHtml(String(t.size != null ? t.size : "")) + "</td>" +
+            "<td>" + escapeHtml(String(t.fill_price != null ? t.fill_price : "")) + "</td>" +
             "<td style='max-width:120px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(t.trade_id || "") + "</td>" +
             "<td>" + escapeHtml(t.source || "") + "</td>";
           tbody.appendChild(tr);
@@ -3103,7 +3103,7 @@ def index():
       }
 
       if (!pnlPts.length && !eqPts.length && !trades.length) {
-        analyticsEmptyEl.textContent = "No trade or P&L data in the local log. Use SSH Probe for raw VPS data, or ensure the bot is posting to /trades/log and /pnl/log.";
+        analyticsEmptyEl.textContent = "No trade or P&L data in the local log. Use SSH Probe for raw VPS data, or ensure the bot is posting to /trades/log and /pnl/log endpoints on this control server.";
         analyticsEmptyEl.style.display = "";
       }
       analyticsStatus.textContent = "Updated " + new Date().toLocaleTimeString();
