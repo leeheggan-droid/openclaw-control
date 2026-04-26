@@ -654,6 +654,7 @@ def index():
     .feedType.run-start,.feedType.start{border-color:rgba(59,130,246,.3);color:#93c5fd;}
     .feedType.done   {border-color:rgba(34,197,94,.3);color:#86efac;}
     .feedType.error,.feedType.cancelled{border-color:rgba(251,113,133,.3);color:#fca5a5;}
+    .feedType.action {border-color:rgba(250,204,21,.4);color:#fde047;}
     .feedContent{
       font-size:13px;
       color:var(--text);
@@ -664,6 +665,11 @@ def index():
       border:1px solid var(--border);
       border-radius:10px;
     }
+    .feedContent.feedAction{
+      background:rgba(250,204,21,.06);
+      border-color:rgba(250,204,21,.25);
+    }
+    .feedContent.feedAction a{color:#fde047;text-decoration:underline;}
 
     /* Vibe execution gateway */
     .vibePad{
@@ -1752,12 +1758,31 @@ def index():
 
     row.appendChild(meta);
 
-    // Show content for message/error/run-start/cancelled events
-    const showContent = ev.content && ["message","error","run-start","cancelled"].includes(ev.type);
+    // Show content for message/error/run-start/cancelled/action events
+    const showContent = ev.content && ["message","error","run-start","cancelled","action"].includes(ev.type);
     if (showContent) {
       const content = document.createElement("div");
-      content.className = "feedContent";
-      content.textContent = ev.content;
+      content.className = "feedContent" + (ev.type === "action" ? " feedAction" : "");
+      if (ev.type === "action") {
+        // Render URLs in action events as clickable hyperlinks
+        const urlRe = /https?:\/\/[^\s<>"]+?(?=[.,;:!?)\]]*(?:\s|$))/g;
+        let lastIdx = 0, m;
+        while ((m = urlRe.exec(ev.content)) !== null) {
+          if (m.index > lastIdx) {
+            content.appendChild(document.createTextNode(ev.content.slice(lastIdx, m.index)));
+          }
+          const a = document.createElement("a");
+          a.href = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer";
+          a.textContent = m[0];
+          content.appendChild(a);
+          lastIdx = urlRe.lastIndex;
+        }
+        if (lastIdx < ev.content.length) {
+          content.appendChild(document.createTextNode(ev.content.slice(lastIdx)));
+        }
+      } else {
+        content.textContent = ev.content;
+      }
       row.appendChild(content);
     }
 

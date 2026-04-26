@@ -26,6 +26,10 @@ from openclaw_control.agents.investigate_agent import investigate_agent
 from openclaw_control.ops import map_loader as _map_loader
 from openclaw_control.memory import agent_memory as _memory
 from openclaw_control import vibe_reports as _vibe_reports
+from openclaw_control.evidence_pipeline import (
+    run_with_evidence as _run_with_evidence,
+    dispatch_coo_action as _dispatch_coo_action,
+)
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
@@ -615,6 +619,31 @@ def _evidence_gate(run: dict, vibe_snap: str) -> bool:
     return True
 
 
+def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> tuple[str, bool]:
+    """Thin wrapper around run_with_evidence pre-bound to team-review dependencies."""
+    return _run_with_evidence(
+        agent, prompt, run,
+        push_event=_push_event,
+        run_for_team=_run_for_team,
+        run_vibe_probe=run_vibe_report,
+        known_report_ids=set(_report_commands_from_map().keys()),
+        timeout_s=timeout_s,
+        ssh_configured=bool(settings.ssh_host),
+        agent_key=agent_key,
+    )
+
+
+def _dispatch_team_action(coo_output: str, run: dict) -> None:
+    """Dispatch a COO /copilot task to GitHub when budget allows."""
+    if budget.is_low():
+        return
+    _dispatch_coo_action(
+        coo_output, run,
+        push_event=_push_event,
+        github_repo=settings.github_repo,
+    )
+
+
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
     # Narrate exactly what context was assembled
     ctx_sources = []
@@ -653,7 +682,7 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
 
     # Phase 2: P&L — sequential; Quant does not start until P&L completes
     _push_event(run, "pnl", "start", "")
-    pnl_out, pnl_to = _run_for_team(pnl_agent, pnl_prompt, max(1.0, deadline - _time.monotonic()))
+    pnl_out, pnl_to = _run_ew(pnl_agent, pnl_prompt, run, "pnl", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "pnl", pnl_out, pnl_to)
 
     # Phase 3: Quant — gates on P&L completing
@@ -662,7 +691,7 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         _push_event(run, "quant", "error", "[Quant skipped — time budget exhausted after P&L]")
         return
     _push_event(run, "quant", "start", "")
-    quant_out, quant_to = _run_for_team(quant_agent, quant_prompt, max(1.0, deadline - _time.monotonic()))
+    quant_out, quant_to = _run_ew(quant_agent, quant_prompt, run, "quant", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "quant", quant_out, quant_to)
 
     # Phase 4: COO synthesis — gates on Quant completing
@@ -680,6 +709,7 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
     coo_out, _ = _run_for_team(_team_coo, coo_prompt, timeout_s=rem)
     _push_event(run, "coo", "message", coo_out)
     _push_event(run, "coo", "done", "")
+    _dispatch_team_action(coo_out, run)
 
 
 def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
@@ -724,7 +754,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
 
     # Phase 2a: P&L Round 1 — sequential gate
     _push_event(run, "pnl", "start", "Round 1")
-    pnl_r1, pnl_r1_to = _run_for_team(pnl_agent, pnl_prompt, max(1.0, deadline - _time.monotonic()))
+    pnl_r1, pnl_r1_to = _run_ew(pnl_agent, pnl_prompt, run, "pnl", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "pnl", pnl_r1, pnl_r1_to, "Round 1")
 
     # Phase 2b: Quant Round 1 — gates on P&L Round 1 completing
@@ -733,7 +763,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         _push_event(run, "quant", "error", "[Quant R1 skipped — time budget exhausted after P&L R1]")
         return
     _push_event(run, "quant", "start", "Round 1")
-    quant_r1, quant_r1_to = _run_for_team(quant_agent, quant_prompt, max(1.0, deadline - _time.monotonic()))
+    quant_r1, quant_r1_to = _run_ew(quant_agent, quant_prompt, run, "quant", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "quant", quant_r1, quant_r1_to, "Round 1")
 
     # Phase 2c: COO Round 1 — gates on Quant Round 1 completing
@@ -770,7 +800,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
 
     # Phase 3a: P&L Round 2 — sequential gate
     _push_event(run, "pnl", "start", "Round 2")
-    pnl_r2, pnl_r2_to = _run_for_team(pnl_agent, pnl_r2_prompt, max(1.0, deadline - _time.monotonic()))
+    pnl_r2, pnl_r2_to = _run_ew(pnl_agent, pnl_r2_prompt, run, "pnl", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "pnl", pnl_r2, pnl_r2_to, "Round 2")
 
     # Phase 3b: Quant Round 2 — gates on P&L Round 2 completing
@@ -779,7 +809,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         _push_event(run, "quant", "error", "[Quant R2 skipped — time budget exhausted after P&L R2]")
         return
     _push_event(run, "quant", "start", "Round 2")
-    quant_r2, quant_r2_to = _run_for_team(quant_agent, quant_r2_prompt, max(1.0, deadline - _time.monotonic()))
+    quant_r2, quant_r2_to = _run_ew(quant_agent, quant_r2_prompt, run, "quant", max(1.0, deadline - _time.monotonic()))
     _push_agent_result(run, "quant", quant_r2, quant_r2_to, "Round 2")
 
     # Phase 3c: COO final — gates on Quant Round 2 completing
@@ -801,6 +831,7 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
     coo_final, _ = _run_for_team(_team_coo, coo_final_prompt, timeout_s=rem)
     _push_event(run, "coo", "message", coo_final)
     _push_event(run, "coo", "done", "Round 2 (final)")
+    _dispatch_team_action(coo_final, run)
 
 
 
