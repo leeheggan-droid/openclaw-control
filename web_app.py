@@ -57,6 +57,14 @@ class TeamReviewRequest(BaseModel):
     review_period: str = ""
 
 
+class ProposalConfirmRequest(BaseModel):
+    title: str
+    body: str
+    repo: str
+    labels: list[str] = []
+    assign_copilot: bool = True
+
+
 class VibePlanRequest(BaseModel):
     goal: str
     workspace: dict = {}
@@ -670,6 +678,73 @@ def index():
       border-color:rgba(250,204,21,.25);
     }
     .feedContent.feedAction a{color:#fde047;text-decoration:underline;}
+    .feedType.proposal{border-color:rgba(99,202,183,.4);color:#6ecfc3;}
+
+    /* Proposal confirmation cards */
+    .proposalCard{
+      margin-top:4px;
+      padding:10px 12px;
+      background:rgba(99,202,183,.06);
+      border:1px solid rgba(99,202,183,.25);
+      border-radius:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .proposalTitle{
+      font-size:13px;
+      font-weight:600;
+      color:var(--text);
+      line-height:1.4;
+    }
+    .proposalActions{
+      display:flex;
+      flex-wrap:wrap;
+      gap:6px;
+      align-items:center;
+    }
+    .proposalRepoSelect{
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.15);
+      color:var(--text);
+      border-radius:6px;
+      padding:3px 7px;
+      font-size:12px;
+      font-family:var(--sans);
+      cursor:pointer;
+    }
+    .proposalConfirmBtn{
+      padding:4px 13px;
+      border-radius:999px;
+      border:1px solid rgba(34,197,94,.45);
+      background:rgba(34,197,94,.12);
+      color:#86efac;
+      font-size:12px;
+      cursor:pointer;
+      font-family:var(--sans);
+      transition:background .15s;
+    }
+    .proposalConfirmBtn:hover:not(:disabled){background:rgba(34,197,94,.22);}
+    .proposalConfirmBtn:disabled{opacity:.45;cursor:default;}
+    .proposalDismissBtn{
+      padding:4px 11px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.04);
+      color:var(--muted);
+      font-size:12px;
+      cursor:pointer;
+      font-family:var(--sans);
+      transition:background .15s;
+    }
+    .proposalDismissBtn:hover:not(:disabled){background:rgba(255,255,255,.09);}
+    .proposalDismissBtn:disabled{opacity:.45;cursor:default;}
+    .proposalResult{
+      font-size:12px;
+      color:var(--muted);
+      line-height:1.4;
+    }
+    .proposalResult a{color:#86efac;text-decoration:underline;}
 
     /* Vibe execution gateway */
     .vibePad{
@@ -1786,10 +1861,107 @@ def index():
       row.appendChild(content);
     }
 
+    // Proposal confirmation card — operator confirms or cancels each item
+    if (ev.type === "proposal") {
+      const card = document.createElement("div");
+      card.className = "proposalCard";
+
+      const titleEl = document.createElement("div");
+      titleEl.className = "proposalTitle";
+      titleEl.textContent = "📋 " + (ev.title || ev.content || "");
+      card.appendChild(titleEl);
+
+      const actionsEl = document.createElement("div");
+      actionsEl.className = "proposalActions";
+
+      // Repo selector: shown when the target repo is ambiguous
+      let repoSelect = null;
+      if (ev.repo_ambiguous && Array.isArray(ev.allowed_repos) && ev.allowed_repos.length > 0) {
+        repoSelect = document.createElement("select");
+        repoSelect.className = "proposalRepoSelect";
+        ev.allowed_repos.forEach(r => {
+          const opt = document.createElement("option");
+          opt.value = r;
+          opt.textContent = r;
+          repoSelect.appendChild(opt);
+        });
+        actionsEl.appendChild(repoSelect);
+      }
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.className = "proposalConfirmBtn";
+      confirmBtn.textContent = "✅ Create Issue";
+
+      const dismissBtn = document.createElement("button");
+      dismissBtn.className = "proposalDismissBtn";
+      dismissBtn.textContent = "✕ Dismiss";
+
+      const resultEl = document.createElement("div");
+      resultEl.className = "proposalResult";
+
+      confirmBtn.onclick = () => _confirmProposal(ev, repoSelect, confirmBtn, dismissBtn, resultEl);
+      dismissBtn.onclick = () => {
+        card.style.opacity = "0.4";
+        confirmBtn.disabled = true;
+        dismissBtn.disabled = true;
+        resultEl.textContent = "Dismissed.";
+      };
+
+      actionsEl.appendChild(confirmBtn);
+      actionsEl.appendChild(dismissBtn);
+      card.appendChild(actionsEl);
+      card.appendChild(resultEl);
+      row.appendChild(card);
+    }
+
     return row;
   }
 
-  function renderTeamFeed() {
+  async function _confirmProposal(ev, repoSelect, confirmBtn, dismissBtn, resultEl) {
+    const repo = repoSelect ? repoSelect.value : (ev.repo || "");
+    if (!repo) {
+      resultEl.textContent = "❌ No repo selected.";
+      return;
+    }
+    confirmBtn.disabled = true;
+    dismissBtn.disabled = true;
+    confirmBtn.textContent = "⏳ Creating…";
+    resultEl.textContent = "";
+    try {
+      const res = await fetch(API_BASE + "/team/proposal/confirm", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          title: ev.title || ev.content || "",
+          body: ev.body || "",
+          repo: repo,
+          labels: ["copilot", "team-review"],
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = "❌ " + data.error;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "✅ Create Issue";
+        dismissBtn.disabled = false;
+      } else {
+        confirmBtn.textContent = "✅ Created";
+        const link = document.createElement("a");
+        link.href = data.issue_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = data.issue_url;
+        resultEl.textContent = "✅ Issue #" + data.issue_number + " created in " + (data.used_repo || repo) + ": ";
+        resultEl.appendChild(link);
+      }
+    } catch(err) {
+      resultEl.textContent = "❌ " + (err.message || String(err));
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "✅ Create Issue";
+      dismissBtn.disabled = false;
+    }
+  }
+
     teamFeedEl.innerHTML = "";
     teamFeedEvents.forEach(ev => teamFeedEl.appendChild(createFeedRow(ev)));
     teamFeedEl.scrollTop = teamFeedEl.scrollHeight;
@@ -2407,6 +2579,35 @@ def team_review_start(req: TeamReviewRequest):
 @app.get("/team/review/poll/{run_id}")
 def team_review_poll(run_id: str, cursor: int = 0):
     return get_team_review_events(run_id, cursor)
+
+
+@app.post("/team/proposal/confirm")
+def proposal_confirm(req: ProposalConfirmRequest):
+    """Create a GitHub issue from an operator-confirmed team review proposal.
+
+    The operator must supply a repo that is in the allowed list.  Labels default
+    to ``["copilot", "team-review"]`` when not specified by the caller.
+    """
+    repo = (req.repo or "").strip()
+    if repo not in _ALLOWED_REPOS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Repo '{repo}' is not in the allowed list.",
+        )
+    title = (req.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title is required")
+
+    result = create_github_issue(
+        title=title,
+        body=req.body or "",
+        repo_full=repo,
+        labels=req.labels or ["copilot", "team-review"],
+        assign_copilot=req.assign_copilot,
+    )
+    if result is None:
+        return {"error": "GitHub API request failed. Check GITHUB_TOKEN and repo permissions."}
+    return result
 
 
 # ── Vibe execution gateway endpoints ─────────────────────────────────────────

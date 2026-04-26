@@ -450,8 +450,10 @@ def _now_iso() -> str:
     return datetime.now(_tz.utc).replace(microsecond=0).isoformat()
 
 
-def _push_event(run: dict, agent: str, etype: str, content: str) -> None:
+def _push_event(run: dict, agent: str, etype: str, content: str, **extra) -> None:
     ev = {"t": _now_iso(), "agent": agent, "type": etype, "content": content}
+    if extra:
+        ev.update(extra)
     with run["lock"]:
         run["events"].append(ev)
 
@@ -634,13 +636,14 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
 
 
 def _dispatch_team_action(coo_output: str, run: dict) -> None:
-    """Dispatch a COO /copilot task to GitHub when budget allows."""
+    """Dispatch COO next-action proposals to the team feed when budget allows."""
     if budget.is_low():
         return
     _dispatch_coo_action(
         coo_output, run,
         push_event=_push_event,
         github_repo=settings.github_repo,
+        allowed_repos=_GH_ALLOWED_REPOS,
     )
 
 

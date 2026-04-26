@@ -16,26 +16,21 @@ run_with_evidence(agent, prompt, run, *, push_event, run_for_team,
     probe (emitting feed events), and re-run the agent once with the live
     data injected.  Returns (final_output, is_error).
 
-dispatch_coo_action(coo_output, run, *, push_event, github_repo) -> None
-    Parse the COO decision memo for a /copilot task sentence, create a
-    GitHub issue, and emit an "action" event to the run feed.
+dispatch_coo_action(coo_output, run, *, push_event, github_repo,
+                    allowed_repos) -> None
+    Emit a "proposal" feed event for every actionable item in the COO memo.
+    The operator must confirm (or cancel) each one via the UI — no issues are
+    created automatically.
 """
 
 from __future__ import annotations
 
 import re
 
-from openclaw_control.github_tools import create_github_issue
+from trigger_happy_proposals import extract_proposals
 
 # Matches VIBE_REPORT_REQUEST: <report_id> in agent output.
 VIBE_REQUEST_RE = re.compile(r"VIBE_REPORT_REQUEST:\s*(\w+)", re.IGNORECASE)
-
-# Matches a /copilot task sentence emitted by the COO agent.
-# Handles: /copilot task: X, /copilot-ready X, 4) /copilot task X …
-_COPILOT_TASK_RE = re.compile(
-    r"(?:^|\n)\s*(?:\d+[).]?\s*)?/copilot\S*\s*:?\s*(.+)",
-    re.IGNORECASE,
-)
 
 
 def run_with_evidence(
@@ -99,67 +94,35 @@ def dispatch_coo_action(
     *,
     push_event,
     github_repo: str | None = None,
+    allowed_repos: frozenset = frozenset(),
 ) -> None:
-    """Parse the COO memo for a /copilot task and create a GitHub issue.
+    """Propose a GitHub issue for every actionable item in the COO memo.
 
-    Emits an ``"action"`` event with the issue URL on success.  When no
-    task sentence is found the function returns silently to keep the feed
-    clean.  When issue creation fails (no token, API error) a brief warning
-    message is emitted instead.
+    Each numbered next-action item (and any /copilot task sentence) becomes a
+    ``"proposal"`` feed event.  The operator must explicitly confirm (or cancel)
+    each one via the UI — the system never auto-creates issues without consent.
+
+    When ``github_repo`` is absent or empty the proposal events carry
+    ``repo_ambiguous=True`` so the frontend can ask the operator to pick the
+    target repo once, rather than guessing.
+
+    Emits no events silently when no actionable items are found.
     """
     if not coo_output:
         return
 
-    match = _COPILOT_TASK_RE.search(coo_output)
-    if not match:
-        return  # no task to dispatch — keep the feed clean
-
-    task_sentence = match.group(1).strip()[:200]  # safety cap; title is further capped to 72 chars
-    if not task_sentence:
+    proposals = extract_proposals(coo_output, github_repo, allowed_repos)
+    if not proposals:
         return
 
-    title = task_sentence[:72]
-    body = _build_action_issue_body(coo_output, task_sentence)
-    repo = github_repo or "leeheggan-droid/openclaw-control"  # config default is already set by settings
-
-    result = create_github_issue(
-        title=title,
-        body=body,
-        repo_full=repo,
-        labels=["copilot", "team-review"],
-        assign_copilot=True,
-    )
-
-    if result:
-        issue_url = result["issue_url"]
+    for p in proposals:
         push_event(
-            run, "coo", "action",
-            f"✅ Action: {issue_url}\n📋 Task: {task_sentence}",
-        )
-    else:
-        push_event(
-            run, "coo", "message",
-            f"⚠️ GitHub issue creation failed (check GITHUB_TOKEN).\n"
-            f"📋 Task: {task_sentence}",
+            run, "coo", "proposal",
+            f"📋 Proposed: {p['title']}",
+            title=p["title"],
+            body=p["body"],
+            repo=p["repo"],
+            repo_ambiguous=p["repo_ambiguous"],
+            allowed_repos=p["allowed_repos"],
         )
 
-
-def _build_action_issue_body(coo_memo: str, task_sentence: str) -> str:
-    """Build the GitHub issue body from the COO memo and extracted task."""
-    memo_lines = (coo_memo or "").splitlines()
-    memo_snippet = "\n".join(memo_lines[-50:])
-    return (
-        f"## Team Review Action\n\n"
-        f"**Task:** {task_sentence}\n\n"
-        f"## COO Decision Memo\n\n"
-        f"```\n{memo_snippet}\n```\n\n"
-        f"## Constraints\n"
-        f"- No secrets or credentials added to source code\n"
-        f"- No destructive operations introduced\n"
-        f"- Changes limited to the minimum required\n"
-        f"- Match existing code style and conventions\n\n"
-        f"## Acceptance Criteria\n"
-        f"- [ ] Task completed as described above\n"
-        f"- [ ] Local test passed: "
-        f"`git pull; uvicorn web_app:app --reload;` then verified in browser\n"
-    )
