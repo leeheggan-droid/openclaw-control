@@ -17,5 +17,8 @@ class Settings:
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
     cerebras_api_key: str = os.getenv("CEREBRAS_API_KEY", "")
+    # Trade log / inactivity alerting
+    trade_inactivity_hours: int = int(os.getenv("OPENCLAW_TRADE_INACTIVITY_HOURS", "12"))
+    alert_webhook_url: str = os.getenv("OPENCLAW_ALERT_WEBHOOK_URL", "")
 
 settings = Settings()
