@@ -15,8 +15,10 @@ from openclaw_control.github_tools import (
     try_assign_copilot as _try_assign_copilot,
     create_github_issue,
 )
+from openclaw_control.ops import map_loader as _map_loader
 from openclaw_control.service import (
     handle_message, handle_agent_message,
+    run_vibe_report,
     start_team_review, get_team_review_events,
     start_vibe_run, get_vibe_run,
     start_autopilot, stop_autopilot, get_autopilot_status,
@@ -128,6 +130,30 @@ def config():
         "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
         "allowed_repos": sorted(_ALLOWED_REPOS),
     }
+
+
+# ── Ops map endpoint ──────────────────────────────────────────────────────────
+
+@app.get("/ops/map")
+def ops_map():
+    """Return the ops map top-level keys and compressed summary.
+
+    No secrets are included — this is a structural/contract map only.
+    """
+    return {
+        "top_level_keys": _map_loader.get_top_keys(),
+        "summary": _map_loader.get_summary(),
+    }
+
+
+@app.post("/ops/report")
+def ops_report(report_id: str):
+    """Execute the read-only SSH probe sequence for *report_id* and return results.
+
+    Valid report_ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status
+    """
+    output = run_vibe_report(report_id)
+    return {"report_id": report_id, "output": output}
 
 
 @app.get("/", response_class=HTMLResponse)

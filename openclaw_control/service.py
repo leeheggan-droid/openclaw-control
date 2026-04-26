@@ -1,6 +1,7 @@
 import atexit as _atexit
 import hashlib as _hashlib
 import json as _json
+import re as _re
 import subprocess
 import threading as _threading
 import time as _time
@@ -22,6 +23,7 @@ from openclaw_control.agents.quant_agent import quant_agent
 from openclaw_control.agents.coo_agent import coo_agent
 from openclaw_control.agents.vibe_agent import vibe_planner
 from openclaw_control.agents.investigate_agent import investigate_agent
+from openclaw_control.ops import map_loader as _map_loader
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
@@ -34,6 +36,85 @@ _pnl_session = SQLiteSession("openclaw_pnl_session", session_settings=_SESSION_S
 _quant_session = SQLiteSession("openclaw_quant_session", session_settings=_SESSION_SETTINGS)
 _coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_SETTINGS)
 _vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
+
+# ── Vibe Evidence Report mechanism ───────────────────────────────────────────
+# Deterministic, read-only SSH command sequences per report_id.
+# Commands are derived from data_location_map in the ops map YAML.
+# Any update to the YAML file will also be reflected here on next load via map_loader.
+
+def _report_commands_from_map() -> dict[str, list[str]]:
+    """Build report_id → [commands] from the live ops map YAML.
+
+    Falls back to a hardcoded minimal set if the map cannot be loaded so the
+    server still starts even with a broken YAML file.
+    """
+    repo = settings.repo_dir or "/opt/openclaw-crypto"
+    fallback: dict[str, list[str]] = {
+        "container_health": [
+            "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.State}}' 2>/dev/null",
+            f"docker inspect openclaw-orchestrator --format '{{{{.Name}}}} status={{{{.State.Status}}}} started={{{{.State.StartedAt}}}} restarts={{{{.RestartCount}}}}' 2>/dev/null || echo '[container not found]'",
+        ],
+        "last_trade": [
+            "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -i 'trade' | tail -20",
+            f"find {repo} -name '*.log' 2>/dev/null | xargs grep -l 'trade' 2>/dev/null | head -3",
+        ],
+        "trade_history_7d": [
+            "docker logs --tail=2000 openclaw-orchestrator 2>&1 | grep -iE 'trade|executed|filled' | tail -50",
+            f"find {repo} -name '*.db' -o -name '*.csv' 2>/dev/null | head -5",
+        ],
+        "pnl_snapshot": [
+            "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity' | tail -30",
+            f"find {repo} -name 'pnl*' -o -name 'performance*' 2>/dev/null | head -5",
+        ],
+        "halt_status": [
+            "docker logs --tail=200 openclaw-orchestrator 2>&1 | grep -iE 'HALT|HALTED|risk|bypass|multiplier' | tail -20",
+            "docker inspect openclaw-orchestrator --format '{{.State.Status}}' 2>/dev/null || echo '[container not found]'",
+        ],
+    }
+    try:
+        data = _map_loader.get_map()
+        report_section = (
+            data.get("data_location_map", {}).get("report_commands", {})
+        )
+        if not report_section:
+            return fallback
+        result: dict[str, list[str]] = {}
+        for rid, block in report_section.items():
+            cmds = block.get("commands", [])
+            if cmds:
+                result[rid] = list(cmds)
+        return result or fallback
+    except Exception:
+        return fallback
+
+
+# Regex to detect VIBE_REPORT_REQUEST in agent output.
+_VIBE_REQUEST_RE = _re.compile(r"VIBE_REPORT_REQUEST:\s*(\w+)", _re.IGNORECASE)
+
+
+def run_vibe_report(report_id: str) -> str:
+    """Execute all read-only SSH commands for *report_id* and return combined output.
+
+    Each command's output is separated by a section header.  An empty string is
+    returned when SSH is not configured or all commands produce no output.
+    """
+    if not settings.ssh_host:
+        return "[SSH not configured — cannot run Vibe report]"
+    commands = _report_commands_from_map().get(report_id.lower())
+    if not commands:
+        valid = ", ".join(_report_commands_from_map().keys())
+        return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
+    sections: list[str] = []
+    for cmd in commands:
+        result = run_ssh(cmd, timeout=15)
+        if "error" in result:
+            sections.append(f"--- {cmd[:60]}... ---\n[SSH error]")
+            continue
+        out = (result.get("stdout") or "").strip()
+        err = (result.get("stderr") or "").strip()
+        body = (out + ("\n" + err if err else "")).strip() or "(empty)"
+        sections.append(f"--- {cmd[:60]}... ---\n{body}")
+    return "\n\n".join(sections)
 
 
 def run_ssh(command: str, timeout: int = 10) -> dict:
@@ -192,6 +273,10 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         tail_lines = terminal_tail.splitlines()[-tail_cap:]
         ctx_lines.append("Last terminal output:\n" + "\n".join(tail_lines))
 
+    # Inject ops map core memory for all agents so they know where to look for data.
+    ops_map_summary = _map_loader.get_summary()
+    ctx_lines.append(ops_map_summary)
+
     ctx_header = "\n".join(ctx_lines)
     prompt = f"{ctx_header}\n\n{text}" if ctx_header else text
 
@@ -218,14 +303,43 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
 
     timeout_s = _AGENT_TIMEOUT.get(name, _DEFAULT_TIMEOUT)
 
-    def _call():
-        return Runner.run_sync(agent, prompt, **kwargs)
+    def _call(p: str):
+        return Runner.run_sync(agent, p, **kwargs)
 
-    future = EXECUTOR.submit(_call)
+    future = EXECUTOR.submit(_call, prompt)
     try:
         result = future.result(timeout=timeout_s)
         _record_run_usage(result)
-        return {"agent": name, "output": result.final_output}
+        final_output = result.final_output
+
+        # ------------------------------------------------------------------
+        # VIBE_REPORT_REQUEST intercept (main and pnl agents only)
+        # If the agent emits VIBE_REPORT_REQUEST: <report_id>, execute the
+        # corresponding read-only SSH probes and re-run the agent once with
+        # the results injected.  This gives tool-free agents access to live
+        # VPS data without asking the operator to paste logs.
+        # ------------------------------------------------------------------
+        if name in ("main", "pnl") and settings.ssh_host:
+            match = _VIBE_REQUEST_RE.search(final_output)
+            if match:
+                report_id = match.group(1).lower()
+                report_data = run_vibe_report(report_id)
+                augmented_prompt = (
+                    f"{ctx_header}\n\n{text}\n\n"
+                    f"=== VIBE REPORT: {report_id} ===\n{report_data}\n"
+                    f"=== END VIBE REPORT ===\n"
+                    f"Now answer the original question using the report data above."
+                )
+                # One follow-up pass; reuse the same session for continuity.
+                fut2 = EXECUTOR.submit(_call, augmented_prompt)
+                try:
+                    result2 = fut2.result(timeout=timeout_s)
+                    _record_run_usage(result2)
+                    final_output = result2.final_output
+                except (FuturesTimeout, Exception):
+                    pass  # fall back to the original output that had the request
+
+        return {"agent": name, "output": final_output}
     except FuturesTimeout:
         if name == "coo":
             return {"agent": name, "output": _coo_partial_memo(workspace)}
@@ -315,6 +429,8 @@ def _build_team_ctx(workspace: dict) -> str:
     if tail:
         capped = "\n".join(tail.splitlines()[-200:])
         lines.append(f"Last terminal output:\n{capped}")
+    # Inject ops map core memory so all team-review agents know data locations.
+    lines.append(_map_loader.get_summary())
     return "\n".join(lines)
 
 
@@ -410,6 +526,8 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         ctx_sources.append("terminal output")
     if "SSH target:" in ctx:
         ctx_sources.append("SSH workspace")
+    if "OPS MAP CORE MEMORY" in ctx:
+        ctx_sources.append("ops map")
     sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
     _push_event(
         run, "main", "message",
@@ -424,6 +542,14 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
         vibe_snap = _gather_vibe_snapshot(run, min(10.0, rem - 10))
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
+
+    # Evidence gate: warn if SSH is configured but Vibe returned no data.
+    if not vibe_snap and settings.ssh_host:
+        _push_event(
+            run, "vibe", "message",
+            "⚠️ No live server evidence returned — analysis may be incomplete. "
+            "Check SSH connectivity and container name (expected: openclaw-orchestrator).",
+        )
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -491,6 +617,8 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         ctx_sources.append("terminal output")
     if "SSH target:" in ctx:
         ctx_sources.append("SSH workspace")
+    if "OPS MAP CORE MEMORY" in ctx:
+        ctx_sources.append("ops map")
     sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
     _push_event(
         run, "main", "message",
@@ -505,6 +633,14 @@ def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float
         vibe_snap = _gather_vibe_snapshot(run, min(14.0, rem - 14))
     else:
         _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
+
+    # Evidence gate: warn if SSH is configured but Vibe returned no data.
+    if not vibe_snap and settings.ssh_host:
+        _push_event(
+            run, "vibe", "message",
+            "⚠️ No live server evidence returned — analysis may be incomplete. "
+            "Check SSH connectivity and container name (expected: openclaw-orchestrator).",
+        )
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -956,6 +1092,8 @@ def _autopilot_analyze(evidence: str) -> dict:
         ctx_lines.append(f"SSH target: {settings.ssh_host}")
     if settings.repo_dir:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
+    # Inject ops map so the investigate agent knows where to look and what paths to use.
+    ctx_lines.append(_map_loader.get_summary())
     # Truncate evidence to ~12 000 chars — leaves headroom for system/context tokens
     # given a 16 k-token model context window (roughly 4 chars/token → ~3 000 tokens).
     ctx_lines.append(f"Evidence pack:\n{evidence[:12000]}")
