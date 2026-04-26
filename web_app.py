@@ -1,5 +1,5 @@
-import json as _json
-import os as _os
+import json
+import os
 
 import requests as _requests
 
@@ -125,12 +125,12 @@ def config():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    _gw = _os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
-    _gw_tag = (
-        f'<script>window.OPENCLAW_GATEWAY_URL = {_json.dumps(_gw)};</script>\n'
-        if _gw else ""
+    gateway_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+    gateway_script = (
+        f'<script>window.OPENCLAW_GATEWAY_URL = {json.dumps(gateway_url)};</script>\n'
+        if gateway_url else ""
     )
-    _page = """
+    page = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -812,11 +812,22 @@ def index():
     .apApproveBtn:hover{background:rgba(34,197,94,.18);}
     .apApproveBtn:disabled{opacity:.4;cursor:not-allowed;}
     .apApproveResult{font-size:11px;margin-top:5px;color:var(--muted);}
+    .backendBanner{
+      display:none;
+      position:fixed;top:0;left:0;right:0;
+      z-index:9999;
+      background:rgba(251,113,133,.15);
+      border-bottom:1px solid rgba(251,113,133,.4);
+      color:#fca5a5;
+      font-size:13px;
+      padding:10px 16px;
+      text-align:center;
+    }
   </style>
 </head>
 
 <body>
-<div id="backendBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(251,113,133,.15);border-bottom:1px solid rgba(251,113,133,.4);color:#fca5a5;font-size:13px;padding:10px 16px;text-align:center;">
+<div id="backendBanner" class="backendBanner">
   ⚠️ Backend unreachable at <code id="backendBannerUrl"></code> — check that <code>uvicorn web_app:app --reload</code> is running.
 </div>
   <div class="app">
@@ -1349,7 +1360,7 @@ def index():
   }).catch(() => {
     const banner = document.getElementById("backendBanner");
     const urlEl  = document.getElementById("backendBannerUrl");
-    if (banner && urlEl) { urlEl.textContent = API_BASE + "/config"; banner.style.display = ""; }
+    if (banner && urlEl) { urlEl.textContent = API_BASE + "/config"; banner.style.display = "block"; }
   });
 
   // --- Copilot bridge ---
@@ -2050,9 +2061,9 @@ def index():
 </body>
 </html>
 """
-    if _gw_tag:
-        _page = _page.replace("</head>", _gw_tag + "</head>", 1)
-    return _page
+    if gateway_script:
+        page = page.replace("</head>", gateway_script + "</head>", 1)
+    return page
 
 
 @app.post("/copilot")
