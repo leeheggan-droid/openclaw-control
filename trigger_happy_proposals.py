@@ -50,7 +50,7 @@ _FINGERPRINT_LEN = 12
 
 def proposal_fingerprint(title: str) -> str:
     """Return a short hex fingerprint for a proposal title (used for 24h dedup)."""
-    return _hashlib.md5(title.strip().lower().encode()).hexdigest()[:_FINGERPRINT_LEN]
+    return _hashlib.sha256(title.strip().lower().encode()).hexdigest()[:_FINGERPRINT_LEN]
 
 
 # Maximum length of the GitHub issue title (GitHub enforces 256 chars but

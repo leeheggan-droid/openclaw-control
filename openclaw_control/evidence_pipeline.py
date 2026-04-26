@@ -184,7 +184,12 @@ def dispatch_coo_action(
     if github_repo:
         # Explicitly supplied repo: honour it, no ambiguity.
         resolved_repo: str | None = github_repo
-        candidate_set: frozenset = frozenset([github_repo]) & allowed_repos or frozenset([github_repo])
+        # Include in allowed set only if it's a known repo; otherwise keep it
+        # as a single-element set so the UI can still show it in the selector.
+        candidate_set: frozenset = (
+            frozenset([github_repo]) if github_repo in allowed_repos
+            else frozenset([github_repo])
+        )
     else:
         candidates = _candidate_repos(coo_output, allowed_repos)
         if len(candidates) == 1:

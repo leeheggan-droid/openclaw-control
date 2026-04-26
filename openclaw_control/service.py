@@ -659,12 +659,20 @@ def _record_proposal_fp(fp: str) -> None:
     _PROPOSAL_FPS[fp] = _time.time() + _PROPOSAL_FPS_TTL
 
 
+def _dispatch_team_action(coo_output: str, run: dict) -> None:
+    """Dispatch COO next-action proposals to the team feed when budget allows.
 
+    Passes ``github_repo=None`` so that ``dispatch_coo_action`` derives
+    candidate repos from the memo content rather than defaulting to
+    ``settings.github_repo`` (which would silently guess openclaw-control).
+    """
+    if budget.is_low():
+        return
     seen = {fp for fp in _PROPOSAL_FPS if _seen_proposal_recently(fp)}
     emitted = _dispatch_coo_action(
         coo_output, run,
         push_event=_push_event,
-        github_repo=None,           # determined from memo content; do not guess
+        github_repo=None,           # content-driven; do not pre-select
         allowed_repos=_GH_ALLOWED_REPOS,
         seen_fps=seen,
     )
