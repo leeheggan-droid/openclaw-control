@@ -460,7 +460,10 @@ def index():
           Shell Output
           <span class="badge">ssh</span>
         </div>
-        <div class="badge" id="hostBadge">localhost</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:12px;color:var(--muted);user-select:none;">SSH target:</span>
+          <div class="badge" id="hostBadge">localhost</div>
+        </div>
       </div>
 
       <div class="termBody" id="terminal"></div>
