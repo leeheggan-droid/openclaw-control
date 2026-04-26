@@ -18,6 +18,7 @@ from openclaw_control.agents.pnl_agent import pnl_agent
 from openclaw_control.agents.quant_agent import quant_agent
 from openclaw_control.agents.coo_agent import coo_agent
 from openclaw_control.agents.vibe_agent import vibe_planner
+from openclaw_control.agents.investigate_agent import investigate_agent
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
@@ -589,3 +590,187 @@ def get_vibe_run(run_id: str) -> dict:
         if run is None:
             return {"status": "not_found", "output": "", "error": ""}
         return dict(run)
+
+
+# ── Autopilot investigate loop ────────────────────────────────────────────────
+
+_AUTOPILOT_LOCK = _threading.Lock()
+_AUTOPILOT_STOP = _threading.Event()
+
+_AUTOPILOT_STATE: dict = {
+    "running": False,
+    "findings": [],   # list of finding dicts (max 100)
+    "unread": 0,
+    "last_run": None,  # ISO timestamp of last investigation
+    "last_clear": None,  # ISO timestamp of last all-clear
+    "interval": settings.autopilot_interval,
+    "_next_run_mono": None,  # monotonic time of next scheduled run
+}
+_AUTOPILOT_FINDING_COUNTER = 0
+
+# SSH commands run on every autopilot investigation cycle.
+_INVESTIGATE_CMD = (
+    "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.State}}' 2>/dev/null; "
+    "echo '---LOGS---'; "
+    "(docker logs --tail=100 openclaw-orchestrator 2>&1 || "
+    "echo '[no openclaw-orchestrator container]')"
+)
+
+
+def _autopilot_gather_ssh() -> str:
+    """Run the investigation SSH commands and return concatenated output."""
+    result = run_ssh(_INVESTIGATE_CMD)
+    if "error" in result:
+        return f"[SSH error: {result['error']}]"
+    stdout = (result.get("stdout") or "").strip()
+    stderr = (result.get("stderr") or "").strip()
+    return (stdout + ("\n" + stderr if stderr else "")).strip()
+
+
+def _autopilot_analyze(raw: str) -> dict:
+    """Feed gathered output to the investigate agent; return parsed JSON dict."""
+    import json as _json
+
+    if budget.is_exhausted():
+        return {
+            "needs_action": False,
+            "urgency": "low",
+            "summary": "Budget exhausted — AI analysis skipped.",
+            "recommended_action": "",
+        }
+
+    ctx_lines = []
+    if settings.ssh_host:
+        ctx_lines.append(f"SSH target: {settings.ssh_host}")
+    if settings.repo_dir:
+        ctx_lines.append(f"Repo dir: {settings.repo_dir}")
+    ctx_lines.append(f"System check output:\n{raw}")
+    prompt = "\n".join(ctx_lines)
+
+    def _call():
+        return Runner.run_sync(investigate_agent, prompt, max_turns=1)
+
+    fut = EXECUTOR.submit(_call)
+    try:
+        result = fut.result(timeout=20)
+        _record_run_usage(result)
+        return _json.loads(result.final_output)
+    except Exception:
+        return {
+            "needs_action": False,
+            "urgency": "low",
+            "summary": "Analysis unavailable.",
+            "recommended_action": "",
+        }
+
+
+def _autopilot_run_once() -> None:
+    """Run a single investigation cycle (gather + analyze + record)."""
+    global _AUTOPILOT_FINDING_COUNTER
+
+    if not settings.ssh_host:
+        with _AUTOPILOT_LOCK:
+            _AUTOPILOT_STATE["last_run"] = _now_iso()
+        return
+
+    raw = _autopilot_gather_ssh()
+    finding = _autopilot_analyze(raw) if raw else {
+        "needs_action": False,
+        "urgency": "low",
+        "summary": "No system data available.",
+        "recommended_action": "",
+    }
+
+    with _AUTOPILOT_LOCK:
+        interval = _AUTOPILOT_STATE["interval"]
+        _AUTOPILOT_STATE["last_run"] = _now_iso()
+        _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
+
+        if finding.get("needs_action"):
+            _AUTOPILOT_FINDING_COUNTER += 1
+            entry = {
+                "id": _AUTOPILOT_FINDING_COUNTER,
+                "t": _now_iso(),
+                "urgency": finding.get("urgency", "low"),
+                "summary": finding.get("summary", ""),
+                "recommended_action": finding.get("recommended_action", ""),
+                "acked": False,
+            }
+            _AUTOPILOT_STATE["findings"].append(entry)
+            # Keep only the most recent 100 findings
+            _AUTOPILOT_STATE["findings"] = _AUTOPILOT_STATE["findings"][-100:]
+            _AUTOPILOT_STATE["unread"] += 1
+        else:
+            _AUTOPILOT_STATE["last_clear"] = _now_iso()
+
+
+def _autopilot_loop(stop_event: _threading.Event) -> None:
+    """Background daemon: run investigations on a fixed interval."""
+    while not stop_event.is_set():
+        _autopilot_run_once()
+        with _AUTOPILOT_LOCK:
+            interval = _AUTOPILOT_STATE["interval"]
+        stop_event.wait(timeout=interval)
+    with _AUTOPILOT_LOCK:
+        _AUTOPILOT_STATE["running"] = False
+        _AUTOPILOT_STATE["_next_run_mono"] = None
+
+
+def start_autopilot(interval: int | None = None) -> dict:
+    """Start the autopilot background loop. Returns status dict."""
+    global _AUTOPILOT_STOP
+    with _AUTOPILOT_LOCK:
+        if _AUTOPILOT_STATE["running"]:
+            return {"status": "already_running"}
+        effective = max(30, interval or settings.autopilot_interval)  # 30 s floor prevents accidental tight loops
+        _AUTOPILOT_STATE["interval"] = effective
+        _AUTOPILOT_STATE["running"] = True
+        _AUTOPILOT_STOP = _threading.Event()
+
+    _threading.Thread(
+        target=_autopilot_loop,
+        args=(_AUTOPILOT_STOP,),
+        daemon=True,
+    ).start()
+    return {"status": "started", "interval": effective}
+
+
+def stop_autopilot() -> dict:
+    """Stop the autopilot background loop."""
+    with _AUTOPILOT_LOCK:
+        if not _AUTOPILOT_STATE["running"]:
+            return {"status": "not_running"}
+    _AUTOPILOT_STOP.set()
+    return {"status": "stopping"}
+
+
+def get_autopilot_status() -> dict:
+    """Return current autopilot state for the UI status bar."""
+    with _AUTOPILOT_LOCK:
+        next_mono = _AUTOPILOT_STATE.get("_next_run_mono")
+        secs = int(max(0, next_mono - _time.monotonic())) if next_mono else None
+        return {
+            "running": _AUTOPILOT_STATE["running"],
+            "interval": _AUTOPILOT_STATE["interval"],
+            "last_run": _AUTOPILOT_STATE["last_run"],
+            "last_clear": _AUTOPILOT_STATE["last_clear"],
+            "unread": _AUTOPILOT_STATE["unread"],
+            "finding_count": len(_AUTOPILOT_STATE["findings"]),
+            "seconds_until_next_run": secs,
+        }
+
+
+def get_autopilot_findings(cursor: int = 0) -> dict:
+    """Return findings from the given cursor position."""
+    with _AUTOPILOT_LOCK:
+        findings = list(_AUTOPILOT_STATE["findings"][cursor:])
+    return {"findings": findings}
+
+
+def ack_autopilot_findings() -> dict:
+    """Mark all findings as acknowledged (clears the unread badge)."""
+    with _AUTOPILOT_LOCK:
+        _AUTOPILOT_STATE["unread"] = 0
+        for f in _AUTOPILOT_STATE["findings"]:
+            f["acked"] = True
+    return {"status": "ok"}

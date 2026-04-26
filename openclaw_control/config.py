@@ -12,5 +12,6 @@ class Settings:
     github_token: str = os.getenv("GITHUB_TOKEN", "")
     github_repo: str = os.getenv("GITHUB_REPO", "leeheggan-droid/openclaw-control")
     vibe_workdir: str = os.getenv("OPENCLAW_VIBE_WORKDIR", "")
+    autopilot_interval: int = int(os.getenv("OPENCLAW_AUTOPILOT_INTERVAL", "300"))
 
 settings = Settings()
