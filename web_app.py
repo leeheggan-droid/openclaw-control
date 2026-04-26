@@ -2747,8 +2747,6 @@ def index():
         return;
       }
       vibeRunId = data.run_id;
-      // Store the pending command so we can record it in history once output arrives.
-      vibeRunId._pendingCmd = cmd;
       vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing…", "info");
       vibePollTimer = setInterval(() => pollVibeRun(cmd), 3000);
     } catch(err) {
