@@ -17,6 +17,7 @@ from openclaw_control.agents.main_agent import main_agent
 from openclaw_control.agents.pnl_agent import pnl_agent
 from openclaw_control.agents.quant_agent import quant_agent
 from openclaw_control.agents.coo_agent import coo_agent
+from openclaw_control.agents.vibe_agent import vibe_planner
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
@@ -26,6 +27,7 @@ _main_session = SQLiteSession("openclaw_main_session")
 _pnl_session = SQLiteSession("openclaw_pnl_session")
 _quant_session = SQLiteSession("openclaw_quant_session")
 _coo_session = SQLiteSession("openclaw_coo_session")
+_vibe_session = SQLiteSession("openclaw_vibe_session")
 
 
 def run_ssh(command: str) -> dict:
@@ -88,10 +90,11 @@ def run_agent(text: str) -> dict:
 
 
 _AGENT_REGISTRY = {
-    "main":  (main_agent,  _main_session),
-    "pnl":   (pnl_agent,   _pnl_session),
-    "quant": (quant_agent, _quant_session),
-    "coo":   (coo_agent,   _coo_session),
+    "main":  (main_agent,    _main_session),
+    "pnl":   (pnl_agent,     _pnl_session),
+    "quant": (quant_agent,   _quant_session),
+    "coo":   (coo_agent,     _coo_session),
+    "vibe":  (vibe_planner,  _vibe_session),
 }
 
 # Per-agent max_turns limits.
@@ -102,6 +105,7 @@ _MAX_TURNS: dict[str, int | None] = {
     "pnl":   1,
     "quant": 1,
     "coo":   3,
+    "vibe":  1,      # planner: single pass, no tools
 }
 
 # Budget prefix injected into P&L / Quant prompts when the daily budget is low.
@@ -486,3 +490,63 @@ def get_team_review_events(run_id: str, cursor: int = 0) -> dict:
         events = list(run["events"][cursor:])
         done = run["done"]
     return {"events": events, "done": done}
+
+
+# ── Vibe execution gateway ────────────────────────────────────────────────────
+
+_VIBE_RUNS: dict[str, dict] = {}
+_VIBE_RUNS_LOCK = _threading.Lock()
+
+
+def start_vibe_run(workdir: str, prompt: str) -> str:
+    """Start a Vibe execution in a background thread. Returns run_id."""
+    run_id = _uuid.uuid4().hex[:8]
+    run: dict = {"status": "running", "output": "", "error": ""}
+    with _VIBE_RUNS_LOCK:
+        _VIBE_RUNS[run_id] = run
+
+    def _execute() -> None:
+        try:
+            proc = subprocess.run(
+                ["vibe", "--workdir", workdir, "--prompt", prompt],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=900,
+            )
+            output = (
+                f"exit={proc.returncode}\n"
+                f"STDOUT:\n{proc.stdout}\n"
+                f"STDERR:\n{proc.stderr}"
+            )
+            with _VIBE_RUNS_LOCK:
+                run["status"] = "done"
+                run["output"] = output
+        except subprocess.TimeoutExpired:
+            with _VIBE_RUNS_LOCK:
+                run["status"] = "error"
+                run["error"] = "Vibe timed out after 900 seconds."
+        except FileNotFoundError:
+            with _VIBE_RUNS_LOCK:
+                run["status"] = "error"
+                run["error"] = (
+                    "vibe executable not found. "
+                    "Ensure Vibe is installed and available on PATH."
+                )
+        except Exception as exc:
+            with _VIBE_RUNS_LOCK:
+                run["status"] = "error"
+                run["error"] = f"Vibe error ({type(exc).__name__}). Check server logs."
+
+    _threading.Thread(target=_execute, daemon=True).start()
+    return run_id
+
+
+def get_vibe_run(run_id: str) -> dict:
+    """Return the current status and output of a Vibe run."""
+    with _VIBE_RUNS_LOCK:
+        run = _VIBE_RUNS.get(run_id)
+        if run is None:
+            return {"status": "not_found", "output": "", "error": ""}
+        return dict(run)

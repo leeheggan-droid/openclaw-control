@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from openclaw_control.config import settings
-from openclaw_control.service import handle_message, handle_agent_message, start_team_review, get_team_review_events
+from openclaw_control.service import handle_message, handle_agent_message, start_team_review, get_team_review_events, start_vibe_run, get_vibe_run
 
 app = FastAPI()
 
@@ -14,11 +14,20 @@ class Message(BaseModel):
     text: str
 
 
+_ALLOWED_REPOS = {
+    "leeheggan-droid/openclaw-crypto",
+    "leeheggan-droid/alpaca_orb_bite_bot",
+    "leeheggan-droid/LinkedIn_Data_Centre_News",
+    "leeheggan-droid/openclaw-control",
+}
+
+
 class CopilotRequest(BaseModel):
     goal: str
     last_user_msg: str = ""
     last_agent_response: str = ""
     shell_output: str = ""
+    target_repo: str = ""  # empty string means "use server default"
 
 
 class AgentMessage(BaseModel):
@@ -32,6 +41,16 @@ class TeamReviewRequest(BaseModel):
     prompt: str = ""
     workspace: dict = {}
     review_period: str = ""
+
+
+class VibePlanRequest(BaseModel):
+    goal: str
+    workspace: dict = {}
+
+
+class VibeExecuteRequest(BaseModel):
+    workdir: str
+    prompt: str
 
 
 def _gh_headers(token: str) -> dict:
@@ -95,7 +114,12 @@ def _build_issue_body(req: CopilotRequest) -> str:
 
 @app.get("/config")
 def config():
-    return {"ssh_host": settings.ssh_host}
+    return {
+        "ssh_host": settings.ssh_host,
+        "repo_dir": settings.repo_dir,
+        "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
+        "allowed_repos": sorted(_ALLOWED_REPOS),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -388,6 +412,30 @@ def index():
     .copilotBtn:hover{background: rgba(34,197,94,.22);}
     .copilotBtn:active{transform: scale(.98);}
 
+    .repoSelect{
+      appearance:none;
+      -webkit-appearance:none;
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--border);
+      border-radius:999px;
+      color:var(--text);
+      font-family:var(--sans);
+      font-size:11px;
+      padding:4px 8px;
+      cursor:pointer;
+      outline:none;
+      transition:background .15s;
+    }
+    .repoSelect:hover{background:rgba(255,255,255,.05);}
+    .repoSelect option{background:#0b0f14; color:var(--text);}
+
+    .repoBadge{
+      font-size:11px;
+      color:rgba(34,197,94,.85);
+      user-select:none;
+      white-space:nowrap;
+    }
+
     .copilotMsgBtn{
       display:inline-block;
       margin-top:7px;
@@ -519,6 +567,145 @@ def index():
       border:1px solid var(--border);
       border-radius:10px;
     }
+
+    /* Vibe execution gateway */
+    .vibePad{
+      flex:1;
+      display:none;
+      flex-direction:column;
+      overflow:hidden;
+    }
+    .vibeInputSection{
+      padding:12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .vibeLabel{
+      font-size:11px;
+      color:var(--muted);
+      font-weight:600;
+      letter-spacing:.3px;
+      text-transform:uppercase;
+      margin-bottom:2px;
+      display:block;
+    }
+    .vibeTextInput{
+      width:100%;
+      box-sizing:border-box;
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:8px 10px;
+      color:var(--text);
+      font-family:var(--mono);
+      font-size:13px;
+      outline:none;
+    }
+    .vibeTextInput:focus{border-color:rgba(34,197,94,.4);}
+    .vibeTextarea{
+      width:100%;
+      box-sizing:border-box;
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:8px 10px;
+      color:var(--text);
+      font-family:var(--sans);
+      font-size:13px;
+      line-height:1.35;
+      outline:none;
+      resize:vertical;
+      min-height:80px;
+    }
+    .vibeTextarea:focus{border-color:rgba(34,197,94,.4);}
+    .vibeActions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .vibeBtn{
+      padding:6px 14px;
+      border-radius:999px;
+      font-size:12px;
+      font-family:var(--sans);
+      font-weight:600;
+      cursor:pointer;
+      transition:background .15s,filter .1s;
+      white-space:nowrap;
+    }
+    .vibeBtn:active{transform:scale(.98);}
+    .vibeBtn:disabled{opacity:.45;cursor:default;pointer-events:none;}
+    .vibePrimaryBtn{
+      border:1px solid rgba(34,197,94,.45);
+      background:linear-gradient(180deg,rgba(34,197,94,.95),rgba(22,163,74,.95));
+      color:#fff;
+    }
+    .vibePrimaryBtn:hover:not(:disabled){filter:brightness(1.08);}
+    .vibeSecondaryBtn{
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.05);
+      color:var(--text);
+    }
+    .vibeSecondaryBtn:hover:not(:disabled){background:rgba(255,255,255,.10);}
+    .vibeDangerBtn{
+      border:1px solid rgba(251,113,133,.4);
+      background:rgba(251,113,133,.07);
+      color:rgba(251,113,133,.9);
+    }
+    .vibeDangerBtn:hover:not(:disabled){background:rgba(251,113,133,.15);}
+    .vibeApprovalBanner{
+      margin:10px 12px 0;
+      padding:10px 12px;
+      border:1px solid rgba(251,191,36,.35);
+      background:rgba(251,191,36,.06);
+      border-radius:12px;
+      display:none;
+      flex-direction:column;
+      gap:8px;
+    }
+    .vibeApprovalTitle{
+      font-size:12px;
+      font-weight:700;
+      color:rgba(251,191,36,.90);
+    }
+    .vibeApprovalCmd{
+      font-family:var(--mono);
+      font-size:12px;
+      color:var(--text);
+      background:rgba(0,0,0,.25);
+      border-radius:8px;
+      padding:8px 10px;
+      white-space:pre-wrap;
+      word-break:break-all;
+    }
+    .vibeApprovalBtns{display:flex;gap:8px;}
+    .vibeFeed{
+      flex:1;
+      overflow:auto;
+      padding:10px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .vibeFeed::-webkit-scrollbar{width:10px;}
+    .vibeFeed::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
+    .vibeFeedRow{
+      font-family:var(--mono);
+      font-size:12px;
+      white-space:pre-wrap;
+      padding:8px 10px;
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--border);
+      border-radius:10px;
+      color:var(--text);
+      line-height:1.45;
+    }
+    .vibeFeedRow.info{color:rgba(147,197,253,.85);border-color:rgba(59,130,246,.2);}
+    .vibeFeedRow.done{color:rgba(134,239,172,.85);border-color:rgba(34,197,94,.2);}
+    .vibeFeedRow.err {color:rgba(252,165,165,.85);border-color:rgba(251,113,133,.2);}
   </style>
 </head>
 
@@ -536,6 +723,7 @@ def index():
           <button class="tabBtn" data-agent="pnl">P&amp;L</button>
           <button class="tabBtn" data-agent="quant">Quant</button>
           <button class="tabBtn" data-agent="coo">COO</button>
+          <button class="tabBtn" data-agent="vibe">Vibe</button>
           <button class="tabBtn" data-agent="team">Team</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
@@ -551,6 +739,33 @@ def index():
       <div class="chatBody" id="chat"></div>
 
       <div class="teamFeed" id="teamFeed"></div>
+
+      <!-- Vibe execution gateway panel -->
+      <div class="vibePad" id="vibePad">
+        <div class="vibeInputSection">
+          <div>
+            <label class="vibeLabel" for="vibeWorkdir">Workdir</label>
+            <input class="vibeTextInput" id="vibeWorkdir" type="text" placeholder="/opt/openclaw-crypto" />
+          </div>
+          <div>
+            <label class="vibeLabel" for="vibePromptInput">Goal / Prompt</label>
+            <textarea class="vibeTextarea" id="vibePromptInput" rows="4" placeholder="Describe what you want Vibe to implement…"></textarea>
+          </div>
+          <div class="vibeActions">
+            <button class="vibeBtn vibeSecondaryBtn" id="vibePlanBtn">✨ Plan with AI</button>
+            <button class="vibeBtn vibePrimaryBtn" id="vibeExecuteBtn">▶ Approve &amp; Execute</button>
+          </div>
+        </div>
+        <div class="vibeApprovalBanner" id="vibeApprovalBanner">
+          <div class="vibeApprovalTitle">⚠️ Review &amp; Confirm Vibe Execution</div>
+          <div class="vibeApprovalCmd" id="vibeApprovalCmd"></div>
+          <div class="vibeApprovalBtns">
+            <button class="vibeBtn vibePrimaryBtn" id="vibeConfirmBtn">✅ Confirm &amp; Execute</button>
+            <button class="vibeBtn vibeDangerBtn" id="vibeCancelApprovalBtn">✗ Cancel</button>
+          </div>
+        </div>
+        <div class="vibeFeed" id="vibeFeed"></div>
+      </div>
 
       <div class="chatComposer">
         <div class="composerRow">
@@ -585,8 +800,16 @@ def index():
 
         <div class="hintBar">
           <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code></div>
-          <div style="display:flex;gap:12px;align-items:center;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span>Shell: <code>!uptime</code>, <code>!docker ps</code></span>
+            <select class="repoSelect" id="repoSelect" title="Target repo for Copilot issues">
+              <option value="">Auto</option>
+              <option value="leeheggan-droid/openclaw-crypto">openclaw-crypto</option>
+              <option value="leeheggan-droid/alpaca_orb_bite_bot">alpaca_orb_bite_bot</option>
+              <option value="leeheggan-droid/LinkedIn_Data_Centre_News">LinkedIn_Data_Centre_News</option>
+              <option value="leeheggan-droid/openclaw-control">openclaw-control</option>
+            </select>
+            <span class="repoBadge" id="repoBadge"></span>
             <button class="copilotBtn" id="copilotBtn" title="Create a Copilot GitHub Issue from current context">🤖 Fix via Copilot</button>
           </div>
         </div>
@@ -724,16 +947,19 @@ def index():
 
   // --- tab switching ---
   const teamFeedEl = document.getElementById("teamFeed");
+  const vibePadEl  = document.getElementById("vibePad");
   const composerEl = document.querySelector(".chatComposer");
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
-    chatEl.style.display    = isTeam ? "none" : "";
-    teamFeedEl.style.display = isTeam ? "flex" : "none";
-    composerEl.style.display = isTeam ? "none" : "";
+    const isVibe = ag === "vibe";
+    chatEl.style.display         = (isTeam || isVibe) ? "none" : "";
+    teamFeedEl.style.display     = isTeam ? "flex" : "none";
+    vibePadEl.style.display      = isVibe ? "flex" : "none";
+    composerEl.style.display     = (isTeam || isVibe) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
-    } else {
+    } else if (!isVibe) {
       renderHistory();
     }
   }
@@ -950,17 +1176,72 @@ def index():
   }
 
   // Fetch SSH host label from server config
+  let serverRepoDir = "";
   fetch("/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
+    if (cfg && cfg.repo_dir) serverRepoDir = cfg.repo_dir;
+    if (cfg && Array.isArray(cfg.allowed_repos) && cfg.allowed_repos.length) {
+      ALLOWED_REPOS.length = 0;
+      cfg.allowed_repos.forEach(r => ALLOWED_REPOS.push(r));
+    }
+    updateRepoBadge();
   }).catch(() => {});
 
   // --- Copilot bridge ---
 
+  const ALLOWED_REPOS = [
+    "leeheggan-droid/openclaw-crypto",
+    "leeheggan-droid/alpaca_orb_bite_bot",
+    "leeheggan-droid/LinkedIn_Data_Centre_News",
+    "leeheggan-droid/openclaw-control",
+  ];
+
+  const repoSelectEl = document.getElementById("repoSelect");
+  const repoBadgeEl  = document.getElementById("repoBadge");
+
+  function autoDetectRepo() {
+    const dir   = (serverRepoDir || "").toLowerCase();
+    const shell = getShellOutput().toLowerCase();
+    if (dir.includes("openclaw-crypto")) {
+      return "leeheggan-droid/openclaw-crypto";
+    }
+    if (shell.includes("alpaca_orb_bite_bot")) {
+      return "leeheggan-droid/alpaca_orb_bite_bot";
+    }
+    if (shell.includes("linkedin_data_centre_news") || shell.includes("linkedindatacentrenews")) {
+      return "leeheggan-droid/LinkedIn_Data_Centre_News";
+    }
+    return "leeheggan-droid/openclaw-control";
+  }
+
+  function getTargetRepo() {
+    const sel = repoSelectEl ? repoSelectEl.value : "";
+    return sel && ALLOWED_REPOS.includes(sel) ? sel : autoDetectRepo();
+  }
+
+  function updateRepoBadge() {
+    if (!repoBadgeEl) return;
+    const sel = repoSelectEl ? repoSelectEl.value : "";
+    if (sel && ALLOWED_REPOS.includes(sel)) {
+      repoBadgeEl.textContent = "";
+    } else {
+      const detected = autoDetectRepo();
+      const short = detected.split("/")[1] || detected;
+      repoBadgeEl.textContent = "→ " + short;
+    }
+  }
+
+  if (repoSelectEl) {
+    repoSelectEl.addEventListener("change", updateRepoBadge);
+  }
+
   async function triggerCopilot(goal, lastUserMsg, lastAgentMsg) {
     if (!goal) return;
     const shellOutput = getShellOutput();
+    const targetRepo  = getTargetRepo();
+    const repoShort   = targetRepo.split("/")[1] || targetRepo;
 
-    const statusMsg = "⏳ Creating Copilot issue on GitHub…";
+    const statusMsg = "⏳ Creating Copilot issue in " + repoShort + "…";
     addChat("agent", statusMsg);
     histories[activeAgent].push({role: "agent", text: statusMsg});
     saveHistory(activeAgent);
@@ -975,6 +1256,7 @@ def index():
           last_user_msg: lastUserMsg || "",
           last_agent_response: lastAgentMsg || "",
           shell_output: shellOutput,
+          target_repo: targetRepo,
         })
       });
       data = await res.json();
@@ -994,9 +1276,11 @@ def index():
       return;
     }
 
-    const issueUrl = data.issue_url;
-    const issueNum = data.issue_number;
-    let msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl;
+    const issueUrl  = data.issue_url;
+    const issueNum  = data.issue_number;
+    const usedRepo  = data.used_repo || targetRepo;
+    const usedShort = usedRepo.split("/")[1] || usedRepo;
+    let msg = "✅ Copilot issue #" + issueNum + " created in " + usedShort + ":\\n" + issueUrl;
     if (data.assignment === "manual_required") {
       msg += "\\n\\n⚠️ Issue created. Assign Copilot manually in GitHub (Assignees → Copilot).";
     } else {
@@ -1006,17 +1290,19 @@ def index():
     histories[activeAgent].push({role: "agent", text: msg});
     saveHistory(activeAgent);
 
-    pollForPR(issueNum);
+    pollForPR(issueNum, usedRepo);
   }
 
-  function pollForPR(issueNumber) {
+  function pollForPR(issueNumber, repo) {
+    const repoParam = repo ? encodeURIComponent(repo) : "";
     let attempts = 0;
     const maxAttempts = 20; // 20 × 15s = 5 min
     const timer = setInterval(async () => {
       attempts++;
       if (attempts > maxAttempts) { clearInterval(timer); return; }
       try {
-        const res = await fetch("/copilot/poll/" + issueNumber);
+        const url = "/copilot/poll/" + issueNumber + (repoParam ? "?repo=" + repoParam : "");
+        const res = await fetch(url);
         const data = await res.json();
         if (data.pr_url) {
           clearInterval(timer);
@@ -1214,6 +1500,164 @@ def index():
   detailedReviewBtn.onclick = () => runTeamReview("detailed", "");
   yearlyReviewBtn.onclick   = () => runTeamReview("detailed", "2-year");
   cancelReviewBtn.onclick   = cancelTeamReview;
+
+  // ── Vibe execution gateway ────────────────────────────────────────────────
+
+  const vibeWorkdirEl        = document.getElementById("vibeWorkdir");
+  const vibePromptInputEl    = document.getElementById("vibePromptInput");
+  const vibePlanBtnEl        = document.getElementById("vibePlanBtn");
+  const vibeExecuteBtnEl     = document.getElementById("vibeExecuteBtn");
+  const vibeApprovalBannerEl = document.getElementById("vibeApprovalBanner");
+  const vibeApprovalCmdEl    = document.getElementById("vibeApprovalCmd");
+  const vibeConfirmBtnEl     = document.getElementById("vibeConfirmBtn");
+  const vibeCancelApprovalEl = document.getElementById("vibeCancelApprovalBtn");
+  const vibeFeedEl           = document.getElementById("vibeFeed");
+
+  let vibeRunId   = null;
+  let vibePollTimer = null;
+
+  // Pre-fill workdir from server config
+  fetch("/config").then(r => r.json()).then(cfg => {
+    if (cfg && cfg.vibe_workdir && !vibeWorkdirEl.value) {
+      vibeWorkdirEl.value = cfg.vibe_workdir;
+    }
+  }).catch(() => {});
+
+  function vibeFeedAppend(text, kind) {
+    const row = document.createElement("div");
+    row.className = "vibeFeedRow " + (kind || "");
+    row.textContent = text;
+    vibeFeedEl.appendChild(row);
+    vibeFeedEl.scrollTop = vibeFeedEl.scrollHeight;
+  }
+
+  function setVibeBusy(busy) {
+    vibePlanBtnEl.disabled    = busy;
+    vibeExecuteBtnEl.disabled = busy;
+    vibeConfirmBtnEl.disabled = busy;
+    setBusy(busy);
+  }
+
+  function showVibeApproval(workdir, prompt) {
+    vibeApprovalCmdEl.textContent =
+      "vibe --workdir " + workdir + " --prompt " + JSON.stringify(prompt);
+    vibeApprovalBannerEl.style.display = "flex";
+    vibeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
+  }
+
+  function hideVibeApproval() {
+    vibeApprovalBannerEl.style.display = "none";
+  }
+
+  // ✨ Plan with AI: ask the Vibe Planner agent to formulate workdir + prompt
+  vibePlanBtnEl.onclick = async () => {
+    const goal = vibePromptInputEl.value.trim();
+    if (!goal) { vibePromptInputEl.focus(); return; }
+    hideVibeApproval();
+    setVibeBusy(true);
+    vibeFeedAppend("⏳ Planning with AI…", "info");
+    try {
+      const res = await fetch("/vibe/plan", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          goal,
+          workspace: {terminal_tail: getShellOutput()},
+        }),
+      });
+      const data = await res.json();
+      const raw = data.output || data.error || "";
+      try {
+        // Agent should return JSON
+        const parsed = JSON.parse(raw);
+        if (parsed.workdir) vibeWorkdirEl.value = parsed.workdir;
+        if (parsed.prompt)  vibePromptInputEl.value = parsed.prompt;
+        vibeFeedAppend("✅ AI plan ready — review workdir & prompt above, then execute.", "done");
+      } catch {
+        vibeFeedAppend("AI response (could not auto-fill — copy manually):\\n" + raw, "info");
+      }
+    } catch(err) {
+      vibeFeedAppend("❌ Plan error: " + (err.message || String(err)), "err");
+    } finally {
+      setVibeBusy(false);
+    }
+  };
+
+  // ▶ Approve & Execute: show approval banner
+  vibeExecuteBtnEl.onclick = () => {
+    const wd = vibeWorkdirEl.value.trim();
+    const pr = vibePromptInputEl.value.trim();
+    if (!wd || !pr) {
+      if (!wd) vibeWorkdirEl.focus();
+      else     vibePromptInputEl.focus();
+      return;
+    }
+    showVibeApproval(wd, pr);
+  };
+
+  // ✅ Confirm & Execute
+  vibeConfirmBtnEl.onclick = async () => {
+    const wd = vibeWorkdirEl.value.trim();
+    const pr = vibePromptInputEl.value.trim();
+    if (!wd || !pr) return;
+    hideVibeApproval();
+    setVibeBusy(true);
+    vibeFeedAppend("🚀 Dispatching Vibe…", "info");
+    vibeFeedAppend("workdir: " + wd, "info");
+    vibeFeedAppend("prompt:  " + pr, "info");
+    try {
+      const res = await fetch("/vibe/execute", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({workdir: wd, prompt: pr}),
+      });
+      const data = await res.json();
+      if (data.error) {
+        vibeFeedAppend("❌ " + data.error, "err");
+        setVibeBusy(false);
+        return;
+      }
+      vibeRunId = data.run_id;
+      vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing (may take up to 15 min)…", "info");
+      vibePollTimer = setInterval(pollVibeRun, 3000);
+    } catch(err) {
+      vibeFeedAppend("❌ Request error: " + (err.message || String(err)), "err");
+      setVibeBusy(false);
+    }
+  };
+
+  // ✗ Cancel approval
+  vibeCancelApprovalEl.onclick = hideVibeApproval;
+
+  async function pollVibeRun() {
+    if (!vibeRunId) return;
+    try {
+      const res = await fetch("/vibe/poll/" + vibeRunId);
+      const data = await res.json();
+      if (data.status === "done") {
+        clearInterval(vibePollTimer);
+        vibePollTimer = null;
+        vibeRunId = null;
+        vibeFeedAppend("✅ Vibe finished:\\n" + (data.output || "(no output)"), "done");
+        setVibeBusy(false);
+      } else if (data.status === "error") {
+        clearInterval(vibePollTimer);
+        vibePollTimer = null;
+        vibeRunId = null;
+        vibeFeedAppend("❌ Vibe error: " + (data.error || "unknown error"), "err");
+        setVibeBusy(false);
+      } else if (data.status === "not_found") {
+        clearInterval(vibePollTimer);
+        vibePollTimer = null;
+        vibeRunId = null;
+        vibeFeedAppend("❌ Run not found.", "err");
+        setVibeBusy(false);
+      }
+      // "running" → keep polling
+    } catch(_err) {
+      // Network blip — keep polling
+    }
+  }
 </script>
 </body>
 </html>
@@ -1264,9 +1708,15 @@ def copilot_issue(req: CopilotRequest):
     if not token:
         return {"error": "GITHUB_TOKEN is not configured. Set the GITHUB_TOKEN environment variable."}
 
-    parts = settings.github_repo.split("/", 1)
+    # Resolve target repo: client-supplied value wins if it is in the allowed list.
+    if req.target_repo and req.target_repo in _ALLOWED_REPOS:
+        repo_full = req.target_repo
+    else:
+        repo_full = settings.github_repo
+
+    parts = repo_full.split("/", 1)
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        return {"error": "GITHUB_REPO must be in 'owner/repo' format"}
+        return {"error": "Target repo must be in 'owner/repo' format"}
 
     owner, repo = parts
     title_text = req.goal.strip()[:80] if req.goal.strip() else "Task from OpenClaw UI"
@@ -1298,21 +1748,24 @@ def copilot_issue(req: CopilotRequest):
         "issue_url": issue_url,
         "issue_number": issue_number,
         "assignment": assignment,
+        "used_repo": repo_full,
     }
 
 
 @app.get("/copilot/poll/{issue_number}")
-def copilot_poll(issue_number: int):
+def copilot_poll(issue_number: int, repo: str = ""):
     token = settings.github_token
     if not token:
         return {"pr_url": None}
 
-    parts = settings.github_repo.split("/", 1)
+    # Use client-supplied repo if it is in the allowed list, else fall back to server default.
+    repo_full = repo if (repo and repo in _ALLOWED_REPOS) else settings.github_repo
+    parts = repo_full.split("/", 1)
     if len(parts) != 2:
         return {"pr_url": None}
 
-    owner, repo = parts
-    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/timeline"
+    owner, repo_name = parts
+    url = f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}/timeline"
 
     try:
         r = _requests.get(url, headers=_gh_headers(token), timeout=10)
@@ -1353,3 +1806,28 @@ def team_review_start(req: TeamReviewRequest):
 @app.get("/team/review/poll/{run_id}")
 def team_review_poll(run_id: str, cursor: int = 0):
     return get_team_review_events(run_id, cursor)
+
+
+# ── Vibe execution gateway endpoints ─────────────────────────────────────────
+
+@app.post("/vibe/plan")
+def vibe_plan(req: VibePlanRequest):
+    """Ask the Vibe Planner agent to formulate a workdir + prompt for a given goal."""
+    return handle_agent_message("vibe", req.goal, req.workspace)
+
+
+@app.post("/vibe/execute")
+def vibe_execute(req: VibeExecuteRequest):
+    """Start a Vibe execution run after user approval. Returns run_id for polling."""
+    workdir = (req.workdir or "").strip()
+    prompt = (req.prompt or "").strip()
+    if not workdir or not prompt:
+        return {"error": "workdir and prompt are required"}
+    run_id = start_vibe_run(workdir, prompt)
+    return {"run_id": run_id}
+
+
+@app.get("/vibe/poll/{run_id}")
+def vibe_poll(run_id: str):
+    """Return the current status and output of a Vibe run."""
+    return get_vibe_run(run_id)
