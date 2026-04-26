@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from openclaw_control.config import settings
-from openclaw_control.service import handle_message, handle_agent_message
+from openclaw_control.service import handle_message, handle_agent_message, start_team_review, get_team_review_events
 
 app = FastAPI()
 
@@ -24,6 +24,12 @@ class CopilotRequest(BaseModel):
 class AgentMessage(BaseModel):
     agent: str
     text: str
+    workspace: dict = {}
+
+
+class TeamReviewRequest(BaseModel):
+    mode: str = "quick"
+    prompt: str = ""
     workspace: dict = {}
 
 
@@ -427,6 +433,91 @@ def index():
       background:rgba(255,255,255,.06);
       color:var(--text);
     }
+
+    /* Team review buttons bar */
+    .teamBtnsBar{
+      display:flex;
+      gap:6px;
+      padding:7px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      flex-wrap:wrap;
+      align-items:center;
+    }
+    .teamBtn{
+      padding:4px 12px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.04);
+      color:var(--text);
+      font-size:12px;
+      cursor:pointer;
+      font-family:var(--sans);
+      transition:background .15s;
+      white-space:nowrap;
+    }
+    .teamBtn:hover{background:rgba(255,255,255,.09);}
+    .teamBtn:active{transform:scale(.98);}
+    .teamBtn:disabled{opacity:.45;cursor:default;pointer-events:none;}
+    .cancelBtn{
+      border-color:rgba(251,113,133,.35);
+      color:rgba(251,113,133,.85);
+      background:rgba(251,113,133,.06);
+    }
+    .cancelBtn:hover{background:rgba(251,113,133,.14);}
+
+    /* Team activity feed */
+    .teamFeed{
+      flex:1;
+      overflow:auto;
+      padding:10px 12px;
+      display:none;
+      flex-direction:column;
+      gap:5px;
+      scroll-behavior:smooth;
+    }
+    .teamFeed::-webkit-scrollbar{width:10px;}
+    .teamFeed::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
+    .feedRow{display:flex;flex-direction:column;gap:3px;}
+    .feedMeta{
+      display:flex;
+      gap:6px;
+      align-items:center;
+      font-size:11px;
+      color:var(--muted);
+      user-select:none;
+    }
+    .feedAgent{
+      padding:2px 7px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:600;
+      letter-spacing:.2px;
+    }
+    .feedAgent.pnl   {background:rgba(59,130,246,.18);color:#93c5fd;}
+    .feedAgent.quant {background:rgba(167,139,250,.18);color:#c4b5fd;}
+    .feedAgent.coo   {background:rgba(34,197,94,.18);color:#86efac;}
+    .feedAgent.system{background:rgba(156,163,175,.15);color:#9ca3af;}
+    .feedType{
+      font-size:10px;
+      padding:1px 6px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      color:var(--muted);
+    }
+    .feedType.run-start,.feedType.start{border-color:rgba(59,130,246,.3);color:#93c5fd;}
+    .feedType.done   {border-color:rgba(34,197,94,.3);color:#86efac;}
+    .feedType.error,.feedType.cancelled{border-color:rgba(251,113,133,.3);color:#fca5a5;}
+    .feedContent{
+      font-size:13px;
+      color:var(--text);
+      white-space:pre-wrap;
+      line-height:1.4;
+      padding:8px 10px;
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--border);
+      border-radius:10px;
+    }
   </style>
 </head>
 
@@ -444,11 +535,20 @@ def index():
           <button class="tabBtn" data-agent="pnl">P&amp;L</button>
           <button class="tabBtn" data-agent="quant">Quant</button>
           <button class="tabBtn" data-agent="coo">COO</button>
+          <button class="tabBtn" data-agent="team">Team</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
       </div>
 
+      <div class="teamBtnsBar">
+        <button class="teamBtn" id="quickReviewBtn">⚡ Quick team review</button>
+        <button class="teamBtn" id="detailedReviewBtn">🔍 Detailed team review</button>
+        <button class="teamBtn cancelBtn" id="cancelReviewBtn" style="display:none">✕ Cancel run</button>
+      </div>
+
       <div class="chatBody" id="chat"></div>
+
+      <div class="teamFeed" id="teamFeed"></div>
 
       <div class="chatComposer">
         <div class="composerRow">
@@ -621,13 +721,28 @@ def index():
   renderHistory();
 
   // --- tab switching ---
+  const teamFeedEl = document.getElementById("teamFeed");
+  const composerEl = document.querySelector(".chatComposer");
+
+  function showAgentTab(ag) {
+    const isTeam = ag === "team";
+    chatEl.style.display    = isTeam ? "none" : "";
+    teamFeedEl.style.display = isTeam ? "flex" : "none";
+    composerEl.style.display = isTeam ? "none" : "";
+    if (isTeam) {
+      renderTeamFeed();
+    } else {
+      renderHistory();
+    }
+  }
+
   document.querySelectorAll(".tabBtn").forEach(btn => {
     btn.addEventListener("click", () => {
       const ag = btn.getAttribute("data-agent");
       if (ag === activeAgent) return;
       activeAgent = ag;
       document.querySelectorAll(".tabBtn").forEach(b => b.classList.toggle("active", b === btn));
-      renderHistory();
+      showAgentTab(ag);
     });
   });
 
@@ -708,6 +823,7 @@ def index():
   async function send(textOverride) {
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
     if (!text) return;
+    if (activeAgent === "team") return; // composer hidden on team tab
 
     addChat("user", text);
     histories[activeAgent].push({role: "user", text});
@@ -920,6 +1036,171 @@ def index():
     if (!goal) return;
     await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
   };
+
+  // ── Team review ──────────────────────────────────────────────────────────────
+
+  const TEAM_FEED_KEY = "openclaw_team_feed_v1";
+  const AGENT_DISPLAY = {pnl: "P&L", quant: "Quant", coo: "COO", system: "System"};
+
+  const quickReviewBtn    = document.getElementById("quickReviewBtn");
+  const detailedReviewBtn = document.getElementById("detailedReviewBtn");
+  const cancelReviewBtn   = document.getElementById("cancelReviewBtn");
+
+  let teamFeedEvents = [];
+  let activeTeamRunId = null;
+  let teamPollCursor = 0;
+  let teamPollTimer = null;
+  let teamRunCancelled = false;
+
+  try {
+    teamFeedEvents = JSON.parse(localStorage.getItem(TEAM_FEED_KEY) || "[]");
+  } catch { teamFeedEvents = []; }
+
+  function saveTeamFeed() {
+    localStorage.setItem(TEAM_FEED_KEY, JSON.stringify(teamFeedEvents.slice(-500)));
+  }
+
+  function _nowIso() {
+    return new Date().toISOString().split(".")[0] + "Z";
+  }
+
+  function createFeedRow(ev) {
+    const row = document.createElement("div");
+    row.className = "feedRow";
+
+    const meta = document.createElement("div");
+    meta.className = "feedMeta";
+
+    const ts = document.createElement("span");
+    ts.textContent = (ev.t || "").replace("T", " ").replace("+00:00", "").replace("Z", "") + " UTC";
+    meta.appendChild(ts);
+
+    const agBadge = document.createElement("span");
+    agBadge.className = "feedAgent " + (ev.agent || "system");
+    agBadge.textContent = AGENT_DISPLAY[ev.agent] || ev.agent || "—";
+    meta.appendChild(agBadge);
+
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "feedType " + (ev.type || "");
+    typeBadge.textContent = ev.type || "";
+    meta.appendChild(typeBadge);
+
+    row.appendChild(meta);
+
+    // Show content for message/error/run-start/cancelled events
+    const showContent = ev.content && ["message","error","run-start","cancelled"].includes(ev.type);
+    if (showContent) {
+      const content = document.createElement("div");
+      content.className = "feedContent";
+      content.textContent = ev.content;
+      row.appendChild(content);
+    }
+
+    return row;
+  }
+
+  function renderTeamFeed() {
+    teamFeedEl.innerHTML = "";
+    teamFeedEvents.forEach(ev => teamFeedEl.appendChild(createFeedRow(ev)));
+    teamFeedEl.scrollTop = teamFeedEl.scrollHeight;
+  }
+
+  function appendTeamEvent(ev) {
+    teamFeedEvents.push(ev);
+    saveTeamFeed();
+    if (activeAgent === "team") {
+      teamFeedEl.appendChild(createFeedRow(ev));
+      teamFeedEl.scrollTop = teamFeedEl.scrollHeight;
+    }
+    // Inject agent message into its per-agent tab history
+    if (ev.type === "message" && ev.agent && ev.agent !== "system") {
+      const label = AGENT_DISPLAY[ev.agent] || ev.agent;
+      histories[ev.agent] = histories[ev.agent] || [];
+      histories[ev.agent].push({role: "agent", text: "[Team Review]\\n" + ev.content});
+      saveHistory(ev.agent);
+    }
+  }
+
+  function setTeamRunning(running) {
+    quickReviewBtn.disabled    = running;
+    detailedReviewBtn.disabled = running;
+    cancelReviewBtn.style.display = running ? "" : "none";
+    setBusy(running);
+  }
+
+  async function runTeamReview(mode) {
+    if (activeTeamRunId) return; // already running
+
+    teamRunCancelled = false;
+    activeTeamRunId = null;
+    teamPollCursor = 0;
+
+    const userPrompt = inputEl.value.trim();
+    const termTail   = getShellOutput();
+
+    setTeamRunning(true);
+
+    // Switch to the Team tab so the user sees the feed immediately
+    activeAgent = "team";
+    document.querySelectorAll(".tabBtn").forEach(b =>
+      b.classList.toggle("active", b.getAttribute("data-agent") === "team"));
+    showAgentTab("team");
+
+    try {
+      const res = await fetch("/team/review", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          mode,
+          prompt: userPrompt,
+          workspace: {terminal_tail: termTail},
+        }),
+      });
+      const data = await res.json();
+      activeTeamRunId = data.run_id;
+      teamPollCursor  = 0;
+      // Kick off polling immediately, then every 2 seconds
+      await pollTeamReview();
+      teamPollTimer = setInterval(pollTeamReview, 2000);
+    } catch(err) {
+      appendTeamEvent({t: _nowIso(), agent: "system", type: "error",
+        content: "Failed to start team review: " + (err.message || String(err))});
+      setTeamRunning(false);
+    }
+  }
+
+  async function pollTeamReview() {
+    if (!activeTeamRunId || teamRunCancelled) return;
+    try {
+      const res = await fetch(`/team/review/poll/${activeTeamRunId}?cursor=${teamPollCursor}`);
+      const data = await res.json();
+      if (data.events && data.events.length) {
+        data.events.forEach(ev => appendTeamEvent(ev));
+        teamPollCursor += data.events.length;
+      }
+      if (data.done || data.error) {
+        clearInterval(teamPollTimer);
+        teamPollTimer = null;
+        activeTeamRunId = null;
+        setTeamRunning(false);
+      }
+    } catch(_err) {
+      // Network blip — keep polling unless cancelled
+    }
+  }
+
+  function cancelTeamReview() {
+    teamRunCancelled = true;
+    if (teamPollTimer) { clearInterval(teamPollTimer); teamPollTimer = null; }
+    appendTeamEvent({t: _nowIso(), agent: "system", type: "cancelled",
+      content: "Run cancelled by user."});
+    activeTeamRunId = null;
+    setTeamRunning(false);
+  }
+
+  quickReviewBtn.onclick    = () => runTeamReview("quick");
+  detailedReviewBtn.onclick = () => runTeamReview("detailed");
+  cancelReviewBtn.onclick   = cancelTeamReview;
 </script>
 </body>
 </html>
@@ -1044,3 +1325,15 @@ def message(msg: Message):
 @app.post("/agent/message")
 def agent_message(msg: AgentMessage):
     return handle_agent_message(msg.agent, msg.text, msg.workspace)
+
+
+@app.post("/team/review")
+def team_review_start(req: TeamReviewRequest):
+    mode = req.mode if req.mode in ("quick", "detailed") else "quick"
+    run_id = start_team_review(mode, req.prompt, req.workspace)
+    return {"run_id": run_id}
+
+
+@app.get("/team/review/poll/{run_id}")
+def team_review_poll(run_id: str, cursor: int = 0):
+    return get_team_review_events(run_id, cursor)
