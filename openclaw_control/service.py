@@ -1,4 +1,5 @@
 import atexit as _atexit
+import hashlib as _hashlib
 import json as _json
 import subprocess
 import threading as _threading
@@ -11,6 +12,7 @@ from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession, Sessi
 from openclaw_control import budget
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 from openclaw_control.config import settings
+from openclaw_control.github_tools import ALLOWED_REPOS as _GH_ALLOWED_REPOS, create_github_issue
 from openclaw_control.agents.controller import controller
 from openclaw_control.agents.analysis_agent import analysis_agent
 from openclaw_control.agents.router import route_message
@@ -34,14 +36,14 @@ _coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_S
 _vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
 
 
-def run_ssh(command: str) -> dict:
+def run_ssh(command: str, timeout: int = 10) -> dict:
     try:
         proc = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
              settings.ssh_host, command],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
         )
         return {
             "type": "ssh",
@@ -611,16 +613,14 @@ _AUTOPILOT_STATE: dict = {
 _AUTOPILOT_FINDING_COUNTER = 0
 _AUTOPILOT_EVENT_COUNTER = 0
 
+# Recently-seen issue fingerprints — prevents opening duplicate GitHub issues.
+# Capped at 200 entries; older entries are evicted when the cap is reached.
+_AUTOPILOT_FINGERPRINTS: set[str] = set()
+_AUTOPILOT_FINGERPRINT_ORDER: list[str] = []
+_AUTOPILOT_FINGERPRINT_CAP = 200
+
 # Timeout (seconds) for the vibe_planner conclude step inside each cycle.
 _AUTOPILOT_CONCLUDE_TIMEOUT = 15
-
-# SSH commands run on every autopilot investigation cycle.
-_INVESTIGATE_CMD = (
-    "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.State}}' 2>/dev/null; "
-    "echo '---LOGS---'; "
-    "(docker logs --tail=100 openclaw-orchestrator 2>&1 || "
-    "echo '[no openclaw-orchestrator container]')"
-)
 
 
 def _autopilot_push_event(kind: str, message: str) -> None:
@@ -638,25 +638,170 @@ def _autopilot_push_event(kind: str, message: str) -> None:
         _AUTOPILOT_STATE["events"] = _AUTOPILOT_STATE["events"][-200:]
 
 
-def _autopilot_gather_ssh() -> str:
-    """Run the investigation SSH commands and return concatenated output."""
-    result = run_ssh(_INVESTIGATE_CMD)
+def _ap_ssh(label: str, command: str, timeout: int = 12) -> str:
+    """Run one evidence-pack SSH command, emit a progress event, return output section."""
+    _autopilot_push_event("gather", f"📡 {label}…")
+    result = run_ssh(command, timeout=timeout)
     if "error" in result:
-        return f"[SSH error: {result['error']}]"
+        return f"=== {label} ===\n[SSH error: {result['error']}]\n"
     stdout = (result.get("stdout") or "").strip()
     stderr = (result.get("stderr") or "").strip()
-    return (stdout + ("\n" + stderr if stderr else "")).strip()
+    body = (stdout + ("\n" + stderr if stderr else "")).strip() or "(empty)"
+    return f"=== {label} ===\n{body}\n"
 
 
-def _autopilot_analyze(raw: str) -> dict:
-    """Feed gathered output to the investigate agent; return parsed JSON dict."""
+def _autopilot_gather_evidence() -> str:
+    """Collect a structured evidence pack via SSH. Returns multi-section string."""
+    repo = settings.repo_dir or "/opt/openclaw-crypto"
+    sections: list[str] = []
+
+    # 1. Container inventory
+    sections.append(_ap_ssh(
+        "docker ps",
+        "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.State}}' 2>/dev/null || "
+        "echo '[docker not available]'",
+    ))
+
+    # 2. Container inspect summaries (status / pid / startedAt for all containers)
+    sections.append(_ap_ssh(
+        "docker inspect",
+        "docker ps -q 2>/dev/null | xargs -r docker inspect "
+        "--format '{{.Name}} state={{.State.Status}} pid={{.State.Pid}} "
+        "started={{.State.StartedAt}} restarts={{.RestartCount}}' 2>/dev/null || "
+        "echo '[no containers or docker unavailable]'",
+    ))
+
+    # 3. Orchestrator logs (last 500 lines)
+    sections.append(_ap_ssh(
+        "docker logs (tail 500)",
+        "(docker logs --tail=500 openclaw-orchestrator 2>&1) || "
+        "echo '[no openclaw-orchestrator container]'",
+        timeout=20,
+    ))
+
+    # 4. Keyword grep highlights from log output (capture directly from docker logs)
+    sections.append(_ap_ssh(
+        "log grep highlights",
+        "(docker logs --tail=500 openclaw-orchestrator 2>&1 | "
+        "grep -iE 'HALT|HALTED|pnl|sharpe|drawdown|risk|error|exception|connect|trade|signal' "
+        "| tail -n 80) 2>/dev/null || echo '[no matches or container unavailable]'",
+        timeout=20,
+    ))
+
+    # 5. Recent git history
+    sections.append(_ap_ssh(
+        "git log",
+        f"cd {repo} && git log -n 50 --oneline 2>/dev/null || echo '[git unavailable]'",
+    ))
+
+    # 6. HALT grep across codebase
+    sections.append(_ap_ssh(
+        "code grep HALT",
+        f"cd {repo} && grep -RIn 'HALT\\|HALTED\\|halt' . 2>/dev/null | head -n 200 || "
+        "echo '[no matches]'",
+        timeout=18,
+    ))
+
+    # 7. Risk/trading keyword grep
+    sections.append(_ap_ssh(
+        "code grep risk/trading",
+        f"cd {repo} && grep -RIn 'drawdown\\|sharpe\\|risk\\|multiplier\\|bear' . "
+        "2>/dev/null | head -n 200 || echo '[no matches]'",
+        timeout=18,
+    ))
+
+    # 8. Config file discovery
+    sections.append(_ap_ssh(
+        "config files",
+        f"find {repo} -maxdepth 3 \\( -name '*.env' -o -name '.env*' -o -name '*.env.*' "
+        "-o -name '*.yml' -o -name '*.yaml' -o -name '*.toml' -o -name '*.json' \\) "
+        "2>/dev/null | head -n 120 || echo '[find unavailable]'",
+    ))
+
+    return "\n".join(sections)
+
+
+def _autopilot_issue_fingerprint(action_type: str, key: str) -> str:
+    """Return a short hex fingerprint for deduplication."""
+    raw = f"{action_type}:{key}".encode()
+    return _hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _autopilot_is_duplicate(fingerprint: str) -> bool:
+    """Return True if this fingerprint was seen recently; register it if not."""
+    global _AUTOPILOT_FINGERPRINTS, _AUTOPILOT_FINGERPRINT_ORDER
+    if fingerprint in _AUTOPILOT_FINGERPRINTS:
+        return True
+    # Register new fingerprint; evict oldest if cap exceeded
+    _AUTOPILOT_FINGERPRINTS.add(fingerprint)
+    _AUTOPILOT_FINGERPRINT_ORDER.append(fingerprint)
+    if len(_AUTOPILOT_FINGERPRINT_ORDER) > _AUTOPILOT_FINGERPRINT_CAP:
+        evict = _AUTOPILOT_FINGERPRINT_ORDER.pop(0)
+        _AUTOPILOT_FINGERPRINTS.discard(evict)
+    return False
+
+
+def _build_autopilot_issue_body(
+    issue_body: str,
+    summary: str,
+    recommended_action: str,
+    evidence: str,
+) -> str:
+    """Combine the agent-generated body with the full evidence pack."""
+    # Keep only the last 300 lines — enough context for Copilot without hitting
+    # GitHub's 65 535-character issue body limit.
+    evidence_lines = (evidence or "").splitlines()[-300:]
+    evidence_snippet = "\n".join(evidence_lines) or "(no evidence collected)"
+
+    lines = [
+        "## Autopilot Finding",
+        "",
+        issue_body or summary,
+        "",
+        "## Recommended Action",
+        recommended_action or "(see evidence below)",
+        "",
+        "## Context",
+        f"- **Host:** {settings.ssh_host or '(not configured)'}",
+        f"- **Repo:** {settings.repo_dir or '(not configured)'}",
+        "- **Triggered by:** OpenClaw Autopilot (automated investigation)",
+        "",
+        "## Constraints",
+        "- No secrets or credentials added to source code",
+        "- No destructive operations introduced",
+        "- Changes limited to the minimum required by the issue",
+        "- Match existing code style and conventions",
+        "",
+        "## Acceptance Criteria",
+        "- [ ] Anomaly resolved as described above",
+        "- [ ] Local test passed: `git pull; uvicorn web_app:app --reload;` then verified in browser",
+        "",
+        "## Evidence Pack (last 300 lines)",
+        "```",
+        evidence_snippet,
+        "```",
+    ]
+    return "\n".join(lines)
+
+
+def _autopilot_analyze(evidence: str) -> dict:
+    """Feed the evidence pack to the investigate agent; return parsed JSON dict."""
+    _FALLBACK: dict = {
+        "needs_action": False,
+        "urgency": "low",
+        "summary": "Analysis unavailable.",
+        "recommended_action": "",
+        "action_type": "none",
+        "target_repo": "",
+        "issue_title": "",
+        "issue_body": "",
+        "vibe_command": "",
+    }
 
     if budget.is_exhausted():
         return {
-            "needs_action": False,
-            "urgency": "low",
+            **_FALLBACK,
             "summary": "Budget exhausted — AI analysis skipped.",
-            "recommended_action": "",
         }
 
     ctx_lines = []
@@ -664,7 +809,9 @@ def _autopilot_analyze(raw: str) -> dict:
         ctx_lines.append(f"SSH target: {settings.ssh_host}")
     if settings.repo_dir:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
-    ctx_lines.append(f"System check output:\n{raw}")
+    # Truncate evidence to ~12 000 chars — leaves headroom for system/context tokens
+    # given a 16 k-token model context window (roughly 4 chars/token → ~3 000 tokens).
+    ctx_lines.append(f"Evidence pack:\n{evidence[:12000]}")
     prompt = "\n".join(ctx_lines)
 
     def _call():
@@ -672,16 +819,24 @@ def _autopilot_analyze(raw: str) -> dict:
 
     fut = EXECUTOR.submit(_call)
     try:
-        result = fut.result(timeout=20)
+        result = fut.result(timeout=30)
         _record_run_usage(result)
-        return _json.loads(result.final_output)
+        parsed = _json.loads(result.final_output)
+        # Back-fill missing keys with safe defaults
+        for key, default in _FALLBACK.items():
+            parsed.setdefault(key, default)
+        if not parsed.get("needs_action"):
+            parsed["action_type"] = "none"
+        elif parsed["action_type"] not in ("github_issue", "vibe_action", "none"):
+            parsed["action_type"] = "vibe_action"
+        # Validate target_repo
+        if parsed["action_type"] == "github_issue":
+            tr = parsed.get("target_repo", "")
+            if tr not in _GH_ALLOWED_REPOS:
+                parsed["target_repo"] = settings.github_repo or "leeheggan-droid/openclaw-control"
+        return parsed
     except Exception:
-        return {
-            "needs_action": False,
-            "urgency": "low",
-            "summary": "Analysis unavailable.",
-            "recommended_action": "",
-        }
+        return _FALLBACK
 
 
 def _autopilot_conclude(summary: str, recommended_action: str) -> str:
@@ -689,7 +844,6 @@ def _autopilot_conclude(summary: str, recommended_action: str) -> str:
 
     Returns the command string, or empty string if generation fails.
     """
-
     ctx_lines = []
     if settings.ssh_host:
         ctx_lines.append(f"SSH target: {settings.ssh_host}")
@@ -718,7 +872,7 @@ def _autopilot_conclude(summary: str, recommended_action: str) -> str:
 
 
 def _autopilot_run_once() -> None:
-    """Run a single investigation cycle: detect → investigate → conclude → escalate."""
+    """Run a single investigation cycle: evidence → investigate → conclude → escalate."""
     global _AUTOPILOT_FINDING_COUNTER
 
     if not settings.ssh_host:
@@ -727,24 +881,24 @@ def _autopilot_run_once() -> None:
             _AUTOPILOT_STATE["last_run"] = _now_iso()
         return
 
-    # Phase 1: Detect — gather raw system data via SSH
-    _autopilot_push_event("gather", "🔍 Gathering system data via SSH…")
-    raw = _autopilot_gather_ssh()
+    # Phase 1: Detect — build full evidence pack via SSH
+    _autopilot_push_event("gather", "🔍 Building evidence pack via SSH…")
+    evidence = _autopilot_gather_evidence()
 
-    if not raw:
-        _autopilot_push_event("error", "⚠️ No system data returned from SSH.")
+    if not evidence.strip():
+        _autopilot_push_event("error", "⚠️ No evidence returned from SSH.")
         with _AUTOPILOT_LOCK:
             interval = _AUTOPILOT_STATE["interval"]
             _AUTOPILOT_STATE["last_run"] = _now_iso()
             _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
         return
 
-    # Phase 2: Investigate — LLM analysis of collected data
-    _autopilot_push_event("analyze", "🧠 Investigating system state…")
-    finding = _autopilot_analyze(raw)
+    # Phase 2: Investigate — LLM analysis of the full evidence pack
+    _autopilot_push_event("analyze", "🧠 Investigating evidence pack…")
+    finding = _autopilot_analyze(evidence)
 
     if not finding.get("needs_action"):
-        # All clear — update timestamps, no further action
+        # All clear — resolve silently, update timestamps only
         _autopilot_push_event("clear", f"✅ All clear — {finding.get('summary', 'system healthy')}")
         with _AUTOPILOT_LOCK:
             interval = _AUTOPILOT_STATE["interval"]
@@ -756,17 +910,66 @@ def _autopilot_run_once() -> None:
     summary = finding.get("summary", "")
     recommended = finding.get("recommended_action", "")
     urgency = finding.get("urgency", "low")
+    action_type = finding.get("action_type", "vibe_action")
 
-    # Phase 3: Conclude — generate a concrete remediation command
     _autopilot_push_event("conclude", f"⚠️ Issue detected ({urgency.upper()}): {summary}")
-    _autopilot_push_event("conclude", "💡 Generating remediation command…")
 
-    vibe_command = _autopilot_conclude(summary, recommended)
+    # Phase 3: Conclude — branch by action_type
+    vibe_command = finding.get("vibe_command", "")
+    github_issue_url = ""
+    github_issue_number = None
 
-    if vibe_command:
-        _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
-        _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
+    if action_type == "github_issue":
+        issue_title = (finding.get("issue_title") or f"[Autopilot] {summary[:72]}").strip()
+        issue_body_agent = finding.get("issue_body", "")
+        target_repo = finding.get("target_repo") or settings.github_repo or "leeheggan-droid/openclaw-control"
+
+        # Deduplication: skip if we already opened an issue for the same title/repo
+        fingerprint = _autopilot_issue_fingerprint("github_issue", f"{target_repo}:{issue_title[:60]}")
+        if _autopilot_is_duplicate(fingerprint):
+            _autopilot_push_event(
+                "escalate",
+                f"🔁 Duplicate suppressed — issue already opened for: {issue_title[:60]}",
+            )
+            action_type = "none"  # downgrade to plain finding (no new issue)
+        else:
+            _autopilot_push_event("escalate", f"📂 Opening GitHub issue in {target_repo}…")
+            full_body = _build_autopilot_issue_body(issue_body_agent, summary, recommended, evidence)
+            result = create_github_issue(
+                title=issue_title,
+                body=full_body,
+                repo_full=target_repo,
+                labels=["autopilot", "bug"],
+                assign_copilot=True,
+            )
+            if result:
+                github_issue_url = result["issue_url"]
+                github_issue_number = result["issue_number"]
+                _autopilot_push_event(
+                    "escalate",
+                    f"✅ GitHub issue #{github_issue_number} created: {github_issue_url}",
+                )
+            else:
+                _autopilot_push_event(
+                    "escalate",
+                    "⚠️ Could not create GitHub issue (GITHUB_TOKEN missing or API error) — operator must act manually.",
+                )
+
+    elif action_type == "vibe_action":
+        # State change needed — use agent-generated vibe_command if present, else call planner
+        if not vibe_command:
+            _autopilot_push_event("conclude", "💡 Generating remediation command…")
+            vibe_command = _autopilot_conclude(summary, recommended)
+        if vibe_command:
+            _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
+            _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
+        else:
+            action_text = recommended or "(see finding)"
+            _autopilot_push_event("escalate", f"📋 Recommended action: {action_text}")
+            _autopilot_push_event("escalate", "⏳ Operator review required.")
+
     else:
+        # Plain finding — surface for manual review
         action_text = recommended or "(see finding)"
         _autopilot_push_event("escalate", f"📋 Recommended action: {action_text}")
         _autopilot_push_event("escalate", "⏳ Operator review required.")
@@ -781,7 +984,10 @@ def _autopilot_run_once() -> None:
             "urgency": urgency,
             "summary": summary,
             "recommended_action": recommended,
+            "action_type": action_type,
             "vibe_command": vibe_command,
+            "github_issue_url": github_issue_url,
+            "github_issue_number": github_issue_number,
             "acked": False,
         }
         _AUTOPILOT_STATE["findings"].append(entry)
@@ -790,7 +996,6 @@ def _autopilot_run_once() -> None:
         _AUTOPILOT_STATE["unread"] += 1
         _AUTOPILOT_STATE["last_run"] = _now_iso()
         _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
-
 
 def _autopilot_loop(stop_event: _threading.Event) -> None:
     """Background daemon: run investigations on a fixed interval."""

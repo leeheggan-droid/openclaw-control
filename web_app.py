@@ -5,6 +5,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from openclaw_control.config import settings
+from openclaw_control.github_tools import (
+    ALLOWED_REPOS,
+    gh_headers as _gh_headers,
+    try_assign_copilot as _try_assign_copilot,
+    create_github_issue,
+)
 from openclaw_control.service import (
     handle_message, handle_agent_message,
     start_team_review, get_team_review_events,
@@ -20,12 +26,7 @@ class Message(BaseModel):
     text: str
 
 
-_ALLOWED_REPOS = {
-    "leeheggan-droid/openclaw-crypto",
-    "leeheggan-droid/alpaca_orb_bite_bot",
-    "leeheggan-droid/LinkedIn_Data_Centre_News",
-    "leeheggan-droid/openclaw-control",
-}
+_ALLOWED_REPOS = ALLOWED_REPOS
 
 
 class CopilotRequest(BaseModel):
@@ -56,14 +57,6 @@ class VibePlanRequest(BaseModel):
 
 class VibeExecuteRequest(BaseModel):
     command: str
-
-
-def _gh_headers(token: str) -> dict:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
 
 
 def _build_issue_body(req: CopilotRequest) -> str:
@@ -767,6 +760,8 @@ def index():
     .apUrgency.low   {background:rgba(59,130,246,.18);color:#93c5fd;}
     .apSummary{font-size:13px; color:var(--text); line-height:1.35;}
     .apAction{font-size:12px; color:var(--muted); margin-top:4px;}
+    .apAction a{color:#60a5fa; text-decoration:underline; word-break:break-all;}
+    .apAction a:hover{color:#93c5fd;}
     .apBadge{
       display:inline-block;
       background:rgba(251,113,133,.9);
@@ -833,7 +828,7 @@ def index():
         <div class="badge" id="statusBadge">ready</div>
       </div>
 
-      <div class="teamBtnsBar">
+      <div class="teamBtnsBar" id="teamBtnsBar" style="display:none">
         <button class="teamBtn" id="quickReviewBtn">⚡ Quick team review</button>
         <button class="teamBtn" id="detailedReviewBtn">🔍 Detailed team review</button>
         <button class="teamBtn" id="yearlyReviewBtn">📅 Yearly review</button>
@@ -1099,6 +1094,7 @@ def index():
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
       pane.style.display = (!isTeam && !isVibe && !isAutopilot && key === ag) ? "" : "none";
     }
+    teamBtnsBarEl.style.display  = isTeam      ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
     autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
@@ -1477,6 +1473,7 @@ def index():
   const TEAM_FEED_KEY = "openclaw_team_feed_v1";
   const AGENT_DISPLAY = {pnl: "P&L", quant: "Quant", coo: "COO", system: "System"};
 
+  const teamBtnsBarEl     = document.getElementById("teamBtnsBar");
   const quickReviewBtn    = document.getElementById("quickReviewBtn");
   const detailedReviewBtn = document.getElementById("detailedReviewBtn");
   const yearlyReviewBtn   = document.getElementById("yearlyReviewBtn");
@@ -1891,6 +1888,18 @@ def index():
       row.appendChild(resultEl);
     }
 
+    if (f.github_issue_url) {
+      const issueEl = document.createElement("div");
+      issueEl.className = "apAction";
+      const issueLink = document.createElement("a");
+      issueLink.href = f.github_issue_url;
+      issueLink.target = "_blank";
+      issueLink.rel = "noopener noreferrer";
+      issueLink.textContent = `🐛 GitHub issue #${f.github_issue_number || "?"} created automatically`;
+      issueEl.appendChild(issueLink);
+      row.appendChild(issueEl);
+    }
+
     return row;
   }
 
@@ -2021,44 +2030,6 @@ def index():
 """
 
 
-def _try_assign_copilot(owner: str, repo: str, issue_number: int, token: str) -> str:
-    """Attempt to assign Copilot to an issue. Returns 'assigned' or 'manual_required'."""
-    headers = _gh_headers(token)
-    # Discover copilot-like login from repo assignees
-    copilot_login = None
-    try:
-        r = _requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}/assignees",
-            headers=headers,
-            timeout=10,
-        )
-        if r.ok:
-            for user in r.json():
-                login = user.get("login", "")
-                if "copilot" in login.lower():
-                    copilot_login = login
-                    break
-    except Exception:
-        pass
-
-    if not copilot_login:
-        return "manual_required"
-
-    try:
-        r = _requests.post(
-            f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/assignees",
-            json={"assignees": [copilot_login]},
-            headers=headers,
-            timeout=10,
-        )
-        if r.ok:
-            return "assigned"
-    except Exception:
-        pass
-
-    return "manual_required"
-
-
 @app.post("/copilot")
 def copilot_issue(req: CopilotRequest):
     token = settings.github_token
@@ -2066,46 +2037,35 @@ def copilot_issue(req: CopilotRequest):
         return {"error": "GITHUB_TOKEN is not configured. Set the GITHUB_TOKEN environment variable."}
 
     # Resolve target repo: client-supplied value wins if it is in the allowed list.
-    if req.target_repo and req.target_repo in _ALLOWED_REPOS:
-        repo_full = req.target_repo
-    else:
-        repo_full = settings.github_repo
+    repo_full = (
+        req.target_repo
+        if (req.target_repo and req.target_repo in _ALLOWED_REPOS)
+        else settings.github_repo
+    )
 
-    parts = repo_full.split("/", 1)
-    if len(parts) != 2 or not parts[0] or not parts[1]:
+    if not repo_full or len(repo_full.split("/", 1)) != 2:
         return {"error": "Target repo must be in 'owner/repo' format"}
 
-    owner, repo = parts
     title_text = req.goal.strip()[:80] if req.goal.strip() else "Task from OpenClaw UI"
     title = f"[Copilot] {title_text}"
     body = _build_issue_body(req)
 
-    url = f"https://api.github.com/repos/{owner}/{repo}/issues"
-    payload = {
-        "title": title,
-        "body": body,
-        "labels": ["copilot"],
-    }
+    result = create_github_issue(
+        title=title,
+        body=body,
+        repo_full=repo_full,
+        labels=["copilot"],
+        token=token,
+        assign_copilot=True,
+    )
+    if result is None:
+        return {"error": "GitHub API request failed. Check GITHUB_TOKEN and repo permissions."}
 
-    try:
-        r = _requests.post(url, json=payload, headers=_gh_headers(token), timeout=15)
-        if not r.ok:
-            return {"error": f"GitHub API error {r.status_code}: {r.text[:300]}"}
-        data = r.json()
-        issue_number = data["number"]
-        issue_url = data["html_url"]
-    except _requests.exceptions.RequestException as e:
-        return {"error": f"GitHub API request failed: {type(e).__name__}"}
-    except Exception:
-        return {"error": "Unexpected error creating issue. Check server logs."}
-
-    # Attempt to assign Copilot to the issue
-    assignment = _try_assign_copilot(owner, repo, issue_number, token)
     return {
-        "issue_url": issue_url,
-        "issue_number": issue_number,
-        "assignment": assignment,
-        "used_repo": repo_full,
+        "issue_url": result["issue_url"],
+        "issue_number": result["issue_number"],
+        "assignment": result["assignment"],
+        "used_repo": result["used_repo"],
     }
 
 
