@@ -14,11 +14,20 @@ class Message(BaseModel):
     text: str
 
 
+_ALLOWED_REPOS = {
+    "leeheggan-droid/openclaw-crypto",
+    "leeheggan-droid/alpaca_orb_bite_bot",
+    "leeheggan-droid/LinkedIn_Data_Centre_News",
+    "leeheggan-droid/openclaw-control",
+}
+
+
 class CopilotRequest(BaseModel):
     goal: str
     last_user_msg: str = ""
     last_agent_response: str = ""
     shell_output: str = ""
+    target_repo: str = ""  # empty string means "use server default"
 
 
 class AgentMessage(BaseModel):
@@ -107,7 +116,9 @@ def _build_issue_body(req: CopilotRequest) -> str:
 def config():
     return {
         "ssh_host": settings.ssh_host,
+        "repo_dir": settings.repo_dir,
         "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
+        "allowed_repos": sorted(_ALLOWED_REPOS),
     }
 
 
@@ -400,6 +411,30 @@ def index():
     }
     .copilotBtn:hover{background: rgba(34,197,94,.22);}
     .copilotBtn:active{transform: scale(.98);}
+
+    .repoSelect{
+      appearance:none;
+      -webkit-appearance:none;
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--border);
+      border-radius:999px;
+      color:var(--text);
+      font-family:var(--sans);
+      font-size:11px;
+      padding:4px 8px;
+      cursor:pointer;
+      outline:none;
+      transition:background .15s;
+    }
+    .repoSelect:hover{background:rgba(255,255,255,.05);}
+    .repoSelect option{background:#0b0f14; color:var(--text);}
+
+    .repoBadge{
+      font-size:11px;
+      color:rgba(34,197,94,.85);
+      user-select:none;
+      white-space:nowrap;
+    }
 
     .copilotMsgBtn{
       display:inline-block;
@@ -765,8 +800,16 @@ def index():
 
         <div class="hintBar">
           <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code></div>
-          <div style="display:flex;gap:12px;align-items:center;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span>Shell: <code>!uptime</code>, <code>!docker ps</code></span>
+            <select class="repoSelect" id="repoSelect" title="Target repo for Copilot issues">
+              <option value="">Auto</option>
+              <option value="leeheggan-droid/openclaw-crypto">openclaw-crypto</option>
+              <option value="leeheggan-droid/alpaca_orb_bite_bot">alpaca_orb_bite_bot</option>
+              <option value="leeheggan-droid/LinkedIn_Data_Centre_News">LinkedIn_Data_Centre_News</option>
+              <option value="leeheggan-droid/openclaw-control">openclaw-control</option>
+            </select>
+            <span class="repoBadge" id="repoBadge"></span>
             <button class="copilotBtn" id="copilotBtn" title="Create a Copilot GitHub Issue from current context">🤖 Fix via Copilot</button>
           </div>
         </div>
@@ -1133,17 +1176,72 @@ def index():
   }
 
   // Fetch SSH host label from server config
+  let serverRepoDir = "";
   fetch("/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
+    if (cfg && cfg.repo_dir) serverRepoDir = cfg.repo_dir;
+    if (cfg && Array.isArray(cfg.allowed_repos) && cfg.allowed_repos.length) {
+      ALLOWED_REPOS.length = 0;
+      cfg.allowed_repos.forEach(r => ALLOWED_REPOS.push(r));
+    }
+    updateRepoBadge();
   }).catch(() => {});
 
   // --- Copilot bridge ---
 
+  const ALLOWED_REPOS = [
+    "leeheggan-droid/openclaw-crypto",
+    "leeheggan-droid/alpaca_orb_bite_bot",
+    "leeheggan-droid/LinkedIn_Data_Centre_News",
+    "leeheggan-droid/openclaw-control",
+  ];
+
+  const repoSelectEl = document.getElementById("repoSelect");
+  const repoBadgeEl  = document.getElementById("repoBadge");
+
+  function autoDetectRepo() {
+    const dir   = (serverRepoDir || "").toLowerCase();
+    const shell = getShellOutput().toLowerCase();
+    if (dir.includes("openclaw-crypto")) {
+      return "leeheggan-droid/openclaw-crypto";
+    }
+    if (shell.includes("alpaca_orb_bite_bot")) {
+      return "leeheggan-droid/alpaca_orb_bite_bot";
+    }
+    if (shell.includes("linkedin_data_centre_news") || shell.includes("linkedindatacentrenews")) {
+      return "leeheggan-droid/LinkedIn_Data_Centre_News";
+    }
+    return "leeheggan-droid/openclaw-control";
+  }
+
+  function getTargetRepo() {
+    const sel = repoSelectEl ? repoSelectEl.value : "";
+    return sel && ALLOWED_REPOS.includes(sel) ? sel : autoDetectRepo();
+  }
+
+  function updateRepoBadge() {
+    if (!repoBadgeEl) return;
+    const sel = repoSelectEl ? repoSelectEl.value : "";
+    if (sel && ALLOWED_REPOS.includes(sel)) {
+      repoBadgeEl.textContent = "";
+    } else {
+      const detected = autoDetectRepo();
+      const short = detected.split("/")[1] || detected;
+      repoBadgeEl.textContent = "→ " + short;
+    }
+  }
+
+  if (repoSelectEl) {
+    repoSelectEl.addEventListener("change", updateRepoBadge);
+  }
+
   async function triggerCopilot(goal, lastUserMsg, lastAgentMsg) {
     if (!goal) return;
     const shellOutput = getShellOutput();
+    const targetRepo  = getTargetRepo();
+    const repoShort   = targetRepo.split("/")[1] || targetRepo;
 
-    const statusMsg = "⏳ Creating Copilot issue on GitHub…";
+    const statusMsg = "⏳ Creating Copilot issue in " + repoShort + "…";
     addChat("agent", statusMsg);
     histories[activeAgent].push({role: "agent", text: statusMsg});
     saveHistory(activeAgent);
@@ -1158,6 +1256,7 @@ def index():
           last_user_msg: lastUserMsg || "",
           last_agent_response: lastAgentMsg || "",
           shell_output: shellOutput,
+          target_repo: targetRepo,
         })
       });
       data = await res.json();
@@ -1177,9 +1276,11 @@ def index():
       return;
     }
 
-    const issueUrl = data.issue_url;
-    const issueNum = data.issue_number;
-    let msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl;
+    const issueUrl  = data.issue_url;
+    const issueNum  = data.issue_number;
+    const usedRepo  = data.used_repo || targetRepo;
+    const usedShort = usedRepo.split("/")[1] || usedRepo;
+    let msg = "✅ Copilot issue #" + issueNum + " created in " + usedShort + ":\\n" + issueUrl;
     if (data.assignment === "manual_required") {
       msg += "\\n\\n⚠️ Issue created. Assign Copilot manually in GitHub (Assignees → Copilot).";
     } else {
@@ -1189,17 +1290,19 @@ def index():
     histories[activeAgent].push({role: "agent", text: msg});
     saveHistory(activeAgent);
 
-    pollForPR(issueNum);
+    pollForPR(issueNum, usedRepo);
   }
 
-  function pollForPR(issueNumber) {
+  function pollForPR(issueNumber, repo) {
+    const repoParam = repo ? encodeURIComponent(repo) : "";
     let attempts = 0;
     const maxAttempts = 20; // 20 × 15s = 5 min
     const timer = setInterval(async () => {
       attempts++;
       if (attempts > maxAttempts) { clearInterval(timer); return; }
       try {
-        const res = await fetch("/copilot/poll/" + issueNumber);
+        const url = "/copilot/poll/" + issueNumber + (repoParam ? "?repo=" + repoParam : "");
+        const res = await fetch(url);
         const data = await res.json();
         if (data.pr_url) {
           clearInterval(timer);
@@ -1605,9 +1708,15 @@ def copilot_issue(req: CopilotRequest):
     if not token:
         return {"error": "GITHUB_TOKEN is not configured. Set the GITHUB_TOKEN environment variable."}
 
-    parts = settings.github_repo.split("/", 1)
+    # Resolve target repo: client-supplied value wins if it is in the allowed list.
+    if req.target_repo and req.target_repo in _ALLOWED_REPOS:
+        repo_full = req.target_repo
+    else:
+        repo_full = settings.github_repo
+
+    parts = repo_full.split("/", 1)
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        return {"error": "GITHUB_REPO must be in 'owner/repo' format"}
+        return {"error": "Target repo must be in 'owner/repo' format"}
 
     owner, repo = parts
     title_text = req.goal.strip()[:80] if req.goal.strip() else "Task from OpenClaw UI"
@@ -1639,21 +1748,24 @@ def copilot_issue(req: CopilotRequest):
         "issue_url": issue_url,
         "issue_number": issue_number,
         "assignment": assignment,
+        "used_repo": repo_full,
     }
 
 
 @app.get("/copilot/poll/{issue_number}")
-def copilot_poll(issue_number: int):
+def copilot_poll(issue_number: int, repo: str = ""):
     token = settings.github_token
     if not token:
         return {"pr_url": None}
 
-    parts = settings.github_repo.split("/", 1)
+    # Use client-supplied repo if it is in the allowed list, else fall back to server default.
+    repo_full = repo if (repo and repo in _ALLOWED_REPOS) else settings.github_repo
+    parts = repo_full.split("/", 1)
     if len(parts) != 2:
         return {"pr_url": None}
 
-    owner, repo = parts
-    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/timeline"
+    owner, repo_name = parts
+    url = f"https://api.github.com/repos/{owner}/{repo_name}/issues/{issue_number}/timeline"
 
     try:
         r = _requests.get(url, headers=_gh_headers(token), timeout=10)
