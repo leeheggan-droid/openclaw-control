@@ -122,7 +122,7 @@ def cheap_chat(
         data = resp.json()
         return data["choices"][0]["message"]["content"]
     except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "?"
+        status = exc.response.status_code if exc.response is not None else "unknown"
         # Avoid leaking the response body which may contain the API key in error messages
         return f"❌ {provider.capitalize()} API error (HTTP {status}). Check your API key and quota."
     except requests.RequestException as exc:

@@ -66,7 +66,7 @@ class VibeExecuteRequest(BaseModel):
 class CheapChatRequest(BaseModel):
     message: str
     provider: str = "groq"
-    history: list = []  # list of {role, content} dicts
+    history: list[dict] = []  # list of {role, content} dicts
 
 
 def _build_issue_body(req: CopilotRequest) -> str:
