@@ -13,5 +13,9 @@ class Settings:
     github_repo: str = os.getenv("GITHUB_REPO", "leeheggan-droid/openclaw-control")
     vibe_workdir: str = os.getenv("OPENCLAW_VIBE_WORKDIR", "")
     autopilot_interval: int = int(os.getenv("OPENCLAW_AUTOPILOT_INTERVAL", "300"))
+    # Cheap Chat inference providers
+    groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
+    cerebras_api_key: str = os.getenv("CEREBRAS_API_KEY", "")
 
 settings = Settings()
