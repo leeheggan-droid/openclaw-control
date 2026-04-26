@@ -814,7 +814,12 @@ def index():
 
     const issueUrl = data.issue_url;
     const issueNum = data.issue_number;
-    const msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl + "\\n\\nMonitoring for PR…";
+    let msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl;
+    if(data.assignment === "manual_required"){
+      msg += "\\n\\n⚠️ Issue created. Assign Copilot manually in GitHub (Assignees → Copilot).";
+    } else {
+      msg += "\\n\\nMonitoring for PR…";
+    }
     addChat("agent", msg);
     history.push({role:"agent", text: msg});
     saveHistory();
@@ -859,6 +864,44 @@ def index():
 """
 
 
+def _try_assign_copilot(owner: str, repo: str, issue_number: int, token: str) -> str:
+    """Attempt to assign Copilot to an issue. Returns 'assigned' or 'manual_required'."""
+    headers = _gh_headers(token)
+    # Discover copilot-like login from repo assignees
+    copilot_login = None
+    try:
+        r = _requests.get(
+            f"https://api.github.com/repos/{owner}/{repo}/assignees",
+            headers=headers,
+            timeout=10,
+        )
+        if r.ok:
+            for user in r.json():
+                login = user.get("login", "")
+                if "copilot" in login.lower():
+                    copilot_login = login
+                    break
+    except Exception:
+        pass
+
+    if not copilot_login:
+        return "manual_required"
+
+    try:
+        r = _requests.post(
+            f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/assignees",
+            json={"assignees": [copilot_login]},
+            headers=headers,
+            timeout=10,
+        )
+        if r.ok:
+            return "assigned"
+    except Exception:
+        pass
+
+    return "manual_required"
+
+
 @app.post("/copilot")
 def copilot_issue(req: CopilotRequest):
     token = settings.github_token
@@ -879,7 +922,6 @@ def copilot_issue(req: CopilotRequest):
         "title": title,
         "body": body,
         "labels": ["copilot"],
-        "assignees": ["copilot"],
     }
 
     try:
@@ -887,14 +929,20 @@ def copilot_issue(req: CopilotRequest):
         if not r.ok:
             return {"error": f"GitHub API error {r.status_code}: {r.text[:300]}"}
         data = r.json()
-        return {
-            "issue_url": data["html_url"],
-            "issue_number": data["number"],
-        }
+        issue_number = data["number"]
+        issue_url = data["html_url"]
     except _requests.exceptions.RequestException as e:
         return {"error": f"GitHub API request failed: {type(e).__name__}"}
     except Exception:
         return {"error": "Unexpected error creating issue. Check server logs."}
+
+    # Attempt to assign Copilot to the issue
+    assignment = _try_assign_copilot(owner, repo, issue_number, token)
+    return {
+        "issue_url": issue_url,
+        "issue_number": issue_number,
+        "assignment": assignment,
+    }
 
 
 @app.get("/copilot/poll/{issue_number}")
