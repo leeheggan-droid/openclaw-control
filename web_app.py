@@ -1,3 +1,5 @@
+import requests as _requests
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -10,6 +12,72 @@ app = FastAPI()
 
 class Message(BaseModel):
     text: str
+
+
+class CopilotRequest(BaseModel):
+    goal: str
+    last_user_msg: str = ""
+    last_agent_response: str = ""
+    shell_output: str = ""
+
+
+def _gh_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _build_issue_body(req: CopilotRequest) -> str:
+    goal = req.goal or "(no goal specified)"
+    last_user = req.last_user_msg or "(none)"
+    last_agent = req.last_agent_response or "(none)"
+
+    shell_lines = (req.shell_output or "").splitlines()[-200:]
+    shell = "\n".join(shell_lines) or "(no shell output)"
+
+    lines = [
+        "## Goal",
+        goal,
+        "",
+        "## Context",
+        f"- **Host:** {settings.ssh_host or '(not configured)'}",
+        f"- **Repo:** {settings.repo_dir or '(not configured)'}",
+        "- **Triggered from:** OpenClaw Web UI",
+        "",
+        "## Reproduction steps (if fixing a bug)",
+        "**Last user message:**",
+        "```",
+        last_user,
+        "```",
+        "",
+        "**Last agent response:**",
+        "```",
+        last_agent,
+        "```",
+        "",
+        "## Constraints",
+        "- No secrets or credentials added to source code",
+        "- No destructive operations introduced",
+        "- Changes limited to the minimum required by the issue",
+        "- Match existing code style and conventions",
+        "",
+        "## Acceptance criteria",
+        "- [ ] Goal achieved as described above",
+        "- [ ] Local test passed: `git pull; uvicorn web_app:app --reload;` then verified in browser",
+        "",
+        "## Shell Output (last 200 lines)",
+        "```",
+        shell,
+        "```",
+        "",
+        "## Local test checklist",
+        "- [ ] `git pull`",
+        "- [ ] `uvicorn web_app:app --reload`",
+        "- [ ] Verified expected behaviour in browser",
+    ]
+    return "\n".join(lines)
 
 
 @app.get("/config")
@@ -290,6 +358,38 @@ def index():
       body{overflow:auto;}
       .app{grid-template-columns:1fr; height:auto;}
     }
+
+    /* Copilot bridge buttons */
+    .copilotBtn{
+      padding:4px 12px;
+      border:1px solid rgba(34,197,94,.45);
+      background: rgba(34,197,94,.10);
+      color: rgba(230,238,252,.85);
+      border-radius:999px;
+      font-size:12px;
+      cursor:pointer;
+      font-family: var(--sans);
+      transition: background .15s ease;
+      white-space:nowrap;
+    }
+    .copilotBtn:hover{background: rgba(34,197,94,.22);}
+    .copilotBtn:active{transform: scale(.98);}
+
+    .copilotMsgBtn{
+      display:inline-block;
+      margin-top:7px;
+      padding:3px 10px;
+      border:1px solid rgba(34,197,94,.30);
+      background: rgba(34,197,94,.07);
+      color: rgba(230,238,252,.65);
+      border-radius:999px;
+      font-size:11px;
+      cursor:pointer;
+      font-family: var(--sans);
+      transition: background .15s ease;
+    }
+    .copilotMsgBtn:hover{background: rgba(34,197,94,.18); color: rgba(230,238,252,.90);}
+    .copilotMsgBtn:active{transform: scale(.98);}
   </style>
 </head>
 
@@ -340,8 +440,11 @@ def index():
         </div>
 
         <div class="hintBar">
-          <div>Enter = send • Shift+Enter = newline</div>
-          <div>Direct shell: <code>!uptime</code>, <code>!docker ps</code></div>
+          <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code></div>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <span>Shell: <code>!uptime</code>, <code>!docker ps</code></span>
+            <button class="copilotBtn" id="copilotBtn" title="Create a Copilot GitHub Issue from current context">🤖 Fix via Copilot</button>
+          </div>
         </div>
 
         <input id="fileInput" type="file" hidden />
@@ -427,6 +530,21 @@ def index():
       bubble.appendChild(holder);
     }
     wrap.appendChild(bubble);
+
+    // Add "Fix via Copilot" button below each agent message (skip status messages)
+    if(role === "agent" && text && !/^[⏳✅🚀❌]/.test(text)){
+      const capturedText = text;
+      const copBtn = document.createElement("button");
+      copBtn.className = "copilotMsgBtn";
+      copBtn.textContent = "🤖 Fix via Copilot";
+      copBtn.onclick = () => {
+        const lastUser = [...history].reverse().find(h => h.role === "user");
+        const goal = prompt("Describe the goal for Copilot:", (lastUser ? lastUser.text : "").slice(0, 120)) || "";
+        if(!goal) return;
+        triggerCopilot(goal, lastUser ? lastUser.text : "", capturedText);
+      };
+      wrap.appendChild(copBtn);
+    }
 
     row.appendChild(wrap);
     chatEl.appendChild(row);
@@ -526,6 +644,23 @@ def index():
     // If direct command, run in terminal pane
     if(text.startsWith("!")){
       await runQuick(text.slice(1).trim());
+      return;
+    }
+
+    // Handle /copilot and "fix via copilot:" commands
+    const lc = text.toLowerCase();
+    if(lc.startsWith("/copilot") || lc.startsWith("fix via copilot:")){
+      let goal;
+      if(lc.startsWith("/copilot")){
+        goal = text.slice("/copilot".length).trim();
+      } else {
+        goal = text.slice("fix via copilot:".length).trim();
+      }
+      const prevHistory = history.slice(0, -1);
+      const lastUser = [...prevHistory].reverse().find(h => h.role === "user");
+      const lastAgent = [...prevHistory].reverse().find(h => h.role === "agent");
+      if(!goal) goal = prompt("Describe the goal for Copilot:", lastUser ? lastUser.text.slice(0,120) : "") || "";
+      if(goal) await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
       return;
     }
 
@@ -629,10 +764,166 @@ def index():
   fetch("/config").then(r => r.json()).then(cfg => {
     if(cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
   }).catch(() => {});
+
+  // --- Copilot bridge ---
+
+  function getShellOutput(){
+    return Array.from(terminalEl.querySelectorAll(".termLine"))
+      .map(el => el.textContent)
+      .slice(-200)
+      .join("\\n");
+  }
+
+  async function triggerCopilot(goal, lastUserMsg, lastAgentMsg){
+    if(!goal) return;
+    const shellOutput = getShellOutput();
+
+    const statusMsg = "⏳ Creating Copilot issue on GitHub…";
+    addChat("agent", statusMsg);
+    history.push({role:"agent", text: statusMsg});
+    saveHistory();
+
+    let data;
+    try{
+      const res = await fetch("/copilot", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          goal,
+          last_user_msg: lastUserMsg || "",
+          last_agent_response: lastAgentMsg || "",
+          shell_output: shellOutput,
+        })
+      });
+      data = await res.json();
+    } catch(err){
+      const msg = "❌ Copilot error: " + (err && err.message ? err.message : String(err));
+      addChat("agent", msg);
+      history.push({role:"agent", text: msg});
+      saveHistory();
+      return;
+    }
+
+    if(data.error){
+      const msg = "❌ Copilot issue failed: " + data.error;
+      addChat("agent", msg);
+      history.push({role:"agent", text: msg});
+      saveHistory();
+      return;
+    }
+
+    const issueUrl = data.issue_url;
+    const issueNum = data.issue_number;
+    const msg = "✅ Copilot issue #" + issueNum + " created:\\n" + issueUrl + "\\n\\nMonitoring for PR…";
+    addChat("agent", msg);
+    history.push({role:"agent", text: msg});
+    saveHistory();
+
+    pollForPR(issueNum);
+  }
+
+  function pollForPR(issueNumber){
+    let attempts = 0;
+    const maxAttempts = 20; // 20 × 15s = 5 min
+    const timer = setInterval(async () => {
+      attempts++;
+      if(attempts > maxAttempts){
+        clearInterval(timer);
+        return;
+      }
+      try{
+        const res = await fetch("/copilot/poll/" + issueNumber);
+        const data = await res.json();
+        if(data.pr_url){
+          clearInterval(timer);
+          const msg = "🚀 Copilot PR created:\\n" + data.pr_url;
+          addChat("agent", msg);
+          history.push({role:"agent", text: msg});
+          saveHistory();
+        }
+      } catch{}
+    }, 15000);
+  }
+
+  document.getElementById("copilotBtn").onclick = async () => {
+    const lastUser = [...history].reverse().find(h => h.role === "user");
+    const lastAgent = [...history].reverse().find(h => h.role === "agent");
+    const def = lastUser ? lastUser.text.slice(0, 120) : "";
+    const goal = prompt("Describe the goal for Copilot:", def) || "";
+    if(!goal) return;
+    await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
+  };
 </script>
 </body>
 </html>
 """
+
+
+@app.post("/copilot")
+def copilot_issue(req: CopilotRequest):
+    token = settings.github_token
+    if not token:
+        return {"error": "GITHUB_TOKEN is not configured. Set the GITHUB_TOKEN environment variable."}
+
+    parts = settings.github_repo.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return {"error": "GITHUB_REPO must be in 'owner/repo' format"}
+
+    owner, repo = parts
+    title_text = req.goal.strip()[:80] if req.goal.strip() else "Task from OpenClaw UI"
+    title = f"[Copilot] {title_text}"
+    body = _build_issue_body(req)
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+    payload = {
+        "title": title,
+        "body": body,
+        "labels": ["copilot"],
+        "assignees": ["copilot"],
+    }
+
+    try:
+        r = _requests.post(url, json=payload, headers=_gh_headers(token), timeout=15)
+        if not r.ok:
+            return {"error": f"GitHub API error {r.status_code}: {r.text[:300]}"}
+        data = r.json()
+        return {
+            "issue_url": data["html_url"],
+            "issue_number": data["number"],
+        }
+    except _requests.exceptions.RequestException as e:
+        return {"error": f"GitHub API request failed: {type(e).__name__}"}
+    except Exception:
+        return {"error": "Unexpected error creating issue. Check server logs."}
+
+
+@app.get("/copilot/poll/{issue_number}")
+def copilot_poll(issue_number: int):
+    token = settings.github_token
+    if not token:
+        return {"pr_url": None}
+
+    parts = settings.github_repo.split("/", 1)
+    if len(parts) != 2:
+        return {"pr_url": None}
+
+    owner, repo = parts
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/timeline"
+
+    try:
+        r = _requests.get(url, headers=_gh_headers(token), timeout=10)
+        if not r.ok:
+            return {"pr_url": None}
+        for event in r.json():
+            if event.get("event") == "cross-referenced":
+                source = event.get("source", {})
+                if source.get("type") == "pull_request":
+                    pr = source.get("issue", {})
+                    if pr.get("html_url"):
+                        return {"pr_url": pr["html_url"]}
+        return {"pr_url": None}
+    except Exception:
+        return {"pr_url": None}
 
 
 @app.post("/message")
