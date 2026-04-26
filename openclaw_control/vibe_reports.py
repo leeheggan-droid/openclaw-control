@@ -93,6 +93,44 @@ def _build_reports() -> dict[str, list[str]]:
             f"grep -RIn 'HALT\\|halt_state\\|is_halted' {repo} 2>/dev/null | head -10",
         ],
 
+        # ── Per-trade granular analytics (gross/net P&L, fees, slippage, reasons) ─
+        "per_trade_analytics": [
+            # 1. SQLite trade DB — most structured source; try common file names.
+            (
+                f"find {repo} -maxdepth 6 \\( -name 'trades.sqlite' -o -name 'trade*.db' "
+                f"-o -name '*trades*.sqlite' \\) 2>/dev/null | head -n 1 | "
+                f"xargs -I{{}} sqlite3 {{}} "
+                f"\"SELECT timestamp,symbol,side,size,fill_price,"
+                f"COALESCE(gross_pnl,''),COALESCE(fee,''),COALESCE(net_pnl,''),"
+                f"COALESCE(slippage,''),COALESCE(reason,'') "
+                f"FROM trades ORDER BY timestamp DESC LIMIT 50;\" "
+                f"2>/dev/null || echo '[no trades sqlite found]'"
+            ),
+            # 2. CSV trade log files — flat-file fallback.
+            (
+                f"find {repo} -maxdepth 6 \\( -name 'trade*.csv' -o -name '*trades*.csv' "
+                f"-o -name 'pnl*.csv' -o -name '*pnl*.csv' \\) 2>/dev/null | "
+                f"head -n 3 | xargs -r head -n 52 2>/dev/null || echo '[no trade csv found]'"
+            ),
+            # 3. Docker log grep — fee / slippage / reason / gross / net keywords.
+            (
+                "docker logs --tail=3000 alpaca_orb_bite_bot 2>&1 | "
+                "grep -iE 'fee|slippage|reason|gross|net_pnl|fill_price' | tail -60 "
+                "2>/dev/null || echo '[no matches in alpaca_orb_bite_bot]'"
+            ),
+            (
+                "docker logs --tail=3000 openclaw-orchestrator 2>&1 | "
+                "grep -iE 'fee|slippage|reason|gross|net_pnl|fill_price' | tail -60 "
+                "2>/dev/null || echo '[no matches in openclaw-orchestrator]'"
+            ),
+            # 4. Performance-analyser container — may have structured per-trade rows.
+            (
+                "docker logs --tail=500 performance_analyser 2>&1 | "
+                "grep -iE 'fee|slippage|reason|gross|net|trade' | tail -40 "
+                "2>/dev/null || echo '[no matches in performance_analyser]'"
+            ),
+        ],
+
         # ── Git HEAD on VPS (used for fingerprinting) ─────────────────────────
         "git_head": [
             f"cd {repo} && git rev-parse HEAD 2>/dev/null || echo '[unavailable]'",
