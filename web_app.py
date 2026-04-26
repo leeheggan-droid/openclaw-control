@@ -1962,6 +1962,7 @@ def index():
     }
   }
 
+  function renderTeamFeed() {
     teamFeedEl.innerHTML = "";
     teamFeedEvents.forEach(ev => teamFeedEl.appendChild(createFeedRow(ev)));
     teamFeedEl.scrollTop = teamFeedEl.scrollHeight;
