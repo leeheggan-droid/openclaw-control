@@ -679,6 +679,8 @@ def index():
     }
     .feedContent.feedAction a{color:#fde047;text-decoration:underline;}
     .feedType.proposal{border-color:rgba(99,202,183,.4);color:#6ecfc3;}
+    .feedType.action_pending{border-color:rgba(251,191,36,.4);color:rgba(251,191,36,.9);}
+    .feedType.no-action{border-color:rgba(156,163,175,.3);color:#9ca3af;}
 
     /* Proposal confirmation cards */
     .proposalCard{
@@ -1833,8 +1835,8 @@ def index():
 
     row.appendChild(meta);
 
-    // Show content for message/error/run-start/cancelled/action events
-    const showContent = ev.content && ["message","error","run-start","cancelled","action"].includes(ev.type);
+    // Show content for message/error/run-start/cancelled/action/action_pending/no-action events
+    const showContent = ev.content && ["message","error","run-start","cancelled","action","action_pending","no-action"].includes(ev.type);
     if (showContent) {
       const content = document.createElement("div");
       content.className = "feedContent" + (ev.type === "action" ? " feedAction" : "");

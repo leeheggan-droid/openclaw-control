@@ -6,13 +6,16 @@ The system proposes a GitHub issue for EVERY actionable item found in the COO
 decision memo.  The operator confirms (or cancels) each one — the system never
 auto-creates issues without an explicit operator confirmation.
 
-When the target repository is ambiguous (settings.github_repo is empty or not
-set), proposal events include ``repo_ambiguous=True`` and the full allowed_repos
-list so the UI can ask the operator to pick once, not on every action.
+When the target repository is ambiguous (more than one repo matches the content
+signals), proposal events include ``repo_ambiguous=True`` and the candidate
+allowed_repos list so the UI can ask the operator to pick.
 
 Public API
 ----------
-extract_proposals(coo_output, github_repo, allowed_repos) -> list[dict]
+proposal_fingerprint(title) -> str
+    Return a 12-char hex fingerprint of a proposal title for 24h dedup.
+
+extract_proposals(coo_output, github_repo, allowed_repos, seen_fps=None) -> list[dict]
     Parse the COO memo and return proposal dicts ready to emit as feed events.
 
 build_proposal_issue_body(coo_memo, action_text) -> str
@@ -21,6 +24,7 @@ build_proposal_issue_body(coo_memo, action_text) -> str
 
 from __future__ import annotations
 
+import hashlib as _hashlib
 import re
 
 # Matches the "Next actions" section and its numbered items.
@@ -40,6 +44,15 @@ _COPILOT_TASK_RE = re.compile(
 # Minimum action text length to skip trivially short or empty lines.
 _MIN_ACTION_LEN = 8
 
+# Number of hex characters in the proposal fingerprint.
+_FINGERPRINT_LEN = 12
+
+
+def proposal_fingerprint(title: str) -> str:
+    """Return a short hex fingerprint for a proposal title (used for 24h dedup)."""
+    return _hashlib.sha256(title.strip().lower().encode()).hexdigest()[:_FINGERPRINT_LEN]
+
+
 # Maximum length of the GitHub issue title (GitHub enforces 256 chars but
 # shorter titles are more readable in list views).
 _MAX_ISSUE_TITLE_LEN = 72
@@ -52,6 +65,7 @@ def extract_proposals(
     coo_output: str,
     github_repo: str | None,
     allowed_repos: frozenset,
+    seen_fps: set[str] | None = None,
 ) -> list[dict]:
     """Extract actionable proposals from a COO decision memo.
 
@@ -63,6 +77,10 @@ def extract_proposals(
       repo           : str | None — pre-selected repo, or None when ambiguous
       repo_ambiguous : bool       — True when the operator must choose the repo
       allowed_repos  : list[str]  — sorted list for the UI dropdown
+      fingerprint    : str        — 12-char hex used for 24h deduplication
+
+    ``seen_fps`` is an optional set of fingerprints already emitted within the
+    last 24 h; any proposal whose fingerprint is in this set is skipped.
     """
     if not coo_output:
         return []
@@ -80,6 +98,9 @@ def extract_proposals(
         key = text.lower()[:_DEDUP_KEY_LEN]
         if key in seen:
             return
+        fp = proposal_fingerprint(text)
+        if seen_fps and fp in seen_fps:
+            return
         seen.add(key)
         proposals.append({
             "type": "proposal",
@@ -88,6 +109,7 @@ def extract_proposals(
             "repo": github_repo if not repo_ambiguous else None,
             "repo_ambiguous": repo_ambiguous,
             "allowed_repos": sorted_repos,
+            "fingerprint": fp,
         })
 
     # 1. Numbered next-action items (primary — trigger-happy source).
