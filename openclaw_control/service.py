@@ -1,4 +1,5 @@
 import atexit as _atexit
+import json as _json
 import subprocess
 import threading as _threading
 import time as _time
@@ -605,8 +606,13 @@ _AUTOPILOT_STATE: dict = {
     "last_clear": None,  # ISO timestamp of last all-clear
     "interval": settings.autopilot_interval,
     "_next_run_mono": None,  # monotonic time of next scheduled run
+    "events": [],   # live progress events (max 200)
 }
 _AUTOPILOT_FINDING_COUNTER = 0
+_AUTOPILOT_EVENT_COUNTER = 0
+
+# Timeout (seconds) for the vibe_planner conclude step inside each cycle.
+_AUTOPILOT_CONCLUDE_TIMEOUT = 15
 
 # SSH commands run on every autopilot investigation cycle.
 _INVESTIGATE_CMD = (
@@ -615,6 +621,21 @@ _INVESTIGATE_CMD = (
     "(docker logs --tail=100 openclaw-orchestrator 2>&1 || "
     "echo '[no openclaw-orchestrator container]')"
 )
+
+
+def _autopilot_push_event(kind: str, message: str) -> None:
+    """Append a progress event to the autopilot events list. Thread-safe."""
+    global _AUTOPILOT_EVENT_COUNTER
+    with _AUTOPILOT_LOCK:
+        _AUTOPILOT_EVENT_COUNTER += 1
+        ev = {
+            "id": _AUTOPILOT_EVENT_COUNTER,
+            "t": _now_iso(),
+            "kind": kind,
+            "message": message,
+        }
+        _AUTOPILOT_STATE["events"].append(ev)
+        _AUTOPILOT_STATE["events"] = _AUTOPILOT_STATE["events"][-200:]
 
 
 def _autopilot_gather_ssh() -> str:
@@ -629,7 +650,6 @@ def _autopilot_gather_ssh() -> str:
 
 def _autopilot_analyze(raw: str) -> dict:
     """Feed gathered output to the investigate agent; return parsed JSON dict."""
-    import json as _json
 
     if budget.is_exhausted():
         return {
@@ -664,44 +684,112 @@ def _autopilot_analyze(raw: str) -> dict:
         }
 
 
+def _autopilot_conclude(summary: str, recommended_action: str) -> str:
+    """Use vibe_planner to generate a concrete shell command for the given finding.
+
+    Returns the command string, or empty string if generation fails.
+    """
+
+    ctx_lines = []
+    if settings.ssh_host:
+        ctx_lines.append(f"SSH target: {settings.ssh_host}")
+    if settings.repo_dir:
+        ctx_lines.append(f"Repo dir: {settings.repo_dir}")
+    ctx_lines.append(
+        f"System anomaly detected.\n"
+        f"Summary: {summary}\n"
+        f"Recommended action: {recommended_action}\n\n"
+        "Output ONLY the JSON command to resolve this issue on the VPS."
+    )
+    prompt = "\n".join(ctx_lines)
+
+    def _call():
+        return Runner.run_sync(vibe_planner, prompt, max_turns=1)
+
+    fut = EXECUTOR.submit(_call)
+    try:
+        result = fut.result(timeout=_AUTOPILOT_CONCLUDE_TIMEOUT)
+        _record_run_usage(result)
+        parsed = _json.loads(result.final_output)
+        return parsed.get("command", "")
+    except Exception as exc:
+        _autopilot_push_event("error", f"⚠️ Command generation failed ({type(exc).__name__}) — operator must act manually.")
+        return ""
+
+
 def _autopilot_run_once() -> None:
-    """Run a single investigation cycle (gather + analyze + record)."""
+    """Run a single investigation cycle: detect → investigate → conclude → escalate."""
     global _AUTOPILOT_FINDING_COUNTER
 
     if not settings.ssh_host:
+        _autopilot_push_event("skip", "SSH host not configured — skipping investigation.")
         with _AUTOPILOT_LOCK:
             _AUTOPILOT_STATE["last_run"] = _now_iso()
         return
 
+    # Phase 1: Detect — gather raw system data via SSH
+    _autopilot_push_event("gather", "🔍 Gathering system data via SSH…")
     raw = _autopilot_gather_ssh()
-    finding = _autopilot_analyze(raw) if raw else {
-        "needs_action": False,
-        "urgency": "low",
-        "summary": "No system data available.",
-        "recommended_action": "",
-    }
 
+    if not raw:
+        _autopilot_push_event("error", "⚠️ No system data returned from SSH.")
+        with _AUTOPILOT_LOCK:
+            interval = _AUTOPILOT_STATE["interval"]
+            _AUTOPILOT_STATE["last_run"] = _now_iso()
+            _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
+        return
+
+    # Phase 2: Investigate — LLM analysis of collected data
+    _autopilot_push_event("analyze", "🧠 Investigating system state…")
+    finding = _autopilot_analyze(raw)
+
+    if not finding.get("needs_action"):
+        # All clear — update timestamps, no further action
+        _autopilot_push_event("clear", f"✅ All clear — {finding.get('summary', 'system healthy')}")
+        with _AUTOPILOT_LOCK:
+            interval = _AUTOPILOT_STATE["interval"]
+            _AUTOPILOT_STATE["last_run"] = _now_iso()
+            _AUTOPILOT_STATE["last_clear"] = _now_iso()
+            _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
+        return
+
+    summary = finding.get("summary", "")
+    recommended = finding.get("recommended_action", "")
+    urgency = finding.get("urgency", "low")
+
+    # Phase 3: Conclude — generate a concrete remediation command
+    _autopilot_push_event("conclude", f"⚠️ Issue detected ({urgency.upper()}): {summary}")
+    _autopilot_push_event("conclude", "💡 Generating remediation command…")
+
+    vibe_command = _autopilot_conclude(summary, recommended)
+
+    if vibe_command:
+        _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
+        _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
+    else:
+        action_text = recommended or "(see finding)"
+        _autopilot_push_event("escalate", f"📋 Recommended action: {action_text}")
+        _autopilot_push_event("escalate", "⏳ Operator review required.")
+
+    # Phase 4: Escalate — record finding for operator review
     with _AUTOPILOT_LOCK:
+        _AUTOPILOT_FINDING_COUNTER += 1
         interval = _AUTOPILOT_STATE["interval"]
+        entry = {
+            "id": _AUTOPILOT_FINDING_COUNTER,
+            "t": _now_iso(),
+            "urgency": urgency,
+            "summary": summary,
+            "recommended_action": recommended,
+            "vibe_command": vibe_command,
+            "acked": False,
+        }
+        _AUTOPILOT_STATE["findings"].append(entry)
+        # Keep only the most recent 100 findings
+        _AUTOPILOT_STATE["findings"] = _AUTOPILOT_STATE["findings"][-100:]
+        _AUTOPILOT_STATE["unread"] += 1
         _AUTOPILOT_STATE["last_run"] = _now_iso()
         _AUTOPILOT_STATE["_next_run_mono"] = _time.monotonic() + interval
-
-        if finding.get("needs_action"):
-            _AUTOPILOT_FINDING_COUNTER += 1
-            entry = {
-                "id": _AUTOPILOT_FINDING_COUNTER,
-                "t": _now_iso(),
-                "urgency": finding.get("urgency", "low"),
-                "summary": finding.get("summary", ""),
-                "recommended_action": finding.get("recommended_action", ""),
-                "acked": False,
-            }
-            _AUTOPILOT_STATE["findings"].append(entry)
-            # Keep only the most recent 100 findings
-            _AUTOPILOT_STATE["findings"] = _AUTOPILOT_STATE["findings"][-100:]
-            _AUTOPILOT_STATE["unread"] += 1
-        else:
-            _AUTOPILOT_STATE["last_clear"] = _now_iso()
 
 
 def _autopilot_loop(stop_event: _threading.Event) -> None:
@@ -756,6 +844,7 @@ def get_autopilot_status() -> dict:
             "last_clear": _AUTOPILOT_STATE["last_clear"],
             "unread": _AUTOPILOT_STATE["unread"],
             "finding_count": len(_AUTOPILOT_STATE["findings"]),
+            "event_count": _AUTOPILOT_EVENT_COUNTER,
             "seconds_until_next_run": secs,
         }
 
@@ -765,6 +854,14 @@ def get_autopilot_findings(cursor: int = 0) -> dict:
     with _AUTOPILOT_LOCK:
         findings = list(_AUTOPILOT_STATE["findings"][cursor:])
     return {"findings": findings}
+
+
+def get_autopilot_events(cursor: int = 0) -> dict:
+    """Return live progress events from the given cursor position."""
+    with _AUTOPILOT_LOCK:
+        events = list(_AUTOPILOT_STATE["events"][cursor:])
+        total = _AUTOPILOT_EVENT_COUNTER
+    return {"events": events, "total": total}
 
 
 def ack_autopilot_findings() -> dict:
