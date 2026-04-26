@@ -301,6 +301,9 @@ def _build_team_ctx(workspace: dict) -> str:
         lines.append(f"Review period requested: {review_period}")
     conv = workspace.get("conversation_history") or []
     if conv:
+        # Use last 10 messages in chronological order, each capped at 400 chars.
+        # The frontend may send up to 30; the backend constrains to a tighter window
+        # so the context string stays within reasonable token limits for the agents.
         conv_lines = ["Conversation context:"]
         for item in conv[-10:]:
             role = "User" if item.get("role") == "user" else "Agent"
@@ -316,46 +319,67 @@ def _build_team_ctx(workspace: dict) -> str:
 
 
 def _gather_vibe_snapshot(run: dict, timeout_s: float) -> str:
-    """Run quick read-only SSH commands for a live server snapshot.
+    """Probe the server with read-only SSH commands, emitting one feed event per probe.
 
-    Emits 'vibe' events into the run feed. Returns formatted multi-section string.
-    If SSH is not configured or no data is returned, returns an empty string.
+    Each command streams its label and result snippet into the 'vibe' feed as it
+    completes — giving the same step-by-step building feel as the Autopilot tab.
+    Returns the full aggregated snapshot string for injection into agent prompts.
     """
     if not settings.ssh_host:
-        _push_event(run, "vibe", "message", "(SSH not configured — snapshot skipped)")
+        _push_event(run, "vibe", "message", "SSH not configured — snapshot skipped")
         return ""
 
     _push_event(run, "vibe", "start", "")
     sections: list[str] = []
     t_deadline = _time.monotonic() + timeout_s
+    repo = settings.repo_dir or "/opt/openclaw-crypto"
 
-    def _section(label: str, cmd: str, t: int = 5) -> None:
+    PROBES = [
+        (
+            "uptime",
+            "uptime 2>/dev/null || echo '[unavailable]'",
+            4,
+        ),
+        (
+            "docker status",
+            "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.State}}' "
+            "2>/dev/null || echo '[docker unavailable]'",
+            5,
+        ),
+        (
+            "log highlights",
+            "(docker logs --tail=30 openclaw-orchestrator 2>&1 | "
+            "grep -iE 'HALT|error|pnl|trade|signal|warning' | tail -n 20) "
+            "2>/dev/null || echo '[no matches]'",
+            7,
+        ),
+        (
+            "git log",
+            f"cd {repo} && git log -n 5 --oneline 2>/dev/null || echo '[unavailable]'",
+            5,
+        ),
+    ]
+
+    for label, cmd, t in PROBES:
         if _time.monotonic() >= t_deadline:
-            return
+            _push_event(run, "vibe", "message", "⏱ Time budget low — remaining probes skipped")
+            break
+        # Emit the "asking…" line so the feed shows intent before the SSH round-trip
+        _push_event(run, "vibe", "message", f"📡 {label}…")
         r = run_ssh(cmd, timeout=t)
-        if "error" not in r:
-            out = (r.get("stdout") or "").strip()
-            if out:
-                sections.append(f"=== {label} ===\n{out}")
+        if "error" in r:
+            _push_event(run, "vibe", "message", f"  ↳ [SSH error]")
+            continue
+        out = (r.get("stdout") or "").strip()
+        if out:
+            snippet = "\n".join(out.splitlines()[:12])
+            _push_event(run, "vibe", "message", f"  ↳ {snippet}")
+            sections.append(f"=== {label} ===\n{out}")
+        else:
+            _push_event(run, "vibe", "message", f"  ↳ (no output)")
 
-    _section(
-        "docker status",
-        "docker ps --format 'table {{.Names}}\\t{{.Status}}' 2>/dev/null "
-        "|| echo '[docker unavailable]'",
-        t=5,
-    )
-    _section(
-        "log highlights",
-        "(docker logs --tail=30 openclaw-orchestrator 2>&1 | "
-        "grep -iE 'HALT|error|pnl|trade|signal|warning' | tail -n 20) "
-        "2>/dev/null || echo '[no matches]'",
-        t=7,
-    )
-
-    result = "\n\n".join(sections).strip()
-    _push_event(run, "vibe", "message", result[:1500] if result else "(no data returned)")
     _push_event(run, "vibe", "done", "")
-    return result
+    return "\n\n".join(sections).strip()
 
 
 def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
@@ -378,16 +402,28 @@ def _make_agent_prompt(user_prompt: str, ctx: str, bprefix: str = "") -> str:
 
 
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
-    # Narrate the review objective
-    _push_event(run, "main", "message", user_prompt[:400] if user_prompt else "(using workspace context)")
+    # Narrate exactly what context was assembled
+    ctx_sources = []
+    if "Conversation context:" in ctx:
+        ctx_sources.append("conversation history")
+    if "Last terminal output:" in ctx:
+        ctx_sources.append("terminal output")
+    if "SSH target:" in ctx:
+        ctx_sources.append("SSH workspace")
+    sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
+    _push_event(
+        run, "main", "message",
+        f"📋 Context sources: {sources_str}\n"
+        f"🎯 Objective: {user_prompt[:300]}",
+    )
 
-    # Gather live server snapshot via Vibe read-only SSH
+    # Explore the live server — each probe streams into the feed as it completes
     rem = deadline - _time.monotonic()
     vibe_snap = ""
-    if rem > 10:
-        vibe_snap = _gather_vibe_snapshot(run, min(6.0, rem - 8))
+    if rem > 12:
+        vibe_snap = _gather_vibe_snapshot(run, min(10.0, rem - 10))
     else:
-        _push_event(run, "vibe", "message", "(skipped — insufficient time budget)")
+        _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -447,16 +483,28 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
 
 
 def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
-    # Narrate the review objective
-    _push_event(run, "main", "message", user_prompt[:400] if user_prompt else "(using workspace context)")
+    # Narrate exactly what context was assembled
+    ctx_sources = []
+    if "Conversation context:" in ctx:
+        ctx_sources.append("conversation history")
+    if "Last terminal output:" in ctx:
+        ctx_sources.append("terminal output")
+    if "SSH target:" in ctx:
+        ctx_sources.append("SSH workspace")
+    sources_str = " + ".join(ctx_sources) if ctx_sources else "workspace config"
+    _push_event(
+        run, "main", "message",
+        f"📋 Context sources: {sources_str}\n"
+        f"🎯 Objective: {user_prompt[:300]}",
+    )
 
-    # Gather live server snapshot via Vibe read-only SSH
+    # Explore the live server — each probe streams into the feed as it completes
     rem = deadline - _time.monotonic()
     vibe_snap = ""
-    if rem > 15:
-        vibe_snap = _gather_vibe_snapshot(run, min(10.0, rem - 12))
+    if rem > 18:
+        vibe_snap = _gather_vibe_snapshot(run, min(14.0, rem - 14))
     else:
-        _push_event(run, "vibe", "message", "(skipped — insufficient time budget)")
+        _push_event(run, "vibe", "message", "⏱ Skipped — time budget low")
 
     enhanced_ctx = (ctx + "\n\n=== Live Server Snapshot ===\n" + vibe_snap) if vibe_snap else ctx
 
@@ -592,7 +640,7 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
     with _TEAM_RUNS_LOCK:
         _TEAM_RUNS[run_id] = run
 
-    timeout = 25 if mode == "quick" else 45
+    timeout = 35 if mode == "quick" else 65
 
     # Determine user prompt: explicit prompt > last user message from conversation > default
     user_prompt = (prompt or "").strip()
@@ -606,7 +654,18 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
 
     ctx = _build_team_ctx(workspace)
 
-    _push_event(run, "system", "run-start", f"mode={mode}")
+    # Narrate context assembly into the feed before the orchestration thread starts
+    conv = workspace.get("conversation_history") or []
+    conv_count = sum(1 for m in conv if m.get("role") == "user")
+    ctx_note_parts = [f"mode={mode}"]
+    if conv_count:
+        ctx_note_parts.append(
+            f"building context string from {conv_count} user message(s) "
+            f"— last 10 in chronological order, each truncated to 400 chars"
+        )
+    if workspace.get("terminal_tail"):
+        ctx_note_parts.append("terminal tail included")
+    _push_event(run, "system", "run-start", " · ".join(ctx_note_parts))
 
     def _orchestrate() -> None:
         deadline = _time.monotonic() + timeout
