@@ -255,6 +255,44 @@ def memory_invalidate(agent: str, reason: str = "operator manual invalidation"):
     return {"agent": agent.lower(), "status": "invalidated", "reason": reason[:200]}
 
 
+class MemoryUpdateRequest(BaseModel):
+    snapshot: dict
+
+
+_MAX_MEMORY_SNAPSHOT_BYTES = 16_384  # 16 KB hard cap
+
+
+@app.patch("/memory/{agent}")
+def memory_update(agent: str, req: MemoryUpdateRequest):
+    """Replace the memory snapshot for *agent* from the operator cockpit.
+
+    Only derived summaries and flags — never secrets, never raw logs.
+    Values may be strings, numbers, or booleans.
+    Valid agents: pnl | quant | coo
+    """
+    if agent.lower() not in _VALID_MEMORY_AGENTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown agent '{agent}'. Valid values: {sorted(_VALID_MEMORY_AGENTS)}",
+        )
+    payload_bytes = len(json.dumps(req.snapshot, ensure_ascii=False).encode())
+    if payload_bytes > _MAX_MEMORY_SNAPSHOT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Snapshot too large ({payload_bytes} bytes). "
+                f"Maximum is {_MAX_MEMORY_SNAPSHOT_BYTES} bytes."
+            ),
+        )
+    fp = _memory.compute_fingerprint()
+    _memory.save_snapshot(agent.lower(), req.snapshot, fp)
+    return {
+        "agent": agent.lower(),
+        "status": "updated",
+        "keys": list(req.snapshot.keys()),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     gateway_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
@@ -1124,6 +1162,92 @@ def index():
       padding:10px 16px;
       text-align:center;
     }
+
+    /* Memory cockpit */
+    .memoryPad{
+      flex:1;
+      display:none;
+      flex-direction:column;
+      overflow:hidden;
+    }
+    .memoryToolbar{
+      padding:8px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .memoryAgentLabel{
+      font-size:12px;
+      color:var(--muted);
+      user-select:none;
+    }
+    .memoryAgentTabs{display:flex;gap:4px;}
+    .memoryAgentBtn{
+      padding:3px 10px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.04);
+      color:var(--muted);
+      font-size:12px;
+      font-weight:600;
+      cursor:pointer;
+      transition:background .15s,color .15s;
+      font-family:var(--sans);
+    }
+    .memoryAgentBtn.active{
+      background:linear-gradient(180deg,rgba(34,197,94,.95),rgba(22,163,74,.95));
+      color:#fff;
+      border-color:transparent;
+    }
+    .memoryAgentBtn:hover:not(.active){background:rgba(255,255,255,.08);color:var(--text);}
+    .memoryMeta{
+      padding:6px 12px;
+      font-size:11px;
+      color:var(--muted);
+      border-bottom:1px solid var(--border);
+      background:rgba(0,0,0,.08);
+      min-height:22px;
+    }
+    .memoryEditorSection{
+      padding:10px 12px;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .memoryEditor{
+      font-family:var(--mono) !important;
+      font-size:12px !important;
+      min-height:130px;
+    }
+    .memoryEventsSection{
+      flex:1;
+      overflow:auto;
+      padding:10px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .memoryEventsSection::-webkit-scrollbar{width:10px;}
+    .memoryEventsSection::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
+    .memEventRow{
+      font-size:11px;
+      color:var(--muted);
+      padding:4px 8px;
+      background:rgba(0,0,0,.12);
+      border-radius:6px;
+      border:1px solid var(--border);
+      border-left:2px solid transparent;
+      font-family:var(--mono);
+      white-space:pre-wrap;
+      word-break:break-all;
+    }
+    .memEventRow.update        {border-left-color:rgba(34,197,94,.55);}
+    .memEventRow.invalidate    {border-left-color:rgba(251,113,133,.55);}
+    .memEventRow.operator_update{border-left-color:rgba(251,191,36,.55);}
   </style>
 </head>
 
@@ -1149,6 +1273,7 @@ def index():
           <button class="tabBtn" data-agent="team">Team</button>
           <button class="tabBtn" data-agent="autopilot">Autopilot <span class="apBadge" id="apTabBadge" style="display:none">0</span></button>
           <button class="tabBtn" data-agent="analytics">📊 Analytics</button>
+          <button class="tabBtn" data-agent="memory">🧠 Memory</button>
           <button class="tabBtn" data-agent="cheap">💬 Chat</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
@@ -1231,6 +1356,31 @@ def index():
           <div class="analyticsEmpty" id="analyticsEmpty">
             Click <strong>Fetch per-trade analytics</strong> to retrieve gross/net P&amp;L, fees, slippage, and reason-code breakdown from the VPS.
           </div>
+        </div>
+      </div>
+
+      <!-- Memory cockpit panel -->
+      <div class="memoryPad" id="memoryPad">
+        <div class="memoryToolbar">
+          <span class="memoryAgentLabel">Agent:</span>
+          <div class="memoryAgentTabs">
+            <button class="memoryAgentBtn active" data-memory-agent="pnl">P&amp;L</button>
+            <button class="memoryAgentBtn" data-memory-agent="quant">Quant</button>
+            <button class="memoryAgentBtn" data-memory-agent="coo">COO</button>
+          </div>
+          <span style="flex:1"></span>
+          <button class="vibeBtn vibeSecondaryBtn" id="memRefreshBtn" style="font-size:11px;padding:4px 10px;">🔄 Refresh</button>
+          <button class="vibeBtn vibeDangerBtn" id="memInvalidateBtn" style="font-size:11px;padding:4px 10px;">🗑 Invalidate</button>
+          <button class="vibeBtn vibePrimaryBtn" id="memSaveBtn" style="font-size:11px;padding:4px 10px;">💾 Save</button>
+        </div>
+        <div class="memoryMeta" id="memoryMeta">Select an agent above to load its memory snapshot.</div>
+        <div class="memoryEditorSection">
+          <span class="vibeLabel">Snapshot JSON — edit keys/values, then click Save</span>
+          <textarea class="vibeTextarea memoryEditor" id="memoryEditor" rows="10" placeholder='{"key": "value"}'></textarea>
+        </div>
+        <div class="memoryEventsSection">
+          <div class="analyticsSectionTitle" style="margin-bottom:6px;">Recent Memory Events</div>
+          <div id="memoryEventsList"></div>
         </div>
       </div>
 
@@ -1442,6 +1592,7 @@ def index():
   const vibePadEl  = document.getElementById("vibePad");
   const autopilotPadEl = document.getElementById("autopilotPad");
   const analyticsPadEl = document.getElementById("analyticsPad");
+  const memoryPadEl    = document.getElementById("memoryPad");
   const cheapBarEl = document.getElementById("cheapBar");
   const composerEl = document.querySelector(".chatComposer");
 
@@ -1451,22 +1602,27 @@ def index():
     const isAutopilot = ag === "autopilot";
     const isAnalytics = ag === "analytics";
     const isCheap = ag === "cheap";
-    // Show the right chat pane (or none for team/vibe/autopilot/analytics) — no re-render
+    const isMemory = ag === "memory";
+    // Show the right chat pane (or none for team/vibe/autopilot/analytics/memory) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
-      pane.style.display = (!isTeam && !isVibe && !isAutopilot && !isAnalytics && key === ag) ? "" : "none";
+      pane.style.display = (!isTeam && !isVibe && !isAutopilot && !isAnalytics && !isMemory && key === ag) ? "" : "none";
     }
-    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot && !isAnalytics) ? "flex" : "none";
+    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot && !isAnalytics && !isMemory) ? "flex" : "none";
     cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
     autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
     analyticsPadEl.style.display = isAnalytics ? "flex" : "none";
-    composerEl.style.display     = (isTeam || isVibe || isAutopilot || isAnalytics) ? "none" : "";
+    memoryPadEl.style.display    = isMemory    ? "flex" : "none";
+    composerEl.style.display     = (isTeam || isVibe || isAutopilot || isAnalytics || isMemory) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
     }
     if (isAutopilot) {
       pollAutopilotStatus();
+    }
+    if (isMemory) {
+      loadMemoryCockpit();
     }
   }
 
@@ -2696,6 +2852,112 @@ def index():
       analyticsStatus.textContent = "Error";
     } finally {
       analyticsFetchBtn.disabled = false;
+    }
+  };
+
+  // ── Memory cockpit ─────────────────────────────────────────────────────────
+
+  const memRefreshBtnEl    = document.getElementById("memRefreshBtn");
+  const memInvalidateBtnEl = document.getElementById("memInvalidateBtn");
+  const memSaveBtnEl       = document.getElementById("memSaveBtn");
+  const memoryEditorEl     = document.getElementById("memoryEditor");
+  const memoryMetaEl       = document.getElementById("memoryMeta");
+  const memoryEventsListEl = document.getElementById("memoryEventsList");
+
+  let activeMemoryAgent = "pnl";
+
+  document.querySelectorAll(".memoryAgentBtn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeMemoryAgent = btn.getAttribute("data-memory-agent");
+      document.querySelectorAll(".memoryAgentBtn").forEach(b =>
+        b.classList.toggle("active", b === btn));
+      loadMemoryCockpit();
+    });
+  });
+
+  async function loadMemoryCockpit() {
+    memRefreshBtnEl.disabled = true;
+    memoryMetaEl.textContent = "Loading…";
+    memoryEditorEl.value = "";
+    memoryEventsListEl.innerHTML = "";
+    try {
+      const res = await fetch(API_BASE + "/memory/" + activeMemoryAgent);
+      if (!res.ok) {
+        memoryMetaEl.textContent = "Error loading memory: HTTP " + res.status;
+        return;
+      }
+      const data = await res.json();
+      const snap = data.snapshot || {};
+      memoryEditorEl.value = JSON.stringify(snap, null, 2);
+      const fp = data.fingerprint || "(none)";
+      const evCount = (data.recent_events || []).length;
+      memoryMetaEl.textContent = "fingerprint: " + fp + "  ·  " + evCount + " recent event(s)";
+      (data.recent_events || []).forEach(ev => {
+        const row = document.createElement("div");
+        row.className = "memEventRow " + (ev.kind || "");
+        const ts = (ev.ts || "").replace("T", " ").replace("+00:00", "").replace("Z", "");
+        const payload = JSON.stringify(ev.payload || {});
+        row.textContent = "[" + ts + "]  " + (ev.kind || "") + "  " + payload;
+        memoryEventsListEl.appendChild(row);
+      });
+    } catch(err) {
+      memoryMetaEl.textContent = "Error: " + (err.message || String(err));
+    } finally {
+      memRefreshBtnEl.disabled = false;
+    }
+  }
+
+  memRefreshBtnEl.onclick = loadMemoryCockpit;
+
+  memSaveBtnEl.onclick = async () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(memoryEditorEl.value || "{}");
+    } catch(e) {
+      alert("Invalid JSON — please fix before saving:\\n" + e.message);
+      return;
+    }
+    memSaveBtnEl.disabled = true;
+    memSaveBtnEl.textContent = "⏳ Saving…";
+    try {
+      const res = await fetch(API_BASE + "/memory/" + activeMemoryAgent, {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({snapshot: parsed}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert("Save failed: " + (err.detail || "HTTP " + res.status));
+        return;
+      }
+      memSaveBtnEl.textContent = "✅ Saved";
+      setTimeout(() => { memSaveBtnEl.textContent = "💾 Save"; }, 2000);
+      await loadMemoryCockpit();
+    } catch(err) {
+      alert("Error: " + (err.message || String(err)));
+      memSaveBtnEl.textContent = "💾 Save";
+    } finally {
+      memSaveBtnEl.disabled = false;
+    }
+  };
+
+  memInvalidateBtnEl.onclick = async () => {
+    if (!confirm("Invalidate memory for " + activeMemoryAgent + "? This clears the snapshot and forces a fresh probe on the next agent interaction.")) return;
+    memInvalidateBtnEl.disabled = true;
+    try {
+      const res = await fetch(API_BASE + "/memory/" + activeMemoryAgent + "/invalidate", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert("Invalidate failed: " + (err.detail || "HTTP " + res.status));
+        return;
+      }
+      await loadMemoryCockpit();
+    } catch(err) {
+      alert("Error: " + (err.message || String(err)));
+    } finally {
+      memInvalidateBtnEl.disabled = false;
     }
   };
 </script>
