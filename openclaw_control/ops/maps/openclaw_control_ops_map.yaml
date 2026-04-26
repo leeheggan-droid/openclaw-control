@@ -83,9 +83,15 @@ container_map:
 
 data_location_map:
   note: >
-    No persistent database or file store for trading data exists in openclaw-control.
-    All trading data lives on the VPS in container logs or the openclaw-crypto codebase.
-    Absence of data means bot has not logged it since last container start, or no file store exists.
+    The control-panel (openclaw-control) maintains a LOCAL persistent SQLite trade log
+    (.openclaw_trades.sqlite) populated when the trading bot POSTs to /trades/log and /pnl/log.
+    Query this log via GET /trades?limit=N or GET /pnl?limit=N, or through the agent's
+    get_trade_history / get_pnl_history tools.
+    If the bot has not been configured to POST to the control-panel endpoints, this log will
+    be empty — use docker logs on the VPS instead.
+    All VPS-side trading data lives in container logs; it is NOT persisted to files on the VPS.
+    Absence of data in VPS logs means the bot has not emitted the relevant log lines since
+    the last container start, or uses different log keywords than those searched.
   report_commands:
     container_health:
       description: "Is the trading container running? Any restarts?"
@@ -96,21 +102,30 @@ data_location_map:
     last_trade:
       description: "Most recent trade executed by the bot."
       commands:
-        - "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -i 'trade' | tail -20"
-        - "find /opt/openclaw-crypto -name '*.log' 2>/dev/null | xargs grep -l 'trade' 2>/dev/null | head -3"
+        - "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL|signal_triggered' | tail -20"
+        - "docker logs --tail=5000 alpaca_orb_bite_bot 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL' | tail -20"
+        - "find /opt/openclaw-crypto -name '*.log' 2>/dev/null | xargs grep -l 'trade\\|fill\\|executed' 2>/dev/null | head -3"
         - "find /opt/openclaw-crypto -name '*.db' -o -name '*.sqlite' 2>/dev/null | head -3"
-      absence_means: "Bot has not logged any trade since container last started, or keyword differs."
+      absence_means: >
+        Bot has not logged any trade since container last started, or uses different log keywords.
+        NOTE: The control-panel's local trade log is checked automatically by run_vibe_report
+        before SSH commands — use GET /trades or the get_trade_history agent tool for local data.
     trade_history_7d:
       description: "Trade history for the last 7 days (or as far back as logs go)."
       commands:
-        - "docker logs --tail=2000 openclaw-orchestrator 2>&1 | grep -iE 'trade|executed|filled' | tail -50"
+        - "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL|signal_triggered' | tail -100"
+        - "docker logs --tail=5000 alpaca_orb_bite_bot 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL' | tail -100"
         - "find /opt/openclaw-crypto -name '*.db' -o -name '*.csv' 2>/dev/null | head -5"
         - "find /opt/openclaw-crypto -name 'trades*' -o -name 'history*' 2>/dev/null | head -5"
-      absence_means: "No persistent trade store; history limited to current container log window."
+      absence_means: >
+        No persistent trade store on VPS; history limited to current container log window.
+        NOTE: The control-panel's local trade log (GET /trades) may have more history
+        if the bot has been configured to POST to /trades/log.
     pnl_snapshot:
       description: "Current P&L, equity, drawdown, and performance metrics."
       commands:
         - "docker logs --tail=500 openclaw-orchestrator 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity' | tail -30"
+        - "docker logs --tail=500 alpaca_orb_bite_bot 2>&1 | grep -iE 'pnl|sharpe|drawdown|equity' | tail -30"
         - "find /opt/openclaw-crypto -name 'pnl*' -o -name 'performance*' 2>/dev/null | head -5"
         - "find /opt/openclaw-crypto -name '*.json' 2>/dev/null | xargs grep -l 'pnl' 2>/dev/null | head -3"
       absence_means: "Bot does not persist P&L to file; only available in container stdout since last restart."
@@ -180,9 +195,9 @@ agent_behavior_rules:
     constraint: "Output ONLY the JSON object. Commands must match ops map paths."
 
 known_limitations:
-  no_persistent_db:
-    summary: "No database or file store — all state lost on process restart."
-    impact: "Autopilot findings, team-review results, budget counters lost on restart."
+  local_trade_log_requires_bot_posting:
+    summary: "The control-panel SQLite trade log is only populated when the bot POSTs to /trades/log and /pnl/log."
+    impact: "If the bot has not been configured to report to these endpoints, GET /trades returns empty and all local trade history is unavailable. Use docker logs on the VPS as the fallback."
   no_pnl_exporter:
     summary: "No file-based P&L exporter exists."
     impact: "P&L only in container stdout since last restart; historical P&L irrecoverable."

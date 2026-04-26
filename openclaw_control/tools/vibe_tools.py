@@ -16,10 +16,14 @@ VIBE_CAPABILITY_MAP: dict[str, list[str]] = {
         "docker stats --no-stream --format 'table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}'",
     ],
     "trade_logs": [
+        # Best docker-log patterns for individual trade entries (try both bots)
+        "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL|signal_triggered' | tail -50",
+        "docker logs --tail=5000 alpaca_orb_bite_bot 2>&1 | grep -iE 'placed|order_id|fill|filled|fill_price|executed|BUY|SELL' | tail -50",
+        # Broad 'trade' keyword as fallback
+        "docker logs --tail=5000 openclaw-orchestrator 2>&1 | grep -iE 'trade|pnl|signal' | tail -50",
+        # File-based fallbacks on VPS
         "find <repo> -maxdepth 5 -name 'trade*.csv' -o -name '*trades*.csv'",
         "find <repo> -maxdepth 5 -name 'pnl*.csv' -o -name '*pnl*.csv'",
-        "tail -n <N> <trade_log_file>",
-        "docker logs --tail=<N> <container> | grep -iE 'trade|pnl|signal'",
     ],
     "paths": [
         "find <repo> -maxdepth 3 -name '*.env' -o -name '*.yml' -o -name '*.yaml'",

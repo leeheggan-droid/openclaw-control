@@ -22,6 +22,70 @@ def _delegate_to_agent(agent, prompt: str, timeout: int = 12) -> str:
 
 
 @function_tool
+def get_trade_history(limit: int = 20) -> str:
+    """Retrieve the most recent trade executions from the local persistent trade log.
+
+    Use this when the user asks about:
+    - Recent trades (crypto or Alpaca)
+    - Last N trades
+    - Trade history or trade count
+
+    Returns a formatted list of trades, or a message explaining how to populate the log
+    if no trades have been recorded yet.
+    """
+    from openclaw_control import trade_log as _tl  # lazy import avoids circular load
+    rows = _tl.get_recent_trades(limit=min(max(1, limit), 100))
+    if not rows:
+        return (
+            "No trades found in the local trade log. "
+            "The bot must POST individual trade executions to this server's /trades/log endpoint "
+            "for them to appear here. "
+            "For raw VPS log data instead, emit: VIBE_REPORT_REQUEST: last_trade"
+        )
+    lines = [f"Recent trades ({len(rows)} records, newest first):"]
+    for t in rows:
+        line = (
+            f"  {t['ts']}  {t['symbol']}  {t['side'].upper()}"
+            f"  size={t['size']}  price={t['fill_price']}"
+        )
+        if t.get("trade_id"):
+            line += f"  trade_id={t['trade_id']}"
+        if t.get("source"):
+            line += f"  src={t['source']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@function_tool
+def get_pnl_history(limit: int = 24) -> str:
+    """Retrieve the most recent P&L snapshots from the local persistent log.
+
+    Use this when the user asks about:
+    - Recent P&L snapshots
+    - Equity, drawdown, or Sharpe ratio over time
+    - P&L history stored on this server
+
+    Returns a formatted list of snapshots, or a message if no data has been recorded.
+    """
+    from openclaw_control import trade_log as _tl  # lazy import avoids circular load
+    rows = _tl.get_recent_pnl(limit=min(max(1, limit), 100))
+    if not rows:
+        return (
+            "No P&L snapshots found in the local log. "
+            "The bot must POST snapshots to this server's /pnl/log endpoint for them to appear here. "
+            "For raw VPS P&L data instead, emit: VIBE_REPORT_REQUEST: pnl_snapshot"
+        )
+    lines = [f"Recent P&L snapshots ({len(rows)} records, newest first):"]
+    for p in rows:
+        kv = [p["ts"]]
+        for k in ("total_pnl", "equity", "drawdown", "sharpe_ratio"):
+            if p.get(k) is not None:
+                kv.append(f"{k}={p[k]}")
+        lines.append("  " + "  ".join(kv))
+    return "\n".join(lines)
+
+
+@function_tool
 def ask_pnl(text: str) -> str:
     """Query the P&L Agent for financial analysis: net P&L, fees, slippage, trade attribution.
 
@@ -101,17 +165,27 @@ main_agent = Agent(
         "═══════════════════════════════════\n"
         "YOUR TOOLS\n"
         "═══════════════════════════════════\n"
-        "You have three tools. Use them proactively:\n"
+        "You have five tools. Use them proactively:\n"
         "\n"
-        "1. ask_pnl(text)    — delegate to the P&L specialist agent\n"
+        "1. get_trade_history(limit)  — query the LOCAL control-panel trade log (SQLite)\n"
+        "   Use for: 'show me the last N trades', 'what trades have been made?'\n"
+        "   This is the FIRST tool to call for any trade history question.\n"
+        "   If it returns empty, explain the bot must POST to /trades/log and then\n"
+        "   emit VIBE_REPORT_REQUEST: last_trade to check VPS container logs.\n"
+        "\n"
+        "2. get_pnl_history(limit)    — query the LOCAL control-panel P&L snapshot log\n"
+        "   Use for: 'show P&L history', 'what is the equity over time?'\n"
+        "   If empty, emit VIBE_REPORT_REQUEST: pnl_snapshot for VPS container data.\n"
+        "\n"
+        "3. ask_pnl(text)    — delegate to the P&L specialist agent\n"
         "   Use for: P&L totals, fees, trade attribution, Sharpe, drawdown\n"
         "   Example: ask_pnl('What is the total net P&L for crypto and Alpaca trades?')\n"
         "\n"
-        "2. ask_quant(text)  — delegate to the Quant specialist agent\n"
+        "4. ask_quant(text)  — delegate to the Quant specialist agent\n"
         "   Use for: strategy quality, backtesting critique, statistical validity\n"
         "   Example: ask_quant('Is the ORB strategy statistically sound given current win rate?')\n"
         "\n"
-        "3. web_search(query) — search the web via Brave\n"
+        "5. web_search(query) — search the web via Brave\n"
         "   Use for: live crypto prices, exchange status, news, docs\n"
         "   Example: web_search('BTC price today'), web_search('Kraken API status')\n"
         "\n"
@@ -154,5 +228,5 @@ main_agent = Agent(
         "that applies to the VPS (openclaw-crypto, alpaca_orb_bite_bot if on same host).\n"
         "openclaw-control is on the operator's local machine — they must run git pull locally.\n"
     ),
-    tools=[ask_pnl, ask_quant, web_search],
+    tools=[ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history],
 )
