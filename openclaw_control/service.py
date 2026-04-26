@@ -304,10 +304,11 @@ _AGENT_REGISTRY = {
 }
 
 # Per-agent max_turns limits.
-# Main is unbounded (uses Runner default).
+# Main is unbounded (uses Runner default) — needs multiple turns for tool calls.
 # Specialists (no tools) need only 1 turn; COO needs up to 3 (tool × 2 + final memo).
+# Main can call ask_pnl + ask_quant + web_search + synthesis ≈ up to 8 turns.
 _MAX_TURNS: dict[str, int | None] = {
-    "main":  None,   # unbounded
+    "main":  None,   # unbounded — tool calls need multiple turns
     "pnl":   1,
     "quant": 1,
     "coo":   3,
@@ -330,7 +331,10 @@ _COO_DETAIL_KEYWORDS = frozenset(["detailed", "full review", "deep dive"])
 
 # Outer timeout (seconds) per agent.  COO has a shorter soft budget so the
 # fallback partial memo is delivered promptly instead of hanging until 25 s.
+# Main has a longer budget because it may call ask_pnl + ask_quant + web_search
+# in the same turn, each of which takes several seconds.
 _AGENT_TIMEOUT: dict[str, int] = {
+    "main": 45,
     "coo": 15,
 }
 _DEFAULT_TIMEOUT = 25

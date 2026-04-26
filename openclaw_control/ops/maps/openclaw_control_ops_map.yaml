@@ -159,7 +159,8 @@ agent_behavior_rules:
     - "When data is needed: emit VIBE_REPORT_REQUEST: <report_id> and wait for results."
     - "Valid report_ids: container_health, last_trade, trade_history_7d, pnl_snapshot, halt_status"
   main_agent:
-    role: "General ops assistant — routes to specialist tabs, never calls agents directly."
+    role: "Intelligent orchestrator — calls specialist agents and web search on demand; never redirects user to another tab."
+    tools: "ask_pnl (delegates to P&L agent), ask_quant (delegates to Quant agent), web_search (Brave API)"
     vibe_instruction: "Emit VIBE_REPORT_REQUEST: <report_id> to fetch live data before answering."
     budget_rule: "Unbounded — no budget-driven changes."
   pnl_agent:
