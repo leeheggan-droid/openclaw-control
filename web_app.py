@@ -10,7 +10,7 @@ from openclaw_control.service import (
     start_team_review, get_team_review_events,
     start_vibe_run, get_vibe_run,
     start_autopilot, stop_autopilot, get_autopilot_status,
-    get_autopilot_findings, ack_autopilot_findings,
+    get_autopilot_findings, ack_autopilot_findings, get_autopilot_events,
 )
 
 app = FastAPI()
@@ -781,6 +781,34 @@ def index():
       color:var(--muted); font-size:13px; flex-direction:column; gap:6px;
       text-align:center;
     }
+    .apEventRow{
+      padding:4px 8px;
+      font-size:11px;
+      color:var(--muted);
+      border-left:2px solid transparent;
+      border-radius:4px;
+      background:rgba(0,0,0,.1);
+    }
+    .apEventRow.gather  {border-left-color:rgba(59,130,246,.45);}
+    .apEventRow.analyze {border-left-color:rgba(139,92,246,.45);}
+    .apEventRow.conclude{border-left-color:rgba(251,191,36,.45);}
+    .apEventRow.escalate{border-left-color:rgba(251,113,133,.45);}
+    .apEventRow.clear   {border-left-color:rgba(34,197,94,.45);color:rgba(134,239,172,.75);}
+    .apEventRow.error   {border-left-color:rgba(239,68,68,.45);color:rgba(252,165,165,.8);}
+    .apEventRow.skip    {color:rgba(156,163,175,.45);}
+    .apApproveBtn{
+      margin-top:8px;
+      padding:4px 12px;
+      font-size:11px;
+      border-radius:6px;
+      border:1px solid rgba(34,197,94,.4);
+      background:rgba(34,197,94,.08);
+      color:rgba(134,239,172,.9);
+      cursor:pointer;
+    }
+    .apApproveBtn:hover{background:rgba(34,197,94,.18);}
+    .apApproveBtn:disabled{opacity:.4;cursor:not-allowed;}
+    .apApproveResult{font-size:11px;margin-top:5px;color:var(--muted);}
   </style>
 </head>
 
@@ -1782,6 +1810,7 @@ def index():
   let apRunning    = false;
   let apPollTimer  = null;
   let apFindingCursor = 0;
+  let apEventCursor   = 0;
 
   function _fmt_ago(isoStr) {
     if (!isoStr) return "—";
@@ -1806,6 +1835,14 @@ def index():
     } else {
       apBadgeEl.style.display = "none";
     }
+  }
+
+  function apRenderEvent(ev) {
+    const row = document.createElement("div");
+    row.className = "apEventRow " + (ev.kind || "");
+    const ts = (ev.t || "").replace("T"," ").replace("+00:00","").replace("Z","");
+    row.textContent = ts + "  " + (ev.message || "");
+    return row;
   }
 
   function apRenderFinding(f) {
@@ -1838,13 +1875,75 @@ def index():
       row.appendChild(action);
     }
 
+    if (f.vibe_command) {
+      const cmdEl = document.createElement("div");
+      cmdEl.className = "apAction";
+      cmdEl.textContent = "⚙ Command: " + f.vibe_command;
+      row.appendChild(cmdEl);
+
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "apApproveBtn";
+      approveBtn.textContent = "✅ Approve & Execute via Vibe";
+      const resultEl = document.createElement("div");
+      resultEl.className = "apApproveResult";
+      approveBtn.onclick = () => apApproveAndExecute(f.vibe_command, approveBtn, resultEl);
+      row.appendChild(approveBtn);
+      row.appendChild(resultEl);
+    }
+
     return row;
+  }
+
+  async function apApproveAndExecute(cmd, btnEl, resultEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = "⏳ Executing…";
+    resultEl.textContent = "";
+    try {
+      const res = await fetch("/vibe/execute", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({command: cmd}),
+      });
+      const data = await res.json();
+      if (data.error) {
+        resultEl.textContent = "❌ " + data.error;
+        btnEl.disabled = false;
+        btnEl.textContent = "✅ Approve & Execute via Vibe";
+        return;
+      }
+      const runId = data.run_id;
+      resultEl.textContent = "⏳ Run ID: " + runId + " — executing…";
+      // Poll until done
+      const pollInterval = setInterval(async () => {
+        try {
+          const pr = await fetch("/vibe/poll/" + runId);
+          const pd = await pr.json();
+          if (pd.status === "done") {
+            clearInterval(pollInterval);
+            resultEl.textContent = "✅ Done: " + (pd.output || "").split("\n").slice(0, 3).join(" | ");
+          } else if (pd.status === "error" || pd.status === "not_found") {
+            clearInterval(pollInterval);
+            resultEl.textContent = "❌ " + (pd.error || pd.status);
+            btnEl.disabled = false;
+            btnEl.textContent = "✅ Approve & Execute via Vibe";
+          }
+        } catch(_e) {}
+      }, 3000);
+    } catch(err) {
+      resultEl.textContent = "❌ " + (err.message || String(err));
+      btnEl.disabled = false;
+      btnEl.textContent = "✅ Approve & Execute via Vibe";
+    }
   }
 
   async function pollAutopilotStatus() {
     try {
-      const res = await fetch("/autopilot/status");
-      const data = await res.json();
+      const [statusRes, eventsRes] = await Promise.all([
+        fetch("/autopilot/status"),
+        fetch("/autopilot/events?cursor=" + apEventCursor),
+      ]);
+      const data = await statusRes.json();
+      const evData = await eventsRes.json();
       apRunning = !!data.running;
 
       apDotEl.className  = "apStatusDot" + (apRunning ? " running" : "");
@@ -1863,6 +1962,16 @@ def index():
       apStatusEl.textContent = parts.join("  ·  ");
 
       apUpdateBadge(data.unread || 0);
+
+      // Render new progress events
+      if (evData.events && evData.events.length) {
+        apEmptyEl.style.display = "none";
+        evData.events.forEach(ev => {
+          apFeedEl.appendChild(apRenderEvent(ev));
+        });
+        apEventCursor += evData.events.length;
+        apFeedEl.scrollTop = apFeedEl.scrollHeight;
+      }
 
       // Fetch any new findings
       if (data.finding_count > apFindingCursor) {
@@ -2104,6 +2213,12 @@ def autopilot_status():
 def autopilot_findings(cursor: int = 0):
     """Return autopilot findings from the given cursor position."""
     return get_autopilot_findings(cursor)
+
+
+@app.get("/autopilot/events")
+def autopilot_events(cursor: int = 0):
+    """Return autopilot live progress events from the given cursor position."""
+    return get_autopilot_events(cursor)
 
 
 @app.post("/autopilot/ack")
