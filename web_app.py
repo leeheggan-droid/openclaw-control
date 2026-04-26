@@ -1851,6 +1851,7 @@ def index():
   fileInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
+    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return;
     const maxBytes = 200 * 1024;
     if (f.size > maxBytes) {
       addChat("user", `(attached file too large for inline text: ${f.name}, ${f.size} bytes)`);
@@ -1871,6 +1872,7 @@ def index():
   imgInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
+    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return;
     const url = URL.createObjectURL(f);
     const extra = `<div class="imgPreview"><img src="${url}" alt="attachment"/></div>`;
     addChat("user", `Attached image: ${f.name}`, extra);
@@ -1886,7 +1888,7 @@ def index():
   async function send(textOverride) {
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
     if (!text) return;
-    if (["team", "vibe", "autopilot"].includes(activeAgent)) return; // composer hidden on these tabs
+    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return; // composer hidden on these tabs
 
     addChat("user", text);
     histories[activeAgent].push({role: "user", text});
