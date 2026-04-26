@@ -47,6 +47,10 @@ repository_structure:
     GITHUB_TOKEN: "GitHub PAT for auto issue creation (optional)"
     GITHUB_REPO: "Default GitHub repo for autopilot issues"
     OPENCLAW_AUTOPILOT_INTERVAL: "Seconds between autopilot cycles (default 300)"
+    KRAKEN_API_KEY: "Kraken API key (read-only, for trade history fallback)"
+    KRAKEN_API_SECRET: "Kraken API secret (read-only, for trade history fallback)"
+    ALPACA_API_KEY: "Alpaca API key ID — also reads APCA_API_KEY_ID (trade history fallback)"
+    ALPACA_API_SECRET: "Alpaca API secret — also reads APCA_API_SECRET_KEY (trade history fallback)"
   persistence_note: >
     All state (budget, autopilot findings, team-review results, Vibe run status) is
     in-memory only. Everything is lost on process restart. Agent sessions are stored
