@@ -3,7 +3,7 @@ import os
 
 import requests as _requests
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -140,10 +140,17 @@ def ops_map():
 
     No secrets are included — this is a structural/contract map only.
     """
+    try:
+        top_keys = _map_loader.get_top_keys()
+    except Exception:
+        top_keys = []
     return {
-        "top_level_keys": _map_loader.get_top_keys(),
+        "top_level_keys": top_keys,
         "summary": _map_loader.get_summary(),
     }
+
+
+_VALID_REPORT_IDS = frozenset({"container_health", "last_trade", "trade_history_7d", "pnl_snapshot", "halt_status"})
 
 
 @app.post("/ops/report")
@@ -152,6 +159,11 @@ def ops_report(report_id: str):
 
     Valid report_ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status
     """
+    if report_id.lower() not in _VALID_REPORT_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid report_id '{report_id}'. Valid values: {sorted(_VALID_REPORT_IDS)}",
+        )
     output = run_vibe_report(report_id)
     return {"report_id": report_id, "output": output}
 

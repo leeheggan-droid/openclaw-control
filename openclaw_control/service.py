@@ -323,21 +323,24 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
             match = _VIBE_REQUEST_RE.search(final_output)
             if match:
                 report_id = match.group(1).lower()
-                report_data = run_vibe_report(report_id)
-                augmented_prompt = (
-                    f"{ctx_header}\n\n{text}\n\n"
-                    f"=== VIBE REPORT: {report_id} ===\n{report_data}\n"
-                    f"=== END VIBE REPORT ===\n"
-                    f"Now answer the original question using the report data above."
-                )
-                # One follow-up pass; reuse the same session for continuity.
-                fut2 = EXECUTOR.submit(_call, augmented_prompt)
-                try:
-                    result2 = fut2.result(timeout=timeout_s)
-                    _record_run_usage(result2)
-                    final_output = result2.final_output
-                except (FuturesTimeout, Exception):
-                    pass  # fall back to the original output that had the request
+                # Validate against the known set before executing any SSH commands.
+                _known_ids = set(_report_commands_from_map().keys())
+                if report_id in _known_ids:
+                    report_data = run_vibe_report(report_id)
+                    augmented_prompt = (
+                        f"{ctx_header}\n\n{text}\n\n"
+                        f"=== VIBE REPORT: {report_id} ===\n{report_data}\n"
+                        f"=== END VIBE REPORT ===\n"
+                        f"Now answer the original question using the report data above."
+                    )
+                    # One follow-up pass; reuse the same session for continuity.
+                    fut2 = EXECUTOR.submit(_call, augmented_prompt)
+                    try:
+                        result2 = fut2.result(timeout=timeout_s)
+                        _record_run_usage(result2)
+                        final_output = result2.final_output
+                    except (FuturesTimeout, Exception):
+                        pass  # fall back to the original output that had the request
 
         return {"agent": name, "output": final_output}
     except FuturesTimeout:

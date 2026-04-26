@@ -35,6 +35,9 @@ REQUIRED_KEYS: frozenset[str] = frozenset({
     "known_limitations",
 })
 
+# Maximum characters for the compressed summary injected into agent prompts.
+MAX_SUMMARY_LENGTH: int = 3000
+
 # ---------------------------------------------------------------------------
 # In-memory cache
 # ---------------------------------------------------------------------------
@@ -169,7 +172,6 @@ def get_summary() -> str:
             lines.append(f"  [{key}] {summary}")
 
     result = "\n".join(lines)
-    # Hard-cap at 3 000 chars to prevent token bloat
-    if len(result) > 3000:
-        result = result[:2997] + "..."
+    if len(result) > MAX_SUMMARY_LENGTH:
+        result = result[:MAX_SUMMARY_LENGTH - 3] + "..."
     return result
