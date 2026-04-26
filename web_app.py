@@ -194,7 +194,7 @@ def ops_map():
     }
 
 
-_VALID_REPORT_IDS = frozenset({"container_health", "last_trade", "trade_history_7d", "pnl_snapshot", "halt_status", "git_head"})
+_VALID_REPORT_IDS = frozenset({"container_health", "last_trade", "trade_history_7d", "pnl_snapshot", "halt_status", "git_head", "per_trade_analytics"})
 
 _VALID_MEMORY_AGENTS = frozenset({"pnl", "quant", "coo"})
 
@@ -203,7 +203,7 @@ _VALID_MEMORY_AGENTS = frozenset({"pnl", "quant", "coo"})
 def ops_report(report_id: str):
     """Execute the read-only SSH probe sequence for *report_id* and return results.
 
-    Valid report_ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status | git_head
+    Valid report_ids: container_health | last_trade | trade_history_7d | pnl_snapshot | halt_status | git_head | per_trade_analytics
     """
     if report_id.lower() not in _VALID_REPORT_IDS:
         raise HTTPException(
@@ -922,6 +922,61 @@ def index():
     .vibeFeedRow.done{color:rgba(134,239,172,.85);border-color:rgba(34,197,94,.2);}
     .vibeFeedRow.err {color:rgba(252,165,165,.85);border-color:rgba(251,113,133,.2);}
 
+    /* Analytics tab */
+    .analyticsPad{
+      flex:1;
+      display:none;
+      flex-direction:column;
+      overflow:hidden;
+    }
+    .analyticsToolbar{
+      padding:8px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .analyticsBody{
+      flex:1;
+      overflow:auto;
+      padding:12px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .analyticsBody::-webkit-scrollbar{width:10px;}
+    .analyticsBody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
+    .analyticsSection{
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px 14px;
+    }
+    .analyticsSectionTitle{
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.6px;
+      color:var(--muted);
+      margin-bottom:8px;
+    }
+    .analyticsRaw{
+      font-family:var(--mono);
+      font-size:12px;
+      white-space:pre-wrap;
+      word-break:break-all;
+      color:var(--text);
+      line-height:1.5;
+    }
+    .analyticsEmpty{
+      color:var(--muted);
+      font-size:13px;
+      text-align:center;
+      padding:28px 0;
+    }
+
     /* Autopilot investigate tab */
     .autopilotPad{
       flex:1;
@@ -1092,6 +1147,7 @@ def index():
           <button class="tabBtn" data-agent="vibe">Vibe</button>
           <button class="tabBtn" data-agent="team">Team</button>
           <button class="tabBtn" data-agent="autopilot">Autopilot <span class="apBadge" id="apTabBadge" style="display:none">0</span></button>
+          <button class="tabBtn" data-agent="analytics">📊 Analytics</button>
           <button class="tabBtn" data-agent="cheap">💬 Chat</button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
@@ -1160,6 +1216,19 @@ def index():
           <div class="apEmptyState" id="apEmpty">
             <span>⚙ No findings yet</span>
             <span style="font-size:11px;max-width:300px;">Autopilot investigates autonomously and only surfaces issues here — routine checks stay silent.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analytics tab panel -->
+      <div class="analyticsPad" id="analyticsPad">
+        <div class="analyticsToolbar">
+          <button class="vibeBtn vibeSecondaryBtn" id="analyticsFetchBtn">📡 Fetch per-trade analytics</button>
+          <span id="analyticsStatus" style="font-size:12px;color:var(--muted);"></span>
+        </div>
+        <div class="analyticsBody" id="analyticsBody">
+          <div class="analyticsEmpty" id="analyticsEmpty">
+            Click <strong>Fetch per-trade analytics</strong> to retrieve gross/net P&amp;L, fees, slippage, and reason-code breakdown from the VPS.
           </div>
         </div>
       </div>
@@ -1371,6 +1440,7 @@ def index():
   const teamFeedEl = document.getElementById("teamFeed");
   const vibePadEl  = document.getElementById("vibePad");
   const autopilotPadEl = document.getElementById("autopilotPad");
+  const analyticsPadEl = document.getElementById("analyticsPad");
   const cheapBarEl = document.getElementById("cheapBar");
   const composerEl = document.querySelector(".chatComposer");
 
@@ -1378,17 +1448,19 @@ def index():
     const isTeam = ag === "team";
     const isVibe = ag === "vibe";
     const isAutopilot = ag === "autopilot";
+    const isAnalytics = ag === "analytics";
     const isCheap = ag === "cheap";
-    // Show the right chat pane (or none for team/vibe/autopilot) — no re-render
+    // Show the right chat pane (or none for team/vibe/autopilot/analytics) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
-      pane.style.display = (!isTeam && !isVibe && !isAutopilot && key === ag) ? "" : "none";
+      pane.style.display = (!isTeam && !isVibe && !isAutopilot && !isAnalytics && key === ag) ? "" : "none";
     }
-    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot) ? "flex" : "none";
+    teamBtnsBarEl.style.display  = (!isVibe && !isAutopilot && !isAnalytics) ? "flex" : "none";
     cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     vibePadEl.style.display      = isVibe      ? "flex" : "none";
     autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
-    composerEl.style.display     = (isTeam || isVibe || isAutopilot) ? "none" : "";
+    analyticsPadEl.style.display = isAnalytics ? "flex" : "none";
+    composerEl.style.display     = (isTeam || isVibe || isAutopilot || isAnalytics) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
     }
@@ -2514,6 +2586,73 @@ def index():
     apUpdateBadge(0);
     // Mark rendered rows as read
     apFeedEl.querySelectorAll(".apFindingRow.unread").forEach(r => r.classList.remove("unread"));
+  };
+
+  // ── Analytics tab ─────────────────────────────────────────────────────────
+
+  const analyticsFetchBtn = document.getElementById("analyticsFetchBtn");
+  const analyticsStatus   = document.getElementById("analyticsStatus");
+  const analyticsBodyEl   = document.getElementById("analyticsBody");
+  const analyticsEmptyEl  = document.getElementById("analyticsEmpty");
+
+  function _renderAnalyticsSection(title, text) {
+    const sec = document.createElement("div");
+    sec.className = "analyticsSection";
+    const h = document.createElement("div");
+    h.className = "analyticsSectionTitle";
+    h.textContent = title;
+    sec.appendChild(h);
+    const pre = document.createElement("div");
+    pre.className = "analyticsRaw";
+    pre.textContent = text || "(no data)";
+    sec.appendChild(pre);
+    return sec;
+  }
+
+  analyticsFetchBtn.onclick = async () => {
+    analyticsFetchBtn.disabled = true;
+    analyticsStatus.textContent = "Fetching…";
+    analyticsBodyEl.querySelectorAll(".analyticsSection").forEach(el => el.remove());
+    analyticsEmptyEl.style.display = "none";
+    try {
+      const res = await fetch(API_BASE + "/ops/report?report_id=per_trade_analytics", {method: "POST"});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        analyticsBodyEl.appendChild(_renderAnalyticsSection(
+          "Error",
+          err.detail || `HTTP ${res.status}`
+        ));
+        analyticsStatus.textContent = "Error";
+        return;
+      }
+      const data = await res.json();
+      const raw = (data.output || "").trim();
+
+      if (!raw || raw.startsWith("[no ") || raw.startsWith("[SSH not") || raw.startsWith("[Unknown")) {
+        analyticsEmptyEl.textContent = raw || "No analytics data available. Ensure the bot is running and trade logs exist on the VPS.";
+        analyticsEmptyEl.style.display = "";
+        analyticsStatus.textContent = "No data";
+        return;
+      }
+
+      // Split output by section headers (--- cmd... ---) and render each
+      const sections = raw.split(/\n(?=---)/);
+      sections.forEach(sec => {
+        const lines = sec.split("\n");
+        const header = lines[0].startsWith("---") ? lines[0].replace(/^---\s*/, "").replace(/\s*---$/, "").trim() : "Results";
+        const body = lines.slice(1).join("\n").trim();
+        if (body && body !== "(empty)") {
+          analyticsBodyEl.appendChild(_renderAnalyticsSection(header, body));
+        }
+      });
+
+      analyticsStatus.textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch(e) {
+      analyticsBodyEl.appendChild(_renderAnalyticsSection("Error", e.message || String(e)));
+      analyticsStatus.textContent = "Error";
+    } finally {
+      analyticsFetchBtn.disabled = false;
+    }
   };
 </script>
 </body>
