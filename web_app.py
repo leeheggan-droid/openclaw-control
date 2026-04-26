@@ -23,7 +23,7 @@ from openclaw_control.service import (
     handle_message, handle_agent_message,
     run_vibe_report,
     start_team_review, get_team_review_events,
-    start_vibe_run, get_vibe_run,
+    start_vibe_run, get_vibe_run, handle_vibe_next,
     start_autopilot, stop_autopilot, get_autopilot_status,
     get_autopilot_findings, ack_autopilot_findings, get_autopilot_events,
 )
@@ -81,6 +81,12 @@ class ProposalConfirmRequest(BaseModel):
 
 class VibePlanRequest(BaseModel):
     goal: str
+    workspace: dict = {}
+
+
+class VibeNextRequest(BaseModel):
+    goal: str
+    history: list[dict] = []   # list of {"command": str, "output": str}
     workspace: dict = {}
 
 
@@ -2590,6 +2596,11 @@ def index():
   let vibePollTimer = null;
   let vibeSshHost = "";
 
+  // Conversation history for iterative AI evaluation: [{command, output}, ...]
+  let vibeHistory = [];
+  // Max rounds of AI-driven follow-up before handing back to the operator.
+  const VIBE_MAX_ITERATIONS = 5;
+
   // Capture ssh_host from server config
   fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) vibeSshHost = cfg.ssh_host;
@@ -2621,11 +2632,65 @@ def index():
     vibeApprovalBannerEl.style.display = "none";
   }
 
+  // Ask AI to evaluate the collected history and decide if goal is answered or
+  // a follow-up command is needed. Sets up the next command for operator approval
+  // when the AI wants to continue investigating.
+  async function vibeEvaluateNext() {
+    const goal = vibeGoalInputEl.value.trim();
+    if (!goal) return;
+
+    // Guard against runaway iterations.
+    if (vibeHistory.length >= VIBE_MAX_ITERATIONS) {
+      vibeFeedAppend(
+        "⚠️ Max iterations reached (" + VIBE_MAX_ITERATIONS + "). Review the outputs above.",
+        "info"
+      );
+      setVibeBusy(false);
+      return;
+    }
+
+    vibeFeedAppend("🤔 AI evaluating results…", "info");
+    setVibeBusy(true);
+    try {
+      const res = await fetch(API_BASE + "/vibe/next", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          goal,
+          history: vibeHistory,
+          workspace: {terminal_tail: getShellOutput()},
+        }),
+      });
+      const data = await res.json();
+      if (data.done) {
+        vibeFeedAppend("✅ AI answer: " + (data.answer || "(no answer)"), "done");
+        setVibeBusy(false);
+      } else {
+        const nextCmd = (data.command || "").trim();
+        if (!nextCmd) {
+          vibeFeedAppend("⚠️ AI couldn't suggest a next step — review outputs above.", "info");
+          setVibeBusy(false);
+          return;
+        }
+        const reason = data.reason ? " (" + data.reason + ")" : "";
+        vibeFeedAppend("💡 AI suggests next command" + reason + ":", "info");
+        vibeCommandInputEl.value = nextCmd;
+        showVibeApproval(nextCmd);
+        setVibeBusy(false);
+      }
+    } catch(err) {
+      vibeFeedAppend("❌ Evaluation error: " + (err.message || String(err)), "err");
+      setVibeBusy(false);
+    }
+  }
+
   // ✨ Plan with AI: ask the Vibe Planner agent to formulate a shell command
   vibePlanBtnEl.onclick = async () => {
     const goal = vibeGoalInputEl.value.trim();
     if (!goal) { vibeGoalInputEl.focus(); return; }
     hideVibeApproval();
+    // Reset history when starting a fresh planning session.
+    vibeHistory = [];
     setVibeBusy(true);
     vibeFeedAppend("⏳ Planning with AI…", "info");
     try {
@@ -2683,7 +2748,7 @@ def index():
       }
       vibeRunId = data.run_id;
       vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing…", "info");
-      vibePollTimer = setInterval(pollVibeRun, 3000);
+      vibePollTimer = setInterval(() => pollVibeRun(cmd), 3000);
     } catch(err) {
       vibeFeedAppend("❌ Request error: " + (err.message || String(err)), "err");
       setVibeBusy(false);
@@ -2693,7 +2758,7 @@ def index():
   // ✗ Cancel approval
   vibeCancelApprovalEl.onclick = hideVibeApproval;
 
-  async function pollVibeRun() {
+  async function pollVibeRun(pendingCmd) {
     if (!vibeRunId) return;
     try {
       const res = await fetch(API_BASE + "/vibe/poll/" + vibeRunId);
@@ -2702,8 +2767,16 @@ def index():
         clearInterval(vibePollTimer);
         vibePollTimer = null;
         vibeRunId = null;
-        vibeFeedAppend("✅ Vibe finished:\\n" + (data.output || "(no output)"), "done");
-        setVibeBusy(false);
+        const output = data.output || "(no output)";
+        vibeFeedAppend("✅ Vibe finished:\\n" + output, "done");
+        // Record in history and ask AI to evaluate.
+        const goal = vibeGoalInputEl.value.trim();
+        if (goal) {
+          vibeHistory.push({command: pendingCmd || "", output});
+          await vibeEvaluateNext();
+        } else {
+          setVibeBusy(false);
+        }
       } else if (data.status === "error") {
         clearInterval(vibePollTimer);
         vibePollTimer = null;
@@ -3484,6 +3557,15 @@ def vibe_execute(req: VibeExecuteRequest):
 def vibe_poll(run_id: str):
     """Return the current status and output of a Vibe run."""
     return get_vibe_run(run_id)
+
+
+@app.post("/vibe/next")
+def vibe_next(req: VibeNextRequest):
+    """Evaluate collected SSH outputs against the goal; return next command or final answer."""
+    goal = (req.goal or "").strip()
+    if not goal:
+        return {"done": True, "answer": "No goal specified."}
+    return handle_vibe_next(goal, req.history, req.workspace)
 
 
 # ── Autopilot investigate endpoints ──────────────────────────────────────────
