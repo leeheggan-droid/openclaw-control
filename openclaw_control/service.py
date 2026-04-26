@@ -313,6 +313,22 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
             mem_lines.append("=== END AGENT MEMORY ===")
             ctx_lines.append("\n".join(mem_lines))
 
+        # COO also receives cached pnl and quant snapshots so it can answer
+        # stateful questions from evidence collected during prior interactions
+        # without always invoking sub-agent tools.
+        if name == "coo":
+            for sub_name in ("pnl", "quant"):
+                sub_snap = _memory.load_snapshot(sub_name)
+                if sub_snap:
+                    sub_lines = [f"\n=== {sub_name.upper()} MEMORY (cached evidence) ==="]
+                    for k, v in sub_snap.items():
+                        if isinstance(v, str) and len(v) < 500:
+                            sub_lines.append(f"  [{k}] {v}")
+                        elif isinstance(v, (int, float, bool)):
+                            sub_lines.append(f"  [{k}] {v}")
+                    sub_lines.append(f"=== END {sub_name.upper()} MEMORY ===")
+                    ctx_lines.append("\n".join(sub_lines))
+
     ctx_header = "\n".join(ctx_lines)
     prompt = f"{ctx_header}\n\n{text}" if ctx_header else text
 
@@ -390,6 +406,22 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
                             _memory.save_snapshot(name, existing_snap, fp)
                     except (FuturesTimeout, Exception):
                         pass  # fall back to the original output that had the request
+
+        # ── Persist COO derived-summary memory ────────────────────────────────
+        # Save a compact memo summary after each substantive COO response.
+        # The fingerprint is config-only (SSH host + repo dir) because COO does
+        # not run SSH probes directly; it is invalidated on the next load if
+        # ssh_host or repo_dir change.  Evidence-anchoring is indirect: COO's
+        # context always includes pnl/quant cached snapshots (above), so its
+        # analysis is grounded in previously verified evidence.
+        # Only save when the output is substantive and not a partial/error memo.
+        if name == "coo" and len(final_output) > 100 and not final_output.startswith("["):
+            _fp = _memory.compute_fingerprint()
+            coo_snap = _memory.load_snapshot("coo")
+            coo_snap["last_coo_at"] = datetime.now(_tz.utc).replace(microsecond=0).isoformat()
+            coo_snap["last_memo_summary"] = final_output[:200]
+            coo_snap["halt_flagged"] = "halt" in final_output.lower()
+            _memory.save_snapshot("coo", coo_snap, _fp)
 
         return {"agent": name, "output": final_output}
     except FuturesTimeout:
@@ -623,6 +655,19 @@ def _evidence_gate(run: dict, vibe_snap: str) -> bool:
 
 def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> tuple[str, bool]:
     """Thin wrapper around run_with_evidence pre-bound to team-review dependencies."""
+
+    def _on_probe_success(report_id: str, probe_data: str) -> None:
+        """Persist a derived summary to memory after a successful team-review Vibe probe."""
+        if agent_key not in ("pnl", "quant") or not _is_valid_report_data(probe_data):
+            return
+        ct, gh = _vibe_reports.extract_fingerprint_fields(probe_data)
+        fp = _memory.compute_fingerprint(ct, gh)
+        snap = _memory.load_snapshot(agent_key)
+        snap[f"last_{report_id}"] = probe_data[:_MAX_REPORT_SUMMARY_LENGTH]
+        snap[f"last_{report_id}_at"] = datetime.now(_tz.utc).replace(microsecond=0).isoformat()
+        snap["last_report_id"] = report_id
+        _memory.save_snapshot(agent_key, snap, fp)
+
     return _run_with_evidence(
         agent, prompt, run,
         push_event=_push_event,
@@ -632,6 +677,7 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
         timeout_s=timeout_s,
         ssh_configured=bool(settings.ssh_host),
         agent_key=agent_key,
+        on_probe_success=_on_probe_success,
     )
 
 

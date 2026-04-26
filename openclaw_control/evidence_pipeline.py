@@ -11,10 +11,11 @@ VIBE_REQUEST_RE : re.Pattern
 
 run_with_evidence(agent, prompt, run, *, push_event, run_for_team,
                   run_vibe_probe, known_report_ids, timeout_s,
-                  ssh_configured, agent_key) -> tuple[str, bool]
+                  ssh_configured, agent_key[, on_probe_success]) -> tuple[str, bool]
     Run an agent, intercept any VIBE_REPORT_REQUEST token, execute the SSH
     probe (emitting feed events), and re-run the agent once with the live
-    data injected.  Returns (final_output, is_error).
+    data injected.  Calls on_probe_success(report_id, probe_data) on success
+    if provided.  Returns (final_output, is_error).
 
 dispatch_coo_action(coo_output, run, *, push_event, github_repo,
                     allowed_repos) -> None
@@ -45,6 +46,7 @@ def run_with_evidence(
     timeout_s: float,
     ssh_configured: bool,
     agent_key: str,
+    on_probe_success=None,
 ) -> tuple[str, bool]:
     """Run *agent* with VIBE_REPORT_REQUEST follow-up for team review.
 
@@ -52,6 +54,8 @@ def run_with_evidence(
     1. Emits a probe-start feed event announcing the data fetch.
     2. Executes the SSH probe via *run_vibe_probe*.
     3. Re-runs the agent once with the probe data injected.
+    4. Calls ``on_probe_success(report_id, probe_data)`` if supplied and the
+       re-run succeeded, allowing callers to persist evidence to memory.
 
     Falls back to the original first-pass output if the re-run fails or times
     out, so callers always receive a usable response.
@@ -85,6 +89,11 @@ def run_with_evidence(
         return output, is_error
 
     push_event(run, agent_key, "message", f"  ↳ Live {report_id} data injected ✓")
+    if on_probe_success is not None:
+        try:
+            on_probe_success(report_id, probe_data)
+        except Exception:
+            pass
     return output2, False
 
 
