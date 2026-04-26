@@ -1,20 +1,12 @@
-import subprocess
 from agents import function_tool
+
+from openclaw_control.tools.ssh_tools import ssh_run
+from openclaw_control.config import settings
 
 
 @function_tool(needs_approval=True)
-def vibe_prompt(workdir: str, prompt: str) -> str:
-    """Ask Vibe to draft code changes (approval required)."""
-    proc = subprocess.run(
-        ["vibe", "--workdir", workdir, "--prompt", prompt],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=900,
-    )
-    return (
-        f"exit={proc.returncode}\n"
-        f"STDOUT:\n{proc.stdout}\n"
-        f"STDERR:\n{proc.stderr}"
-    )
+def vibe_ssh_run(command: str) -> str:
+    """Run an approved shell command on the VPS via SSH (approval required)."""
+    if not settings.ssh_host:
+        return "error: OPENCLAW_SSH_HOST is not configured."
+    return ssh_run(settings.ssh_host, command)
