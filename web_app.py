@@ -1962,7 +1962,7 @@ def index():
           const pd = await pr.json();
           if (pd.status === "done") {
             clearInterval(pollInterval);
-            resultEl.textContent = "✅ Done: " + (pd.output || "").split("\n").slice(0, 3).join(" | ");
+            resultEl.textContent = "✅ Done: " + (pd.output || "").split("\\n").slice(0, 3).join(" | ");
           } else if (pd.status === "error" || pd.status === "not_found") {
             clearInterval(pollInterval);
             resultEl.textContent = "❌ " + (pd.error || pd.status);
