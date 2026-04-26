@@ -5,7 +5,13 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from openclaw_control.config import settings
-from openclaw_control.service import handle_message, handle_agent_message, start_team_review, get_team_review_events, start_vibe_run, get_vibe_run
+from openclaw_control.service import (
+    handle_message, handle_agent_message,
+    start_team_review, get_team_review_events,
+    start_vibe_run, get_vibe_run,
+    start_autopilot, stop_autopilot, get_autopilot_status,
+    get_autopilot_findings, ack_autopilot_findings,
+)
 
 app = FastAPI()
 
@@ -705,6 +711,76 @@ def index():
     .vibeFeedRow.info{color:rgba(147,197,253,.85);border-color:rgba(59,130,246,.2);}
     .vibeFeedRow.done{color:rgba(134,239,172,.85);border-color:rgba(34,197,94,.2);}
     .vibeFeedRow.err {color:rgba(252,165,165,.85);border-color:rgba(251,113,133,.2);}
+
+    /* Autopilot investigate tab */
+    .autopilotPad{
+      flex:1;
+      display:none;
+      flex-direction:column;
+      overflow:hidden;
+    }
+    .apStatus{
+      padding:10px 12px;
+      border-bottom:1px solid var(--border);
+      background:rgba(255,255,255,.01);
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+      font-size:12px;
+      color:var(--muted);
+    }
+    .apStatusDot{
+      width:8px; height:8px;
+      border-radius:999px;
+      background:rgba(156,163,175,.5);
+      flex-shrink:0;
+    }
+    .apStatusDot.running{background:var(--accent);box-shadow:0 0 6px rgba(34,197,94,.5);}
+    .apFeed{
+      flex:1;
+      overflow:auto;
+      padding:10px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+    .apFeed::-webkit-scrollbar{width:10px;}
+    .apFeed::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
+    .apFindingRow{
+      padding:10px 12px;
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--border);
+      border-radius:10px;
+    }
+    .apFindingRow.unread{border-left:3px solid rgba(251,113,133,.6);}
+    .apFindingMeta{
+      display:flex; gap:6px; align-items:center;
+      font-size:11px; color:var(--muted); margin-bottom:5px;
+    }
+    .apUrgency{
+      padding:1px 7px; border-radius:999px;
+      font-size:10px; font-weight:700; letter-spacing:.2px;
+    }
+    .apUrgency.high  {background:rgba(251,113,133,.2);color:#fca5a5;}
+    .apUrgency.medium{background:rgba(251,191,36,.18);color:rgba(251,191,36,.9);}
+    .apUrgency.low   {background:rgba(59,130,246,.18);color:#93c5fd;}
+    .apSummary{font-size:13px; color:var(--text); line-height:1.35;}
+    .apAction{font-size:12px; color:var(--muted); margin-top:4px;}
+    .apBadge{
+      display:inline-block;
+      background:rgba(251,113,133,.9);
+      color:#fff; border-radius:999px;
+      font-size:10px; padding:0 5px;
+      min-width:16px; text-align:center;
+      font-weight:700; margin-left:3px;
+      vertical-align:middle; line-height:16px;
+    }
+    .apEmptyState{
+      flex:1; display:flex; align-items:center; justify-content:center;
+      color:var(--muted); font-size:13px; flex-direction:column; gap:6px;
+      text-align:center;
+    }
   </style>
 </head>
 
@@ -724,6 +800,7 @@ def index():
           <button class="tabBtn" data-agent="coo">COO</button>
           <button class="tabBtn" data-agent="vibe">Vibe</button>
           <button class="tabBtn" data-agent="team">Team</button>
+          <button class="tabBtn" data-agent="autopilot">Autopilot <span class="apBadge" id="apTabBadge" style="display:none">0</span></button>
         </div>
         <div class="badge" id="statusBadge">ready</div>
       </div>
@@ -767,6 +844,23 @@ def index():
           </div>
         </div>
         <div class="vibeFeed" id="vibeFeed"></div>
+      </div>
+
+      <!-- Autopilot investigate panel -->
+      <div class="autopilotPad" id="autopilotPad">
+        <div class="apStatus">
+          <span class="apStatusDot" id="apDot"></span>
+          <span id="apStatusText">Stopped</span>
+          <span style="flex:1"></span>
+          <button class="vibeBtn vibeSecondaryBtn" id="apToggleBtn" style="font-size:11px;padding:4px 10px;">▶ Start</button>
+          <button class="vibeBtn vibeSecondaryBtn" id="apAckBtn" style="font-size:11px;padding:4px 10px;">✓ Mark all read</button>
+        </div>
+        <div class="apFeed" id="apFeed">
+          <div class="apEmptyState" id="apEmpty">
+            <span>⚙ No findings yet</span>
+            <span style="font-size:11px;max-width:300px;">Autopilot investigates autonomously and only surfaces issues here — routine checks stay silent.</span>
+          </div>
+        </div>
       </div>
 
       <div class="chatComposer">
@@ -966,20 +1060,26 @@ def index():
   // --- tab switching ---
   const teamFeedEl = document.getElementById("teamFeed");
   const vibePadEl  = document.getElementById("vibePad");
+  const autopilotPadEl = document.getElementById("autopilotPad");
   const composerEl = document.querySelector(".chatComposer");
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
     const isVibe = ag === "vibe";
-    // Show the right chat pane (or none for team/vibe) — no re-render
+    const isAutopilot = ag === "autopilot";
+    // Show the right chat pane (or none for team/vibe/autopilot) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
-      pane.style.display = (!isTeam && !isVibe && key === ag) ? "" : "none";
+      pane.style.display = (!isTeam && !isVibe && !isAutopilot && key === ag) ? "" : "none";
     }
-    teamFeedEl.style.display     = isTeam ? "flex" : "none";
-    vibePadEl.style.display      = isVibe ? "flex" : "none";
-    composerEl.style.display     = (isTeam || isVibe) ? "none" : "";
+    teamFeedEl.style.display     = isTeam      ? "flex" : "none";
+    vibePadEl.style.display      = isVibe      ? "flex" : "none";
+    autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
+    composerEl.style.display     = (isTeam || isVibe || isAutopilot) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
+    }
+    if (isAutopilot) {
+      pollAutopilotStatus();
     }
   }
 
@@ -1071,6 +1171,7 @@ def index():
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
     if (!text) return;
     if (activeAgent === "team") return; // composer hidden on team tab
+    if (activeAgent === "vibe" || activeAgent === "autopilot") return;
 
     addChat("user", text);
     histories[activeAgent].push({role: "user", text});
@@ -1668,6 +1769,144 @@ def index():
       // Network blip — keep polling
     }
   }
+
+  // ── Autopilot investigate tab ─────────────────────────────────────────────
+
+  const apDotEl     = document.getElementById("apDot");
+  const apStatusEl  = document.getElementById("apStatusText");
+  const apToggleEl  = document.getElementById("apToggleBtn");
+  const apAckEl     = document.getElementById("apAckBtn");
+  const apFeedEl    = document.getElementById("apFeed");
+  const apEmptyEl   = document.getElementById("apEmpty");
+  const apBadgeEl   = document.getElementById("apTabBadge");
+
+  let apRunning    = false;
+  let apPollTimer  = null;
+  let apFindingCursor = 0;
+
+  function _fmt_ago(isoStr) {
+    if (!isoStr) return "—";
+    const diff = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000);
+    if (diff < 5)   return "just now";
+    if (diff < 60)  return diff + "s ago";
+    if (diff < 3600) return Math.round(diff / 60) + "m ago";
+    return Math.round(diff / 3600) + "h ago";
+  }
+
+  function _fmt_countdown(secs) {
+    if (secs === null || secs === undefined) return "";
+    if (secs <= 0) return "running now";
+    if (secs < 60)  return "next in " + secs + "s";
+    return "next in " + Math.round(secs / 60) + "m";
+  }
+
+  function apUpdateBadge(unread) {
+    if (unread > 0) {
+      apBadgeEl.textContent = unread;
+      apBadgeEl.style.display = "";
+    } else {
+      apBadgeEl.style.display = "none";
+    }
+  }
+
+  function apRenderFinding(f) {
+    const row = document.createElement("div");
+    row.className = "apFindingRow" + (f.acked ? "" : " unread");
+
+    const meta = document.createElement("div");
+    meta.className = "apFindingMeta";
+
+    const ts = document.createElement("span");
+    ts.textContent = (f.t || "").replace("T", " ").replace("+00:00","").replace("Z","") + " UTC";
+    meta.appendChild(ts);
+
+    const urg = document.createElement("span");
+    urg.className = "apUrgency " + (f.urgency || "low");
+    urg.textContent = (f.urgency || "low").toUpperCase();
+    meta.appendChild(urg);
+
+    row.appendChild(meta);
+
+    const summary = document.createElement("div");
+    summary.className = "apSummary";
+    summary.textContent = f.summary || "";
+    row.appendChild(summary);
+
+    if (f.recommended_action) {
+      const action = document.createElement("div");
+      action.className = "apAction";
+      action.textContent = "→ " + f.recommended_action;
+      row.appendChild(action);
+    }
+
+    return row;
+  }
+
+  async function pollAutopilotStatus() {
+    try {
+      const res = await fetch("/autopilot/status");
+      const data = await res.json();
+      apRunning = !!data.running;
+
+      apDotEl.className  = "apStatusDot" + (apRunning ? " running" : "");
+      apToggleEl.textContent = apRunning ? "⏸ Stop" : "▶ Start";
+
+      const parts = [];
+      if (apRunning) {
+        parts.push("Running");
+        const cntd = _fmt_countdown(data.seconds_until_next_run);
+        if (cntd) parts.push(cntd);
+      } else {
+        parts.push("Stopped");
+      }
+      if (data.last_run) parts.push("last check " + _fmt_ago(data.last_run));
+      if (!apRunning && data.last_clear) parts.push("last clear " + _fmt_ago(data.last_clear));
+      apStatusEl.textContent = parts.join("  ·  ");
+
+      apUpdateBadge(data.unread || 0);
+
+      // Fetch any new findings
+      if (data.finding_count > apFindingCursor) {
+        const fr = await fetch("/autopilot/findings?cursor=" + apFindingCursor);
+        const fd = await fr.json();
+        if (fd.findings && fd.findings.length) {
+          apEmptyEl.style.display = "none";
+          fd.findings.forEach(f => {
+            apFeedEl.insertBefore(apRenderFinding(f), apEmptyEl.nextSibling);
+          });
+          apFindingCursor += fd.findings.length;
+          apFeedEl.scrollTop = apFeedEl.scrollHeight;
+        }
+      }
+    } catch(_e) {
+      // Network blip — ignore
+    }
+  }
+
+  apToggleEl.onclick = async () => {
+    const starting = !apRunning;
+    apToggleEl.disabled = true;
+    try {
+      const url = starting ? "/autopilot/start" : "/autopilot/stop";
+      await fetch(url, {method: "POST"});
+      await pollAutopilotStatus();
+      // If we just started, poll every 5 s while on this tab
+      if (starting && !apPollTimer) {
+        apPollTimer = setInterval(() => {
+          if (activeAgent === "autopilot") pollAutopilotStatus();
+        }, 5000);
+      }
+    } finally {
+      apToggleEl.disabled = false;
+    }
+  };
+
+  apAckEl.onclick = async () => {
+    await fetch("/autopilot/ack", {method: "POST"});
+    apUpdateBadge(0);
+    // Mark rendered rows as read
+    apFeedEl.querySelectorAll(".apFindingRow.unread").forEach(r => r.classList.remove("unread"));
+  };
 </script>
 </body>
 </html>
@@ -1840,3 +2079,35 @@ def vibe_execute(req: VibeExecuteRequest):
 def vibe_poll(run_id: str):
     """Return the current status and output of a Vibe run."""
     return get_vibe_run(run_id)
+
+
+# ── Autopilot investigate endpoints ──────────────────────────────────────────
+
+@app.post("/autopilot/start")
+def autopilot_start(interval: int = 0):
+    """Start the autopilot background investigation loop."""
+    return start_autopilot(interval or None)
+
+
+@app.post("/autopilot/stop")
+def autopilot_stop():
+    """Stop the autopilot background investigation loop."""
+    return stop_autopilot()
+
+
+@app.get("/autopilot/status")
+def autopilot_status():
+    """Return current autopilot state (running, last_run, unread count, etc.)."""
+    return get_autopilot_status()
+
+
+@app.get("/autopilot/findings")
+def autopilot_findings(cursor: int = 0):
+    """Return autopilot findings from the given cursor position."""
+    return get_autopilot_findings(cursor)
+
+
+@app.post("/autopilot/ack")
+def autopilot_ack():
+    """Acknowledge all findings (clears the unread badge)."""
+    return ack_autopilot_findings()
