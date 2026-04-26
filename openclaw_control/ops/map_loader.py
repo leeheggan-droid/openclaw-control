@@ -36,7 +36,7 @@ REQUIRED_KEYS: frozenset[str] = frozenset({
 })
 
 # Maximum characters for the compressed summary injected into agent prompts.
-MAX_SUMMARY_LENGTH: int = 3000
+_MAX_SUMMARY_LENGTH: int = 3000
 
 # ---------------------------------------------------------------------------
 # In-memory cache
@@ -94,8 +94,8 @@ def get_summary() -> str:
     """
     try:
         data = get_map()
-    except Exception as exc:
-        return f"[OPS MAP UNAVAILABLE: {exc}]"
+    except Exception:
+        return "[OPS MAP UNAVAILABLE — check server logs]"
 
     lines: list[str] = ["=== OPS MAP CORE MEMORY ==="]
 
@@ -172,6 +172,6 @@ def get_summary() -> str:
             lines.append(f"  [{key}] {summary}")
 
     result = "\n".join(lines)
-    if len(result) > MAX_SUMMARY_LENGTH:
-        result = result[:MAX_SUMMARY_LENGTH - 3] + "..."
+    if len(result) > _MAX_SUMMARY_LENGTH:
+        result = result[:_MAX_SUMMARY_LENGTH - 3] + "..."
     return result
