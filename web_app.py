@@ -1,3 +1,6 @@
+import json as _json
+import os as _os
+
 import requests as _requests
 
 from fastapi import FastAPI
@@ -122,7 +125,12 @@ def config():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
+    _gw = _os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
+    _gw_tag = (
+        f'<script>window.OPENCLAW_GATEWAY_URL = {_json.dumps(_gw)};</script>\n'
+        if _gw else ""
+    )
+    _page = """
 <!doctype html>
 <html lang="en">
 <head>
@@ -808,6 +816,9 @@ def index():
 </head>
 
 <body>
+<div id="backendBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(251,113,133,.15);border-bottom:1px solid rgba(251,113,133,.4);color:#fca5a5;font-size:13px;padding:10px 16px;text-align:center;">
+  ⚠️ Backend unreachable at <code id="backendBannerUrl"></code> — check that <code>uvicorn web_app:app --reload</code> is running.
+</div>
   <div class="app">
     <!-- LEFT -->
     <section class="card" id="leftCard">
@@ -969,6 +980,13 @@ def index():
   </div>
 
 <script>
+  // --- API base URL ---
+  // Defaults to same-origin. Server injects window.OPENCLAW_GATEWAY_URL when the
+  // OPENCLAW_GATEWAY_URL env-var is set; otherwise same-origin paths are used.
+  const API_BASE = (typeof window.OPENCLAW_GATEWAY_URL !== "undefined" && window.OPENCLAW_GATEWAY_URL)
+    ? window.OPENCLAW_GATEWAY_URL.replace(/[/]$/, "")
+    : window.location.origin;
+
   // --- DOM references ---
   const CHAT_PANES = {
     main:  document.getElementById("chat-main"),
@@ -1229,7 +1247,7 @@ def index():
 
     setBusy(true);
     try {
-      const res = await fetch("/agent/message", {
+      const res = await fetch(API_BASE + "/agent/message", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -1259,7 +1277,7 @@ def index():
 
     setBusy(true);
     try {
-      const res = await fetch("/message", {
+      const res = await fetch(API_BASE + "/message", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({text: "!" + cmd})
@@ -1320,7 +1338,7 @@ def index():
 
   // Fetch SSH host label from server config
   let serverRepoDir = "";
-  fetch("/config").then(r => r.json()).then(cfg => {
+  fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
     if (cfg && cfg.repo_dir) serverRepoDir = cfg.repo_dir;
     if (cfg && Array.isArray(cfg.allowed_repos) && cfg.allowed_repos.length) {
@@ -1328,7 +1346,11 @@ def index():
       cfg.allowed_repos.forEach(r => ALLOWED_REPOS.push(r));
     }
     updateRepoBadge();
-  }).catch(() => {});
+  }).catch(() => {
+    const banner = document.getElementById("backendBanner");
+    const urlEl  = document.getElementById("backendBannerUrl");
+    if (banner && urlEl) { urlEl.textContent = API_BASE + "/config"; banner.style.display = ""; }
+  });
 
   // --- Copilot bridge ---
 
@@ -1391,7 +1413,7 @@ def index():
 
     let data;
     try {
-      const res = await fetch("/copilot", {
+      const res = await fetch(API_BASE + "/copilot", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -1444,7 +1466,7 @@ def index():
       attempts++;
       if (attempts > maxAttempts) { clearInterval(timer); return; }
       try {
-        const url = "/copilot/poll/" + issueNumber + (repoParam ? "?repo=" + repoParam : "");
+        const url = API_BASE + "/copilot/poll/" + issueNumber + (repoParam ? "?repo=" + repoParam : "");
         const res = await fetch(url);
         const data = await res.json();
         if (data.pr_url) {
@@ -1588,7 +1610,7 @@ def index():
     showAgentTab("team");
 
     try {
-      const res = await fetch("/team/review", {
+      const res = await fetch(API_BASE + "/team/review", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -1614,7 +1636,7 @@ def index():
   async function pollTeamReview() {
     if (!activeTeamRunId || teamRunCancelled) return;
     try {
-      const res = await fetch(`/team/review/poll/${activeTeamRunId}?cursor=${teamPollCursor}`);
+      const res = await fetch(API_BASE + `/team/review/poll/${activeTeamRunId}?cursor=${teamPollCursor}`);
       const data = await res.json();
       if (data.events && data.events.length) {
         data.events.forEach(ev => appendTeamEvent(ev));
@@ -1662,7 +1684,7 @@ def index():
   let vibeSshHost = "";
 
   // Capture ssh_host from server config
-  fetch("/config").then(r => r.json()).then(cfg => {
+  fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) vibeSshHost = cfg.ssh_host;
   }).catch(() => {});
 
@@ -1700,7 +1722,7 @@ def index():
     setVibeBusy(true);
     vibeFeedAppend("⏳ Planning with AI…", "info");
     try {
-      const res = await fetch("/vibe/plan", {
+      const res = await fetch(API_BASE + "/vibe/plan", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -1741,7 +1763,7 @@ def index():
     vibeFeedAppend("🚀 Dispatching Vibe…", "info");
     vibeFeedAppend("command: " + cmd, "info");
     try {
-      const res = await fetch("/vibe/execute", {
+      const res = await fetch(API_BASE + "/vibe/execute", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({command: cmd}),
@@ -1767,7 +1789,7 @@ def index():
   async function pollVibeRun() {
     if (!vibeRunId) return;
     try {
-      const res = await fetch("/vibe/poll/" + vibeRunId);
+      const res = await fetch(API_BASE + "/vibe/poll/" + vibeRunId);
       const data = await res.json();
       if (data.status === "done") {
         clearInterval(vibePollTimer);
@@ -1908,7 +1930,7 @@ def index():
     btnEl.textContent = "⏳ Executing…";
     resultEl.textContent = "";
     try {
-      const res = await fetch("/vibe/execute", {
+      const res = await fetch(API_BASE + "/vibe/execute", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({command: cmd}),
@@ -1925,7 +1947,7 @@ def index():
       // Poll until done
       const pollInterval = setInterval(async () => {
         try {
-          const pr = await fetch("/vibe/poll/" + runId);
+          const pr = await fetch(API_BASE + "/vibe/poll/" + runId);
           const pd = await pr.json();
           if (pd.status === "done") {
             clearInterval(pollInterval);
@@ -1948,8 +1970,8 @@ def index():
   async function pollAutopilotStatus() {
     try {
       const [statusRes, eventsRes] = await Promise.all([
-        fetch("/autopilot/status"),
-        fetch("/autopilot/events?cursor=" + apEventCursor),
+        fetch(API_BASE + "/autopilot/status"),
+        fetch(API_BASE + "/autopilot/events?cursor=" + apEventCursor),
       ]);
       const data = await statusRes.json();
       const evData = await eventsRes.json();
@@ -1984,7 +2006,7 @@ def index():
 
       // Fetch any new findings
       if (data.finding_count > apFindingCursor) {
-        const fr = await fetch("/autopilot/findings?cursor=" + apFindingCursor);
+        const fr = await fetch(API_BASE + "/autopilot/findings?cursor=" + apFindingCursor);
         const fd = await fr.json();
         if (fd.findings && fd.findings.length) {
           apEmptyEl.style.display = "none";
@@ -2004,7 +2026,7 @@ def index():
     const starting = !apRunning;
     apToggleEl.disabled = true;
     try {
-      const url = starting ? "/autopilot/start" : "/autopilot/stop";
+      const url = API_BASE + (starting ? "/autopilot/start" : "/autopilot/stop");
       await fetch(url, {method: "POST"});
       await pollAutopilotStatus();
       // If we just started, poll every 5 s while on this tab
@@ -2019,7 +2041,7 @@ def index():
   };
 
   apAckEl.onclick = async () => {
-    await fetch("/autopilot/ack", {method: "POST"});
+    await fetch(API_BASE + "/autopilot/ack", {method: "POST"});
     apUpdateBadge(0);
     // Mark rendered rows as read
     apFeedEl.querySelectorAll(".apFindingRow.unread").forEach(r => r.classList.remove("unread"));
@@ -2028,6 +2050,9 @@ def index():
 </body>
 </html>
 """
+    if _gw_tag:
+        _page = _page.replace("</head>", _gw_tag + "</head>", 1)
+    return _page
 
 
 @app.post("/copilot")
