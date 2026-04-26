@@ -1248,6 +1248,91 @@ def index():
     .memEventRow.update        {border-left-color:rgba(34,197,94,.55);}
     .memEventRow.invalidate    {border-left-color:rgba(251,113,133,.55);}
     .memEventRow.operator_update{border-left-color:rgba(251,191,36,.55);}
+
+    /* Analytics stat cards */
+    .statsRow{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .statCard{
+      flex:1;
+      min-width:90px;
+      background:rgba(0,0,0,.28);
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:10px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .statCardLabel{
+      font-size:10px;
+      text-transform:uppercase;
+      letter-spacing:.5px;
+      color:var(--muted);
+      font-weight:600;
+    }
+    .statCardValue{
+      font-size:17px;
+      font-weight:700;
+      font-family:var(--mono);
+      color:var(--text);
+      line-height:1.2;
+    }
+    .statCardValue.pos{color:#86efac;}
+    .statCardValue.neg{color:#fca5a5;}
+
+    /* Analytics charts */
+    .chartWrap{
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px 14px;
+      overflow:hidden;
+    }
+    .chartTitle{
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.6px;
+      color:var(--muted);
+      margin-bottom:8px;
+    }
+    canvas.analyticsCanvas{
+      width:100%;
+      height:150px;
+      display:block;
+    }
+
+    /* Analytics trades table */
+    .tradesTableWrap{overflow-x:auto;}
+    table.tradesTable{
+      width:100%;
+      border-collapse:collapse;
+      font-size:12px;
+      font-family:var(--mono);
+    }
+    .tradesTable th{
+      text-align:left;
+      padding:6px 10px;
+      border-bottom:1px solid var(--border);
+      color:var(--muted);
+      font-size:10px;
+      text-transform:uppercase;
+      letter-spacing:.4px;
+      font-weight:700;
+      white-space:nowrap;
+    }
+    .tradesTable td{
+      padding:5px 10px;
+      border-bottom:1px solid rgba(255,255,255,.04);
+      color:var(--text);
+      white-space:nowrap;
+    }
+    .tradesTable tr:hover td{background:rgba(255,255,255,.03);}
+    .tradeSide.buy {color:#86efac;}
+    .tradeSide.sell{color:#fca5a5;}
   </style>
 </head>
 
@@ -1349,12 +1434,31 @@ def index():
       <!-- Analytics tab panel -->
       <div class="analyticsPad" id="analyticsPad">
         <div class="analyticsToolbar">
-          <button class="vibeBtn vibeSecondaryBtn" id="analyticsFetchBtn">📡 Fetch per-trade analytics</button>
+          <button class="vibeBtn vibePrimaryBtn" id="analyticsLoadBtn">📈 Load Charts &amp; Table</button>
+          <button class="vibeBtn vibeSecondaryBtn" id="analyticsFetchBtn">📡 SSH Probe</button>
           <span id="analyticsStatus" style="font-size:12px;color:var(--muted);"></span>
         </div>
         <div class="analyticsBody" id="analyticsBody">
+          <!-- KPI stat cards (populated by JS) -->
+          <div class="statsRow" id="analyticsStats" style="display:none"></div>
+          <!-- P&L chart -->
+          <div class="chartWrap" id="pnlChartWrap" style="display:none">
+            <div class="chartTitle">P&amp;L Over Time</div>
+            <canvas class="analyticsCanvas" id="pnlChart"></canvas>
+          </div>
+          <!-- Equity chart -->
+          <div class="chartWrap" id="equityChartWrap" style="display:none">
+            <div class="chartTitle">Equity Over Time</div>
+            <canvas class="analyticsCanvas" id="equityChart"></canvas>
+          </div>
+          <!-- Trade executions table (populated by JS) -->
+          <div class="analyticsSection" id="tradesTableSection" style="display:none">
+            <div class="analyticsSectionTitle">Recent Trade Executions</div>
+            <div class="tradesTableWrap" id="tradesTableWrap"></div>
+          </div>
+          <!-- SSH raw sections injected dynamically -->
           <div class="analyticsEmpty" id="analyticsEmpty">
-            Click <strong>Fetch per-trade analytics</strong> to retrieve gross/net P&amp;L, fees, slippage, and reason-code breakdown from the VPS.
+            Click <strong>Load Charts &amp; Table</strong> for visual analytics from the local trade log, or <strong>SSH Probe</strong> for raw VPS data.
           </div>
         </div>
       </div>
@@ -2790,10 +2894,15 @@ def index():
 
   // ── Analytics tab ─────────────────────────────────────────────────────────
 
-  const analyticsFetchBtn = document.getElementById("analyticsFetchBtn");
-  const analyticsStatus   = document.getElementById("analyticsStatus");
-  const analyticsBodyEl   = document.getElementById("analyticsBody");
-  const analyticsEmptyEl  = document.getElementById("analyticsEmpty");
+  const analyticsFetchBtn       = document.getElementById("analyticsFetchBtn");
+  const analyticsLoadBtn        = document.getElementById("analyticsLoadBtn");
+  const analyticsStatus         = document.getElementById("analyticsStatus");
+  const analyticsBodyEl         = document.getElementById("analyticsBody");
+  const analyticsEmptyEl        = document.getElementById("analyticsEmpty");
+  const analyticsStatsEl        = document.getElementById("analyticsStats");
+  const pnlChartWrapEl          = document.getElementById("pnlChartWrap");
+  const equityChartWrapEl       = document.getElementById("equityChartWrap");
+  const tradesTableSectionEl    = document.getElementById("tradesTableSection");
 
   function _renderAnalyticsSection(title, text) {
     const sec = document.createElement("div");
@@ -2809,6 +2918,204 @@ def index():
     return sec;
   }
 
+  // ── Vanilla canvas line chart ──────────────────────────────────────────────
+  function _drawLineChart(canvas, points, lineColor, fillColor) {
+    const dpr  = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width  = rect.width  * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const W = rect.width, H = rect.height;
+    const PL = 62, PR = 12, PT = 10, PB = 28;
+    const plotW = W - PL - PR, plotH = H - PT - PB;
+    if (!points.length) {
+      ctx.fillStyle = "rgba(230,238,252,.35)";
+      ctx.font = "12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("No data", W / 2, H / 2);
+      return;
+    }
+    const vals = points.map(p => p.v);
+    const minV = Math.min(...vals), maxV = Math.max(...vals);
+    const rangeV = maxV === minV ? (Math.abs(maxV) || 1) : maxV - minV;
+    const px = i  => PL + (i / Math.max(1, points.length - 1)) * plotW;
+    const py = v  => PT + (1 - (v - minV) / rangeV) * plotH;
+    // Grid + Y labels
+    ctx.strokeStyle = "rgba(255,255,255,.06)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const gy = PT + (i / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(PL, gy); ctx.lineTo(W - PR, gy); ctx.stroke();
+      const gv = maxV - (i / 4) * rangeV;
+      ctx.fillStyle = "rgba(230,238,252,.45)";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      const label = Math.abs(gv) >= 1000 ? gv.toFixed(0) : gv.toFixed(2);
+      ctx.fillText(label, PL - 4, gy + 4);
+    }
+    // Zero line
+    if (minV < 0 && maxV > 0) {
+      const zy = py(0);
+      ctx.strokeStyle = "rgba(255,255,255,.20)";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(PL, zy); ctx.lineTo(W - PR, zy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // Fill area
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(points[0].v));
+    for (let i = 1; i < points.length; i++) ctx.lineTo(px(i), py(points[i].v));
+    ctx.lineTo(px(points.length - 1), PT + plotH);
+    ctx.lineTo(px(0), PT + plotH);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(px(0), py(points[0].v));
+    for (let i = 1; i < points.length; i++) ctx.lineTo(px(i), py(points[i].v));
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    // X-axis labels
+    if (points.length >= 2) {
+      const idxs = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+      const aligns = ["left", "center", "right"];
+      ctx.fillStyle = "rgba(230,238,252,.40)";
+      ctx.font = "10px sans-serif";
+      idxs.forEach((idx, n) => {
+        ctx.textAlign = aligns[n];
+        const label = points[idx].t.slice(5, 16).replace("T", " ");
+        ctx.fillText(label, px(idx), H - 6);
+      });
+    }
+  }
+
+  // ── Stat card factory ──────────────────────────────────────────────────────
+  function _statCard(label, value, cls) {
+    const card = document.createElement("div");
+    card.className = "statCard";
+    const lbl = document.createElement("div");
+    lbl.className = "statCardLabel";
+    lbl.textContent = label;
+    card.appendChild(lbl);
+    const val = document.createElement("div");
+    val.className = "statCardValue" + (cls ? " " + cls : "");
+    val.textContent = value;
+    card.appendChild(val);
+    return card;
+  }
+
+  // ── Load Charts & Table from /trades and /pnl ─────────────────────────────
+  analyticsLoadBtn.onclick = async () => {
+    analyticsLoadBtn.disabled = true;
+    analyticsStatus.textContent = "Loading…";
+    analyticsBodyEl.querySelectorAll(".analyticsSection").forEach(el => el.remove());
+    analyticsEmptyEl.style.display = "none";
+    analyticsStatsEl.style.display = "none";
+    analyticsStatsEl.innerHTML = "";
+    pnlChartWrapEl.style.display = "none";
+    equityChartWrapEl.style.display = "none";
+    tradesTableSectionEl.style.display = "none";
+    try {
+      const [tradesRes, pnlRes] = await Promise.all([
+        fetch(API_BASE + "/trades?limit=200"),
+        fetch(API_BASE + "/pnl?limit=200"),
+      ]);
+      const tradesData = tradesRes.ok ? await tradesRes.json() : {trades: [], count: 0};
+      const pnlData    = pnlRes.ok   ? await pnlRes.json()   : {snapshots: [], count: 0};
+      // API returns newest-first; reverse to chronological order for charts
+      const trades = (tradesData.trades    || []).slice().reverse();
+      const snaps  = (pnlData.snapshots    || []).slice().reverse();
+
+      // ── KPI stat cards ──────────────────────────────────────────────────
+      const lastSnap  = snaps.length ? snaps[snaps.length - 1] : null;
+      const latestPnl = lastSnap && lastSnap.total_pnl    != null ? lastSnap.total_pnl    : null;
+      const latestEq  = lastSnap && lastSnap.equity       != null ? lastSnap.equity       : null;
+      const latestDD  = lastSnap && lastSnap.drawdown     != null ? lastSnap.drawdown     : null;
+      const latestSh  = lastSnap && lastSnap.sharpe_ratio != null ? lastSnap.sharpe_ratio : null;
+      const buys  = trades.filter(t => t.side === "buy").length;
+      const sells = trades.filter(t => t.side === "sell").length;
+      [
+        _statCard("Trades", trades.length, ""),
+        _statCard("Buys / Sells", buys + " / " + sells, ""),
+        _statCard("Total P&L",
+          latestPnl != null ? (latestPnl >= 0 ? "+" : "") + latestPnl.toFixed(4) : "—",
+          latestPnl != null ? (latestPnl >= 0 ? "pos" : "neg") : ""),
+        _statCard("Equity", latestEq != null ? latestEq.toFixed(2) : "—", ""),
+        _statCard("Drawdown",
+          latestDD != null ? (latestDD * 100).toFixed(2) + "%" : "—",
+          latestDD != null && latestDD > 0.05 ? "neg" : ""),
+        _statCard("Sharpe",
+          latestSh != null ? latestSh.toFixed(3) : "—",
+          latestSh != null ? (latestSh >= 1 ? "pos" : latestSh < 0 ? "neg" : "") : ""),
+      ].forEach(c => analyticsStatsEl.appendChild(c));
+      analyticsStatsEl.style.display = "flex";
+
+      // ── P&L line chart ──────────────────────────────────────────────────
+      const pnlPts = snaps.filter(s => s.total_pnl != null).map(s => ({t: s.ts, v: s.total_pnl}));
+      if (pnlPts.length) {
+        pnlChartWrapEl.style.display = "";
+        const cvs = document.getElementById("pnlChart");
+        requestAnimationFrame(() => _drawLineChart(cvs, pnlPts, "#22c55e", "rgba(34,197,94,.12)"));
+      }
+
+      // ── Equity line chart ───────────────────────────────────────────────
+      const eqPts = snaps.filter(s => s.equity != null).map(s => ({t: s.ts, v: s.equity}));
+      if (eqPts.length) {
+        equityChartWrapEl.style.display = "";
+        const cvs = document.getElementById("equityChart");
+        requestAnimationFrame(() => _drawLineChart(cvs, eqPts, "#60a5fa", "rgba(96,165,250,.10)"));
+      }
+
+      // ── Trade executions table ──────────────────────────────────────────
+      if (trades.length) {
+        tradesTableSectionEl.style.display = "";
+        const wrap  = document.getElementById("tradesTableWrap");
+        const table = document.createElement("table");
+        table.className = "tradesTable";
+        table.innerHTML =
+          "<thead><tr>" +
+          "<th>#</th><th>Timestamp</th><th>Symbol</th><th>Side</th>" +
+          "<th>Size</th><th>Fill Price</th><th>Trade ID</th><th>Source</th>" +
+          "</tr></thead>";
+        const tbody = document.createElement("tbody");
+        // Show newest first (up to 100 rows)
+        [...trades].reverse().slice(0, 100).forEach(t => {
+          const tr = document.createElement("tr");
+          const sideClass = (t.side || "").toLowerCase() === "buy" ? "buy" : "sell";
+          tr.innerHTML =
+            "<td>" + (t.id != null ? t.id : "") + "</td>" +
+            "<td>" + escapeHtml((t.ts || "").replace("T", " ").slice(0, 19)) + "</td>" +
+            "<td>" + escapeHtml(t.symbol || "") + "</td>" +
+            "<td><span class='tradeSide " + sideClass + "'>" + escapeHtml(t.side || "") + "</span></td>" +
+            "<td>" + (t.size != null ? t.size : "") + "</td>" +
+            "<td>" + (t.fill_price != null ? t.fill_price : "") + "</td>" +
+            "<td style='max-width:120px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(t.trade_id || "") + "</td>" +
+            "<td>" + escapeHtml(t.source || "") + "</td>";
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrap.innerHTML = "";
+        wrap.appendChild(table);
+      }
+
+      if (!pnlPts.length && !eqPts.length && !trades.length) {
+        analyticsEmptyEl.textContent = "No trade or P&L data in the local log. Use SSH Probe for raw VPS data, or ensure the bot is posting to /trades/log and /pnl/log.";
+        analyticsEmptyEl.style.display = "";
+      }
+      analyticsStatus.textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch(e) {
+      analyticsBodyEl.appendChild(_renderAnalyticsSection("Error", e.message || String(e)));
+      analyticsStatus.textContent = "Error";
+    } finally {
+      analyticsLoadBtn.disabled = false;
+    }
+  };
+
+  // ── SSH Probe (raw per-trade analytics from VPS) ──────────────────────────
   analyticsFetchBtn.onclick = async () => {
     analyticsFetchBtn.disabled = true;
     analyticsStatus.textContent = "Fetching…";
