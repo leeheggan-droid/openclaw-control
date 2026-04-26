@@ -20,7 +20,22 @@ quant_agent = Agent(
         "1) Method critique: what is solid / what is weak\n"
         "2) Suggested tests/metrics: walk-forward, OOS, turnover/fees\n"
         "3) Minimal improvements (max 3 items)\n"
+        "\n"
+        "Periodic / yearly review:\n"
+        "- If a review period is specified (e.g. '2-year review'), add a section:\n"
+        "  4) Periodic assessment — state the requested period, note how many trades are visible\n"
+        "     in the terminal output, flag if the sample is too small for statistical conclusions\n"
+        "     (< 30 trades), report any Sharpe / win-rate / drawdown figures visible in the logs,\n"
+        "     and provide a regime assessment (bull/bear/sideways) based on log signals.\n"
+        "\n"
+        "HALT-state analysis:\n"
+        "- If 'System HALTED' appears in the terminal output, add a dedicated section:\n"
+        "  HALT quant review — identify when the halt started from log timestamps, list every\n"
+        "  halt trigger mechanism visible in the code context or log (risk check, bear bypass,\n"
+        "  performance multiplier gate, etc.), state which trigger fired based on the visible\n"
+        "  performance_analyser output, and recommend the minimum condition that must be met\n"
+        "  before resumption is statistically safe.\n"
     ),
-    model_settings=ModelSettings(max_tokens=600),
+    model_settings=ModelSettings(max_tokens=700),
     tools=[],
 )

@@ -31,6 +31,7 @@ class TeamReviewRequest(BaseModel):
     mode: str = "quick"
     prompt: str = ""
     workspace: dict = {}
+    review_period: str = ""
 
 
 def _gh_headers(token: str) -> dict:
@@ -543,6 +544,7 @@ def index():
       <div class="teamBtnsBar">
         <button class="teamBtn" id="quickReviewBtn">⚡ Quick team review</button>
         <button class="teamBtn" id="detailedReviewBtn">🔍 Detailed team review</button>
+        <button class="teamBtn" id="yearlyReviewBtn">📅 Yearly review</button>
         <button class="teamBtn cancelBtn" id="cancelReviewBtn" style="display:none">✕ Cancel run</button>
       </div>
 
@@ -1044,6 +1046,7 @@ def index():
 
   const quickReviewBtn    = document.getElementById("quickReviewBtn");
   const detailedReviewBtn = document.getElementById("detailedReviewBtn");
+  const yearlyReviewBtn   = document.getElementById("yearlyReviewBtn");
   const cancelReviewBtn   = document.getElementById("cancelReviewBtn");
 
   let teamFeedEvents = [];
@@ -1124,18 +1127,26 @@ def index():
   function setTeamRunning(running) {
     quickReviewBtn.disabled    = running;
     detailedReviewBtn.disabled = running;
+    yearlyReviewBtn.disabled   = running;
     cancelReviewBtn.style.display = running ? "" : "none";
     setBusy(running);
   }
 
-  async function runTeamReview(mode) {
+  // reviewPeriod: optional string (e.g. "2-year"). Pass "" for no period-specific review.
+  async function runTeamReview(mode, reviewPeriod) {
     if (activeTeamRunId) return; // already running
 
     teamRunCancelled = false;
     activeTeamRunId = null;
     teamPollCursor = 0;
 
-    const userPrompt = inputEl.value.trim();
+    const period = reviewPeriod || "";
+    const defaultPrompt = period
+      ? `Produce a ${period} periodic review: (1) P&L summary with halt-state impact, ` +
+        `(2) quant critique with halt trigger analysis, (3) COO recommendation. ` +
+        `Clearly state if available data covers less than the requested period.`
+      : "";
+    const userPrompt = inputEl.value.trim() || defaultPrompt;
     const termTail   = getShellOutput();
 
     setTeamRunning(true);
@@ -1153,6 +1164,7 @@ def index():
         body: JSON.stringify({
           mode,
           prompt: userPrompt,
+          review_period: period,
           workspace: {terminal_tail: termTail},
         }),
       });
@@ -1198,8 +1210,9 @@ def index():
     setTeamRunning(false);
   }
 
-  quickReviewBtn.onclick    = () => runTeamReview("quick");
-  detailedReviewBtn.onclick = () => runTeamReview("detailed");
+  quickReviewBtn.onclick    = () => runTeamReview("quick", "");
+  detailedReviewBtn.onclick = () => runTeamReview("detailed", "");
+  yearlyReviewBtn.onclick   = () => runTeamReview("detailed", "2-year");
   cancelReviewBtn.onclick   = cancelTeamReview;
 </script>
 </body>
@@ -1330,7 +1343,10 @@ def agent_message(msg: AgentMessage):
 @app.post("/team/review")
 def team_review_start(req: TeamReviewRequest):
     mode = req.mode if req.mode in ("quick", "detailed") else "quick"
-    run_id = start_team_review(mode, req.prompt, req.workspace)
+    workspace = dict(req.workspace)
+    if req.review_period:
+        workspace["review_period"] = req.review_period
+    run_id = start_team_review(mode, req.prompt, workspace)
     return {"run_id": run_id}
 
 
