@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from openclaw_control.config import settings
 from openclaw_control.service import handle_message
 
 app = FastAPI()
@@ -9,6 +10,11 @@ app = FastAPI()
 
 class Message(BaseModel):
     text: str
+
+
+@app.get("/config")
+def config():
+    return {"ssh_host": settings.ssh_host}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -619,8 +625,10 @@ def index():
     runQuick(s);
   }
 
-  // fetch host label (best-effort)
-  hostBadge.textContent = (location.hostname === "localhost") ? "localhost" : location.hostname;
+  // fetch SSH host label from server config
+  fetch("/config").then(r => r.json()).then(cfg => {
+    if(cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
+  }).catch(() => {});
 </script>
 </body>
 </html>
