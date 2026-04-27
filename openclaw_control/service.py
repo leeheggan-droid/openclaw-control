@@ -147,8 +147,8 @@ def run_vibe_report(report_id: str) -> str:
             sections.append("\n".join(lines))
 
     # ── SSH commands ──────────────────────────────────────────────────────────
-    if not settings.ssh_host:
-        return "\n\n".join(sections) if sections else "[SSH not configured — cannot run Vibe report]"
+    if not settings.ssh_readonly_host:
+        return "\n\n".join(sections) if sections else "[OPENCLAW_SSH_READONLY_HOST not configured — read-only SSH probes are disabled]"
 
     commands = _report_commands_from_map().get(rid)
     if commands is None and not sections:
@@ -156,7 +156,7 @@ def run_vibe_report(report_id: str) -> str:
         return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
 
     for cmd in (commands or []):
-        result = run_ssh(cmd, timeout=15)
+        result = run_ssh_readonly(cmd, timeout=15)
         if "error" in result:
             sections.append(f"--- {cmd[:60]}... ---\n[SSH error]")
             continue
@@ -175,7 +175,7 @@ def _is_valid_report_data(report_data: str) -> bool:
     """
     if len(report_data) <= 50:
         return False
-    noise_markers = ("(empty)", "[SSH error]", "[SSH not configured", "[Unknown report_id")
+    noise_markers = ("(empty)", "[SSH error]", "[SSH not configured", "[Unknown report_id", "[OPENCLAW_SSH_READONLY_HOST not configured")
     return not any(m in report_data for m in noise_markers)
 
 
@@ -281,6 +281,12 @@ def _consolidate_evidence(
 
 
 def run_ssh(command: str, timeout: int = 10) -> dict:
+    """Run *command* on the VIBE execution host (OPENCLAW_SSH_HOST).
+
+    This is the *Vibe execution lane* — it targets settings.ssh_host and is
+    used exclusively for mutative / execution operations (vibe runs, direct !
+    commands).  Read-only probes must use :func:`run_ssh_readonly` instead.
+    """
     try:
         proc = subprocess.run(
             [
@@ -304,6 +310,53 @@ def run_ssh(command: str, timeout: int = 10) -> dict:
     except Exception as e:
         return {
             "type": "ssh",
+            "error": f"SSH error ({type(e).__name__}). Check server logs.",
+        }
+
+
+def run_ssh_readonly(command: str, timeout: int = 10) -> dict:
+    """Run *command* on the read-only SSH host (OPENCLAW_SSH_READONLY_HOST).
+
+    This is the *read-only lane* — it targets settings.ssh_readonly_host and
+    is used for all probes, snapshots, autopilot evidence collection, terminal
+    pills, and /ops/report.
+
+    **No fallback**: when OPENCLAW_SSH_READONLY_HOST is unset this function
+    returns an error dict and never falls back to the Vibe execution host.
+    """
+    if not settings.ssh_readonly_host:
+        return {
+            "type": "ssh_readonly",
+            "error": (
+                "OPENCLAW_SSH_READONLY_HOST is not configured — "
+                "read-only SSH features are disabled. "
+                "Set OPENCLAW_SSH_READONLY_HOST in .env to enable probes, "
+                "snapshots, and terminal pills."
+            ),
+        }
+    try:
+        proc = subprocess.run(
+            [
+                "ssh",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=yes",
+                "-o", "ConnectTimeout=5",
+                settings.ssh_readonly_host,
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return {
+            "type": "ssh_readonly",
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    except Exception as e:
+        return {
+            "type": "ssh_readonly",
             "error": f"SSH error ({type(e).__name__}). Check server logs.",
         }
 
@@ -539,7 +592,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         # After a successful probe, save a derived summary to agent memory
         # so subsequent calls don't need to re-probe for the same data.
         # ------------------------------------------------------------------
-        if name in ("main", "pnl", "quant") and settings.ssh_host:
+        if name in ("main", "pnl", "quant") and settings.ssh_readonly_host:
             match = _VIBE_REQUEST_RE.search(final_output)
             if match:
                 report_id = match.group(1).lower()
@@ -697,8 +750,8 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> _VibeSnapshot:
     Returns a consolidated _VibeSnapshot with the authoritative evidence source
     and a ≤20-line evidence summary derived from the strongest probe result.
     """
-    if not settings.ssh_host:
-        _push_event(run, "vibe", "message", "SSH not configured — snapshot skipped")
+    if not settings.ssh_readonly_host:
+        _push_event(run, "vibe", "message", "READONLY SSH not configured — snapshot skipped")
         return _VibeSnapshot("", "", "", False)
 
     _push_event(run, "vibe", "start", "")
@@ -771,7 +824,7 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> _VibeSnapshot:
             _push_event(run, "vibe", "message", "⏱ Time budget low — remaining probes skipped")
             break
         _push_event(run, "vibe", "message", f"📡 {label}…")
-        r = run_ssh(cmd, timeout=t)
+        r = run_ssh_readonly(cmd, timeout=t)
         if "error" in r:
             _push_event(run, "vibe", "message", "  ↳ [SSH error]")
             probe_results.append((label, ""))
@@ -843,7 +896,7 @@ def _evidence_gate(run: dict, vs: _VibeSnapshot) -> bool:
     When SSH is not configured the user is working offline; agents may still use
     whatever workspace context was provided (terminal tail, conversation history).
     """
-    if settings.ssh_host and not vs.any_usable:
+    if settings.ssh_readonly_host and not vs.any_usable:
         _push_event(
             run, "vibe", "error",
             "❌ Evidence collection failed — SSH is configured but all probes returned no data.\n"
@@ -894,7 +947,7 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
         run_vibe_probe=run_vibe_report,
         known_report_ids=set(_report_commands_from_map().keys()),
         timeout_s=timeout_s,
-        ssh_configured=bool(settings.ssh_host),
+        ssh_configured=bool(settings.ssh_readonly_host),
         agent_key=agent_key,
         on_probe_success=_on_probe_success,
     )
@@ -1389,7 +1442,7 @@ def _autopilot_push_event(kind: str, message: str) -> None:
 def _ap_ssh(label: str, command: str, timeout: int = 12) -> str:
     """Run one evidence-pack SSH command, emit a progress event, return output section."""
     _autopilot_push_event("gather", f"📡 {label}…")
-    result = run_ssh(command, timeout=timeout)
+    result = run_ssh_readonly(command, timeout=timeout)
     if "error" in result:
         return f"=== {label} ===\n[SSH error: {result['error']}]\n"
     stdout = (result.get("stdout") or "").strip()
@@ -1510,7 +1563,8 @@ def _build_autopilot_issue_body(
         recommended_action or "(see evidence below)",
         "",
         "## Context",
-        f"- **Host:** {settings.ssh_host or '(not configured)'}",
+        f"- **Host (Vibe):** {settings.ssh_host or '(not configured)'}",
+        f"- **Host (READONLY):** {settings.ssh_readonly_host or '(not configured)'}",
         f"- **Repo:** {settings.repo_dir or '(not configured)'}",
         "- **Triggered by:** OpenClaw Autopilot (automated investigation)",
         "",
@@ -1554,7 +1608,9 @@ def _autopilot_analyze(evidence: str) -> dict:
 
     ctx_lines = []
     if settings.ssh_host:
-        ctx_lines.append(f"SSH target: {settings.ssh_host}")
+        ctx_lines.append(f"SSH target (Vibe/execution): {settings.ssh_host}")
+    if settings.ssh_readonly_host:
+        ctx_lines.append(f"SSH target (READONLY/probes): {settings.ssh_readonly_host}")
     if settings.repo_dir:
         ctx_lines.append(f"Repo dir: {settings.repo_dir}")
     # Inject ops map so the investigate agent knows where to look and what paths to use.
@@ -1643,8 +1699,8 @@ def _autopilot_run_once() -> None:
     """Run a single investigation cycle: evidence → investigate → conclude → escalate."""
     global _AUTOPILOT_FINDING_COUNTER
 
-    if not settings.ssh_host:
-        _autopilot_push_event("skip", "SSH host not configured — skipping investigation.")
+    if not settings.ssh_readonly_host:
+        _autopilot_push_event("skip", "READONLY SSH host not configured — skipping investigation.")
         with _AUTOPILOT_LOCK:
             _AUTOPILOT_STATE["last_run"] = _now_iso()
         return

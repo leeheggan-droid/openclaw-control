@@ -35,7 +35,8 @@ class OpenClawTUI(App):
     def on_mount(self) -> None:
         log = self.query_one(RichLog)
         log.write("[bold green]OpenClaw Control ready.[/bold green]")
-        log.write(f"[dim]SSH host:[/dim] {settings.ssh_host}")
+        log.write(f"[dim]SSH host (Vibe):[/dim] {settings.ssh_host}")
+        log.write(f"[dim]SSH host (READONLY):[/dim] {settings.ssh_readonly_host or '(not configured)'}")
         log.write(f"[dim]Repo:[/dim] {settings.repo_dir}")
         log.write("[dim]Direct SSH:[/dim] prefix commands with !")
 
