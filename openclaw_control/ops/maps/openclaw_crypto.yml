@@ -1,0 +1,85 @@
+# Per-service inventory card — OpenClaw Crypto Orchestrator
+# Read-only facts from phase-0 discovery on 2026-04-27. No secrets, no remediation.
+#
+# This card complements (does NOT replace) container_map.vps_containers.primary in
+# openclaw_control_ops_map.yaml.
+
+card: openclaw_crypto
+discovery:
+  date: 2026-04-27
+  source: phase-0 read-only ssh discovery
+
+services:
+  - name: openclaw-orchestrator
+    container_name: openclaw-orchestrator
+    image: "python:3.13-slim"
+    status_at_discovery: "running (Up 18h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /data/.openclaw/workspace/my_openclaw_project
+    cmd: null
+    entrypoint:
+      shell: "/bin/sh -lc"
+      script: |
+        set -e
+        cd /data/.openclaw/workspace/my_openclaw_project
+        mkdir -p /tmp/pip-cache
+        mkdir -p crypto/data
+        if [ ! -x /venv/bin/python3 ]; then
+          python3 -m venv /venv
+        fi
+        /venv/bin/python3 -m pip install --upgrade pip
+        /venv/bin/python3 -m pip install -r requirements.txt
+        exec /venv/bin/python3 -u -m crypto.orchestrator
+    ports: []
+    mounts_count: 2
+    role: >
+      Primary crypto trading orchestrator. Runs `crypto.orchestrator` Python module
+      from a mounted source tree under /data/.openclaw/workspace/my_openclaw_project
+      inside the container.
+    observed_runtime_signals:
+      - "regime_detector → TRENDING (trend_strength=0.413, volatility=1.000, btc_direction=BULL)"
+      - "scheduler iterates over 662 trading pairs in batches of 25"
+      - "moon-v2: 5/5 momentum slots occupied; momentum-only scan running"
+      - "6 momentum runners detected 03:36–03:40 UTC on 2026-04-27 (CHIPUSD, HOUSEUSD, PENGUUSD, UMXMUSD, UPUSD, XIONUSD) with entry/stop/tp logged"
+    observed_warnings:
+      - "`Regime file stale (358s) — using UNCLEAR` (single occurrence; refreshed on next cycle)"
+
+host:
+  compose_files_observed:
+    - /opt/openclaw-crypto/docker-compose.orchestrator.yml
+    - /opt/openclaw-crypto/docker-compose.batch.yml
+    - /home/jacks/openclaw-crypto/docker-compose.orchestrator.yml
+    - /home/jacks/docker-compose.orchestrator.yml
+  source_repo: https://github.com/leeheggan-droid/openclaw-crypto
+  presumed_live_repo_path: /opt/openclaw-crypto
+  presumed_live_repo_head: "24aab78 (Merge PR #63 from copilot/remove-halt-completely)"
+  observed_clones:
+    - path: /opt/openclaw-crypto
+      head: 24aab78
+      remote: "https://github.com/leeheggan-droid/openclaw-crypto.git"
+      note: "HTTPS remote — likely deploy/pull-only clone; HEAD matches GitHub default branch HEAD"
+    - path: /home/jacks/openclaw-crypto
+      head: "d69c35d (test: patch trend agent gates in Fix8 trend magnitude tests)"
+      remote: "git@github.com:leeheggan-droid/openclaw-crypto.git"
+      note: "SSH remote — likely dev/edit clone; uncommitted/local commit ahead of origin"
+    - path: /home/jacks/alpaca_orb_bite_bot/openclaw-crypto
+      head: "7855780 (Merge PR #4 from copilot/diagnose-trading-issues)"
+      remote: "https://github.com/leeheggan-droid/openclaw-crypto.git"
+      note: "nested clone inside another repo's tree — appears stale"
+
+assumptions:
+  - "Live container mounts source from /opt/openclaw-crypto (matches OPENCLAW_REPO_DIR default and HEAD aligned with GitHub default branch HEAD as of 2026-04-26)."
+  - "The existing container_map.vps_containers.primary entry in openclaw_control_ops_map.yaml correctly identifies this container as 'openclaw-orchestrator'."
+
+unknowns:
+  - "Exact host paths for the 2 container mounts (mounts_count captured, sources not extracted in this pass)."
+  - "Where the 'Regime file' lives on disk (in-container or mounted volume)."
+  - "Whether docker-compose.batch.yml is currently active or a separate occasional workflow."
+  - "What the 5 occupied 'moon-v2' slots correspond to (open positions vs cooldowns)."
+
+next_inspection_questions:
+  - "Resolve the 2 mounts: `docker inspect openclaw-orchestrator --format '{{range .Mounts}}{{.Type}}:{{.Source}}->{{.Destination}}; {{end}}'`"
+  - "Confirm active compose project + working dir: `docker inspect openclaw-orchestrator --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}; {{index .Config.Labels \"com.docker.compose.project.config_files\"}}'`"
+  - "Locate the regime file: `docker exec openclaw-orchestrator find /data/.openclaw/workspace/my_openclaw_project -name 'regime*' -not -path '*/venv/*' 2>/dev/null`"
+  - "What occupies the 5 moon-v2 slots? `docker logs --tail=2000 openclaw-orchestrator 2>&1 | grep -E 'moon|slot' | tail -50`"

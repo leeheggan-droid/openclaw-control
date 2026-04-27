@@ -1,0 +1,72 @@
+# Per-service inventory card — Upstream OpenClaw (Clawdbot/Moltbot lineage)
+# Read-only facts from phase-0 discovery on 2026-04-27. No secrets, no remediation.
+#
+# IMPORTANT: This is the public open-source OpenClaw assistant app, NOT the operator's
+# openclaw-crypto trading bot. Different codebases.
+
+card: openclaw_oss
+discovery:
+  date: 2026-04-27
+  source: phase-0 read-only ssh discovery
+
+services:
+  - name: openclaw-1ne6-openclaw-cron
+    container_name: openclaw-1ne6-openclaw-cron-1
+    image: openclaw-1ne6-openclaw-cron
+    status_at_discovery: "running (Up 43h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /data
+    cmd: ["/etc/crontabs/openclaw"]
+    entrypoint: ["/usr/local/bin/supercronic"]
+    ports: []
+    mounts_count: 6
+    role: "Cron sidecar for the upstream OpenClaw assistant."
+    observed_runtime_signals:
+      - "`process reaping disabled, not pid 1` (warning at start)"
+      - "`read crontab: /etc/crontabs/openclaw`"
+
+  - name: openclaw-1ne6-openclaw
+    container_name: openclaw-1ne6-openclaw-1
+    image: openclaw-1ne6-openclaw
+    status_at_discovery: "running (Up 19h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /data
+    cmd: ["node", "server.mjs"]
+    entrypoint: ["/entrypoint.sh"]
+    ports:
+      - host: "0.0.0.0:43248"
+        container: 43248
+        protocol: tcp
+    mounts_count: 6
+    role: >
+      Upstream OpenClaw (Clawdbot/Moltbot lineage) personal AI assistant —
+      Node.js multi-provider chat server with Discord and WhatsApp providers.
+    observed_runtime_signals:
+      - "discord provider logged in as 'Wizard the Lizard' (id 1484202909938745424) in guild 'Wizard lair'"
+      - "discord notice: 'Message Content Intent is limited; bots under 100 servers can use it without verification.'"
+
+host:
+  compose_files_observed: []  # no compose file matching openclaw-1ne6 was found under /opt /home /srv /root (depth 3)
+  source_repo: "upstream OSS — likely github.com/openclaw/openclaw (not in this operator's account)"
+  presumed_live_repo_path: "unknown — no .git repo found on disk for this project"
+  presumed_live_repo_head: unknown
+
+assumptions:
+  - "These containers are the upstream OpenClaw (formerly Moltbot/Clawdbot) self-hosted assistant, NOT openclaw-crypto."
+  - "The '1ne6' suffix is a docker-compose project-name hash; not significant beyond uniqueness."
+
+unknowns:
+  - "Where the compose project for openclaw-1ne6 lives on disk (none found in the discovery search paths)."
+  - "What 6 mounts each container has and which are bind volumes vs named volumes."
+  - "Whether port 43248 is reachable publicly or constrained by host firewall."
+  - "What the cron sidecar is actually scheduled to do (crontab content not read)."
+  - "Behaviour of the WhatsApp provider — log capture in this pass was limited to discord lines; presence of restart-loop pattern observed earlier in chat is not yet recorded as a card-level fact."
+
+next_inspection_questions:
+  - "Where is the compose project? `docker inspect openclaw-1ne6-openclaw-1 --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}; {{index .Config.Labels \"com.docker.compose.project.config_files\"}}'`"
+  - "What are the 6 mounts on each container? `docker inspect openclaw-1ne6-openclaw-1 --format '{{range .Mounts}}{{.Type}}:{{.Source}}->{{.Destination}}; {{end}}'`"
+  - "What does the cron schedule? `docker exec openclaw-1ne6-openclaw-cron-1 cat /etc/crontabs/openclaw`"
+  - "Is 43248 open to the internet? `ss -tlnp | grep 43248` and `iptables -L INPUT -n | grep 43248` (latter requires sudo)"
+  - "Is the WhatsApp provider in a restart loop? `docker logs --since 1h openclaw-1ne6-openclaw-1 2>&1 | grep -i whatsapp | tail -30`"

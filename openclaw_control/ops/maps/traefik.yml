@@ -1,0 +1,61 @@
+# Per-service inventory card — Traefik reverse proxy
+# Read-only facts from phase-0 discovery on 2026-04-27. No secrets, no remediation.
+
+card: traefik
+discovery:
+  date: 2026-04-27
+  source: phase-0 read-only ssh discovery
+
+services:
+  - name: traefik
+    container_name: traefik-traefik-1
+    image: "traefik:latest"
+    status_at_discovery: "running (Up 44h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /
+    cmd: null
+    entrypoint: ["/entrypoint.sh"]
+    ports: []  # not captured by basic ps; expected to bind :80 and :443 — confirm in next pass
+    mounts_count: 2
+    role: "Reverse proxy — HTTPS termination and Let's Encrypt certificate management."
+
+# CLI flags observed on the running container (read-only fact — captured from `docker inspect`-style output).
+startup_command_args:
+  api.dashboard: false
+  api.insecure: false
+  log.level: INFO
+  providers.docker: true
+  providers.docker.exposedbydefault: false
+  entrypoints.web.address: ":80"
+  entrypoints.websecure.address: ":443"
+  certificatesresolvers.letsencrypt.acme.httpchallenge: true
+  certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint: web
+  certificatesresolvers.letsencrypt.acme.email: "admin@srv1501082.hstgr.cloud"
+  certificatesresolvers.letsencrypt.acme.storage: "/letsencrypt/acme.json"
+  entrypoints.web.http.redirections.entrypoint.to: websecure
+  entrypoints.web.http.redirections.entrypoint.scheme: https
+
+observed_warnings:
+  - "upstream offers traefik 3.6.14 — running image is older 'traefik:latest' tag pinned at startup"
+  - "repeated `Failed to inspect container <id>` provider warnings for stale container IDs (cosmetic — short-lived containers no longer present)"
+
+host:
+  compose_files_observed: []  # no traefik-specific docker-compose*.yml found under /opt /home /srv /root depth 3
+  source_repo: "not-applicable — vendor image; configured via CLI flags / labels"
+
+assumptions:
+  - "Traefik is the only ingress in front of HTTPS for routed services on this host."
+  - "`providers.docker.exposedbydefault=false` means only containers carrying explicit traefik.* labels are routed by Traefik."
+
+unknowns:
+  - "Where Traefik's compose file or service unit lives on the host."
+  - "Which containers carry traefik.* labels (label inventory not extracted in this pass)."
+  - "Whether any dynamic config (file provider) is mounted alongside the letsencrypt volume."
+  - "Which host ports Traefik actually binds (expected 80/443 — not captured by the `docker ps` output we have)."
+
+next_inspection_questions:
+  - "Locate Traefik's compose project: `docker inspect traefik-traefik-1 --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}; {{index .Config.Labels \"com.docker.compose.project.config_files\"}}'`"
+  - "What are the 2 mounts (likely letsencrypt volume + docker.sock)? `docker inspect traefik-traefik-1 --format '{{range .Mounts}}{{.Type}}:{{.Source}}->{{.Destination}}; {{end}}'`"
+  - "Enumerate routed services and their rules: `docker ps --format '{{.Names}}' | xargs -I{} docker inspect {} --format '{{.Name}}: {{range $k,$v := .Config.Labels}}{{if eq (printf \"%.8s\" $k) \"traefik.\"}}{{$k}}={{$v}} {{end}}{{end}}'`"
+  - "Confirm 80/443 binding: `ss -tlnp | grep -E ':(80|443)\\s'`"

@@ -1,0 +1,64 @@
+# Per-service inventory card — Alpaca ORB Bite Bot
+# Read-only facts from phase-0 discovery on 2026-04-27. No secrets, no remediation.
+
+card: alpaca_orb
+discovery:
+  date: 2026-04-27
+  source: phase-0 read-only ssh discovery
+
+services:
+  - name: alpaca_orb_bite_bot
+    container_name: alpaca_orb_bite_bot
+    image: "alpaca_orb_bite_bot:latest"
+    status_at_discovery: "running (Up 44h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /app
+    cmd: null
+    entrypoint: ["/entrypoint.sh"]
+    ports: []
+    mounts_count: 2
+    role: >
+      Alpaca ORB ('Opening Range Breakout') strategy bot for US equities.
+      Entrypoint ensures venv + installs requirements, runs `dry_run_tests.py`,
+      then runs `run_live_light.py`. Sleeps until the next NY market open.
+    observed_runtime_signals:
+      - "`[tests] Running dry_run_tests.py … All tests passed` at start"
+      - "`[clock] is_open=False next_open=2026-04-27 09:30:00-04:00 next_close=2026-04-27 16:00:00-04:00`"
+      - "`[runner] Sleeping until market open: 2026-04-27 09:30:00-04:00 (NY)`"
+
+host:
+  compose_files_observed:
+    - /home/jacks/alpaca_orb_bite_bot/docker-compose.yml
+    - /home/jacks/docker/alpaca_orb_bite_bot/docker-compose.yml
+    - /home/jacks/trading_bots/alpaca_orb_bite_bot/docker-compose.yml
+  source_repo: https://github.com/leeheggan-droid/alpaca_orb_bite_bot
+  presumed_live_repo_path: /home/jacks/alpaca_orb_bite_bot
+  presumed_live_repo_head: "51857366 (Merge PR #14 from copilot/run-pnl-model-review)"
+  observed_clones:
+    - path: /home/jacks/alpaca_orb_bite_bot
+      head: 51857366
+      remote: https://github.com/leeheggan-droid/alpaca_orb_bite_bot.git
+      note: "most recent HEAD — assumed live"
+    - path: /home/jacks/docker/alpaca_orb_bite_bot
+      head: "043257c (Merge PR #6 from copilot/evolve-to-multi-strategy-bot)"
+      remote: https://github.com/leeheggan-droid/alpaca_orb_bite_bot
+      note: "older HEAD — likely stale"
+    - path: /home/jacks/trading_bots/alpaca_orb_bite_bot
+      head: "f70f18a (Initial commit: backtest pipeline + ExecutorV2)"
+      remote: https://github.com/leeheggan-droid/alpaca_orb_bite_bot.git
+      note: "initial-commit only — almost certainly stale"
+
+assumptions:
+  - "/home/jacks/alpaca_orb_bite_bot is the live deployment (newest HEAD; pip-install lines from the running container match its requirements.txt)."
+
+unknowns:
+  - "Which compose file `docker compose up` actually used to launch this container."
+  - "Source paths for the 2 mounts (state, data, replay_*.csv files in the repo are candidates)."
+  - "Whether `run_live_light.py` is the only entrypoint (the repo also contains `run_live_multi.py`)."
+  - "Pre-pip-install log lines were not captured in this pass — earlier startup details unavailable."
+
+next_inspection_questions:
+  - "Which compose project owns this container? `docker inspect alpaca_orb_bite_bot --format '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}; {{index .Config.Labels \"com.docker.compose.project.config_files\"}}'`"
+  - "What are the 2 mounts? `docker inspect alpaca_orb_bite_bot --format '{{range .Mounts}}{{.Type}}:{{.Source}}->{{.Destination}}; {{end}}'`"
+  - "What diverges between the 3 alpaca_orb_bite_bot clones on disk? `for d in /home/jacks/alpaca_orb_bite_bot /home/jacks/docker/alpaca_orb_bite_bot /home/jacks/trading_bots/alpaca_orb_bite_bot; do echo \"== $d ==\"; (cd $d && git log --oneline -5); done`"

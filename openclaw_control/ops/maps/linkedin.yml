@@ -1,0 +1,79 @@
+# Per-service inventory card — LinkedIn Data Centre News
+# Read-only facts from phase-0 discovery on 2026-04-27. No secrets, no remediation.
+
+card: linkedin
+discovery:
+  date: 2026-04-27
+  source: phase-0 read-only ssh discovery
+
+services:
+  - name: linkedin-cron
+    container_name: linkedin_data_centre_news-linkedin-cron-1
+    image: linkedin_data_centre_news-linkedin-cron
+    status_at_discovery: "running (Up 13h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /workspace
+    cmd: ["supercronic", "/etc/supercronic/crontab"]
+    entrypoint: null
+    ports: []
+    mounts_count: 1
+    role: >
+      Scheduled runner. Executes
+      `cd /workspace && python3 -m linkedin.runner >> /data/linkedin.log 2>&1`
+      on cron schedule '0 22 * * 0' (Sunday 22:00 UTC = Monday 08:00 AEST).
+    observed_runtime_signals:
+      - "crontab loaded from /etc/supercronic/crontab"
+      - "last observed run: 2026-04-26T22:00:00Z — job succeeded after ~12s"
+
+  - name: linkedin-web
+    container_name: linkedin_data_centre_news-linkedin-web-1
+    image: linkedin_data_centre_news-linkedin-web
+    status_at_discovery: "running (Up 13h)"
+    restart_policy: unless-stopped
+    health: none
+    working_dir: /workspace
+    cmd: ["uvicorn", "web_app:app", "--host", "0.0.0.0", "--port", "8000"]
+    entrypoint: null
+    ports:
+      - host: "0.0.0.0:8000"
+        container: 8000
+        protocol: tcp
+    mounts_count: 1
+    role: "FastAPI web frontend for the LinkedIn news bot."
+    observed_runtime_signals:
+      - "served local request: GET / 200 OK"
+      - "received unsolicited probe traffic from 13.217.98.196 (AWS) for paths .env, secrets.json, credentials.json, etc — all 404"
+
+host:
+  compose_files_observed:
+    - /home/jacks/LinkedIn_Data_Centre_News/docker-compose.yml
+    - /home/jacks/LinkedIn_Data_Centre_News/LinkedIn_Data_Centre_News/docker-compose.yml  # nested duplicate
+  source_repo: https://github.com/leeheggan-droid/LinkedIn_Data_Centre_News
+  presumed_live_repo_path: /home/jacks/LinkedIn_Data_Centre_News
+  presumed_live_repo_head: "d852fbe (Merge PR #12 from copilot/schedule-daily-run-review)"
+  observed_clones:
+    - path: /home/jacks/LinkedIn_Data_Centre_News
+      head: d852fbe
+      remote: https://github.com/leeheggan-droid/LinkedIn_Data_Centre_News.git
+    - path: /home/jacks/LinkedIn_Data_Centre_News/LinkedIn_Data_Centre_News
+      head: "12a9439 (Fix Telegram delivery: respect INCLUDE_LINKS, add max message length, improve error output)"
+      remote: https://github.com/leeheggan-droid/LinkedIn_Data_Centre_News.git
+      note: "nested duplicate clone, distinct HEAD from parent — likely stale"
+
+assumptions:
+  - "Live deployment uses /home/jacks/LinkedIn_Data_Centre_News (HEAD matches GitHub default branch HEAD as of 2026-04-26)."
+  - "The nested .../LinkedIn_Data_Centre_News/LinkedIn_Data_Centre_News clone is stale and not driving the running containers."
+
+unknowns:
+  - "Which compose file `docker compose ls` reports as the active project for these containers."
+  - "Endpoints exposed by the linkedin-web FastAPI app."
+  - "Source paths for the single mount on each container (mounts_count=1, sources not captured)."
+  - "Whether linkedin.runner output (`>> /data/linkedin.log`) lands in a host bind, named volume, or container-only path."
+
+next_inspection_questions:
+  - "Which compose project owns these containers? `docker compose ls --all`"
+  - "What does the single mount resolve to? `docker inspect linkedin_data_centre_news-linkedin-web-1 --format '{{range .Mounts}}{{.Type}}:{{.Source}}->{{.Destination}}{{end}}'`"
+  - "What endpoints exist on linkedin-web? `docker exec linkedin_data_centre_news-linkedin-web-1 curl -s 127.0.0.1:8000/openapi.json`"
+  - "Where does /data/linkedin.log live on the host? `docker inspect linkedin_data_centre_news-linkedin-cron-1 --format '{{range .Mounts}}{{.Source}}->{{.Destination}}{{end}}'`"
+  - "Confirm cron schedule by reading the in-container crontab: `docker exec linkedin_data_centre_news-linkedin-cron-1 cat /etc/supercronic/crontab`"
