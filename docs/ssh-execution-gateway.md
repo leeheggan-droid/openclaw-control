@@ -75,8 +75,8 @@ Choose one of the methods below:
 ### Option A — Copy an existing user-local binary (simplest)
 
 ```bash
-# If vibe is already installed for another user (e.g. jacks):
-sudo cp "$(sudo -u jacks sh -lc 'command -v vibe')" /usr/local/bin/vibe
+# If vibe is already installed for another user (e.g. <username>):
+sudo cp "$(sudo -u <username> sh -lc 'command -v vibe')" /usr/local/bin/vibe
 sudo chown root:root /usr/local/bin/vibe
 sudo chmod 0755 /usr/local/bin/vibe
 ```
@@ -106,7 +106,7 @@ sudo -u openclaw-vibe /usr/local/bin/vibe --version
 # Expected: prints vibe version string, no "not found" error
 ```
 
-> **Why this matters:** If `vibe` lives only in `/home/jacks/.local/bin/`, the
+> **Why this matters:** If `vibe` lives only in `/home/<user>/.local/bin/`, the
 > `openclaw-vibe` user has no access to that directory.  The forced-command
 > wrapper will exit with "vibe not found".  A system-visible path eliminates
 > this class of failure entirely.
