@@ -91,7 +91,8 @@ class VibeNextRequest(BaseModel):
 
 
 class VibeExecuteRequest(BaseModel):
-    command: str
+    workdir: str
+    prompt: str
 
 
 class CheapChatRequest(BaseModel):
@@ -1444,8 +1445,12 @@ def index():
             <textarea class="vibeTextarea" id="vibeGoalInput" rows="2" placeholder="Describe what you want to achieve…"></textarea>
           </div>
           <div>
-            <label class="vibeLabel" for="vibeCommandInput">Shell Command</label>
-            <textarea class="vibeTextarea" id="vibeCommandInput" rows="3" placeholder="AI will plan a shell command — or type one directly"></textarea>
+            <label class="vibeLabel" for="vibeWorkdirInput">Workdir</label>
+            <input class="vibeTextarea" id="vibeWorkdirInput" type="text" placeholder="/opt/openclaw-crypto" style="font-family:monospace;padding:6px 8px;" />
+          </div>
+          <div>
+            <label class="vibeLabel" for="vibePromptInput">Vibe Prompt</label>
+            <textarea class="vibeTextarea" id="vibePromptInput" rows="3" placeholder="AI will plan a vibe prompt — or type one directly"></textarea>
           </div>
           <div class="vibeActions">
             <button class="vibeBtn vibeSecondaryBtn" id="vibePlanBtn">✨ Plan with AI</button>
@@ -2585,7 +2590,8 @@ def index():
   // ── Vibe execution gateway ────────────────────────────────────────────────
 
   const vibeGoalInputEl      = document.getElementById("vibeGoalInput");
-  const vibeCommandInputEl   = document.getElementById("vibeCommandInput");
+  const vibeWorkdirInputEl   = document.getElementById("vibeWorkdirInput");
+  const vibePromptInputEl    = document.getElementById("vibePromptInput");
   const vibePlanBtnEl        = document.getElementById("vibePlanBtn");
   const vibeExecuteBtnEl     = document.getElementById("vibeExecuteBtn");
   const vibeApprovalBannerEl = document.getElementById("vibeApprovalBanner");
@@ -2597,11 +2603,6 @@ def index():
   let vibeRunId   = null;
   let vibePollTimer = null;
   let vibeSshHost = "";
-
-  // Conversation history for iterative AI evaluation: [{command, output}, ...]
-  let vibeHistory = [];
-  // Max rounds of AI-driven follow-up before handing back to the operator.
-  const VIBE_MAX_ITERATIONS = 5;
 
   // Capture ssh_host from server config
   fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
@@ -2623,9 +2624,12 @@ def index():
     setBusy(busy);
   }
 
-  function showVibeApproval(command) {
-    const prefix = vibeSshHost ? "ssh " + vibeSshHost + " " : "";
-    vibeApprovalCmdEl.textContent = prefix + command;
+  function showVibeApproval(workdir, prompt) {
+    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
+    // Shell-quote a value: always wrap in single quotes, escaping any literal single quotes.
+    const q = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
+    vibeApprovalCmdEl.textContent =
+      "ssh " + host + " vibe --workdir " + q(workdir) + " --prompt " + q(prompt);
     vibeApprovalBannerEl.style.display = "flex";
     vibeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
   }
@@ -2634,65 +2638,11 @@ def index():
     vibeApprovalBannerEl.style.display = "none";
   }
 
-  // Ask AI to evaluate the collected history and decide if goal is answered or
-  // a follow-up command is needed. Sets up the next command for operator approval
-  // when the AI wants to continue investigating.
-  async function vibeEvaluateNext() {
-    const goal = vibeGoalInputEl.value.trim();
-    if (!goal) return;
-
-    // Guard against runaway iterations.
-    if (vibeHistory.length >= VIBE_MAX_ITERATIONS) {
-      vibeFeedAppend(
-        "⚠️ Max iterations reached (" + VIBE_MAX_ITERATIONS + "). Review the outputs above.",
-        "info"
-      );
-      setVibeBusy(false);
-      return;
-    }
-
-    vibeFeedAppend("🤔 AI evaluating results…", "info");
-    setVibeBusy(true);
-    try {
-      const res = await fetch(API_BASE + "/vibe/next", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          goal,
-          history: vibeHistory,
-          workspace: {terminal_tail: getShellOutput()},
-        }),
-      });
-      const data = await res.json();
-      if (data.done) {
-        vibeFeedAppend("✅ AI answer: " + (data.answer || "(no answer)"), "done");
-        setVibeBusy(false);
-      } else {
-        const nextCmd = (data.command || "").trim();
-        if (!nextCmd) {
-          vibeFeedAppend("⚠️ AI couldn't suggest a next step — review outputs above.", "info");
-          setVibeBusy(false);
-          return;
-        }
-        const reason = data.reason ? " (" + data.reason + ")" : "";
-        vibeFeedAppend("💡 AI suggests next command" + reason + ":", "info");
-        vibeCommandInputEl.value = nextCmd;
-        showVibeApproval(nextCmd);
-        setVibeBusy(false);
-      }
-    } catch(err) {
-      vibeFeedAppend("❌ Evaluation error: " + (err.message || String(err)), "err");
-      setVibeBusy(false);
-    }
-  }
-
-  // ✨ Plan with AI: ask the Vibe Planner agent to formulate a shell command
+  // ✨ Plan with AI: ask the Vibe Planner agent to formulate workdir + prompt
   vibePlanBtnEl.onclick = async () => {
     const goal = vibeGoalInputEl.value.trim();
     if (!goal) { vibeGoalInputEl.focus(); return; }
     hideVibeApproval();
-    // Reset history when starting a fresh planning session.
-    vibeHistory = [];
     setVibeBusy(true);
     vibeFeedAppend("⏳ Planning with AI…", "info");
     try {
@@ -2707,10 +2657,11 @@ def index():
       const data = await res.json();
       const raw = data.output || data.error || "";
       try {
-        // Agent should return JSON {"command": "..."}
+        // Agent should return JSON {"workdir": "...", "prompt": "..."}
         const parsed = JSON.parse(raw);
-        if (parsed.command) vibeCommandInputEl.value = parsed.command;
-        vibeFeedAppend("✅ AI plan ready — review command above, then execute.", "done");
+        if (parsed.workdir) vibeWorkdirInputEl.value = parsed.workdir;
+        if (parsed.prompt)  vibePromptInputEl.value  = parsed.prompt;
+        vibeFeedAppend("✅ AI plan ready — review workdir & prompt above, then execute.", "done");
       } catch {
         vibeFeedAppend("AI response (could not auto-fill — copy manually):\\n" + raw, "info");
       }
@@ -2723,24 +2674,28 @@ def index():
 
   // ▶ Approve & Execute: show approval banner
   vibeExecuteBtnEl.onclick = () => {
-    const cmd = vibeCommandInputEl.value.trim();
-    if (!cmd) { vibeCommandInputEl.focus(); return; }
-    showVibeApproval(cmd);
+    const workdir = vibeWorkdirInputEl.value.trim();
+    const prompt  = vibePromptInputEl.value.trim();
+    if (!workdir) { vibeWorkdirInputEl.focus(); return; }
+    if (!prompt)  { vibePromptInputEl.focus();  return; }
+    showVibeApproval(workdir, prompt);
   };
 
   // ✅ Confirm & Execute
   vibeConfirmBtnEl.onclick = async () => {
-    const cmd = vibeCommandInputEl.value.trim();
-    if (!cmd) return;
+    const workdir = vibeWorkdirInputEl.value.trim();
+    const prompt  = vibePromptInputEl.value.trim();
+    if (!workdir || !prompt) return;
     hideVibeApproval();
     setVibeBusy(true);
     vibeFeedAppend("🚀 Dispatching Vibe…", "info");
-    vibeFeedAppend("command: " + cmd, "info");
+    vibeFeedAppend("workdir: " + workdir, "info");
+    vibeFeedAppend("prompt:  " + prompt, "info");
     try {
       const res = await fetch(API_BASE + "/vibe/execute", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({command: cmd}),
+        body: JSON.stringify({workdir, prompt}),
       });
       const data = await res.json();
       if (data.error) {
@@ -2749,8 +2704,8 @@ def index():
         return;
       }
       vibeRunId = data.run_id;
-      vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing…", "info");
-      vibePollTimer = setInterval(() => pollVibeRun(cmd), 3000);
+      vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing (may take up to 15 min)…", "info");
+      vibePollTimer = setInterval(() => pollVibeRun(workdir, prompt), 3000);
     } catch(err) {
       vibeFeedAppend("❌ Request error: " + (err.message || String(err)), "err");
       setVibeBusy(false);
@@ -2760,7 +2715,7 @@ def index():
   // ✗ Cancel approval
   vibeCancelApprovalEl.onclick = hideVibeApproval;
 
-  async function pollVibeRun(pendingCmd) {
+  async function pollVibeRun(pendingWorkdir, pendingPrompt) {
     if (!vibeRunId) return;
     try {
       const res = await fetch(API_BASE + "/vibe/poll/" + vibeRunId);
@@ -2771,14 +2726,7 @@ def index():
         vibeRunId = null;
         const output = data.output || "(no output)";
         vibeFeedAppend("✅ Vibe finished:\\n" + output, "done");
-        // Record in history and ask AI to evaluate.
-        const goal = vibeGoalInputEl.value.trim();
-        if (goal) {
-          vibeHistory.push({command: pendingCmd || "", output});
-          await vibeEvaluateNext();
-        } else {
-          setVibeBusy(false);
-        }
+        setVibeBusy(false);
       } else if (data.status === "error") {
         clearInterval(vibePollTimer);
         vibePollTimer = null;
@@ -2876,10 +2824,11 @@ def index():
       row.appendChild(action);
     }
 
-    if (f.vibe_command) {
+    if (f.vibe_workdir || f.vibe_prompt) {
       const cmdEl = document.createElement("div");
       cmdEl.className = "apAction";
-      cmdEl.textContent = "⚙ Command: " + f.vibe_command;
+      const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
+      cmdEl.textContent = "⚙ Command: ssh " + host + " vibe --workdir " + (f.vibe_workdir || "?") + " --prompt …";
       row.appendChild(cmdEl);
 
       const approveBtn = document.createElement("button");
@@ -2887,7 +2836,7 @@ def index():
       approveBtn.textContent = "✅ Approve & Execute via Vibe";
       const resultEl = document.createElement("div");
       resultEl.className = "apApproveResult";
-      approveBtn.onclick = () => apApproveAndExecute(f.vibe_command, approveBtn, resultEl);
+      approveBtn.onclick = () => apApproveAndExecute(f.vibe_workdir || "", f.vibe_prompt || "", approveBtn, resultEl);
       row.appendChild(approveBtn);
       row.appendChild(resultEl);
     }
@@ -2907,7 +2856,7 @@ def index():
     return row;
   }
 
-  async function apApproveAndExecute(cmd, btnEl, resultEl) {
+  async function apApproveAndExecute(workdir, prompt, btnEl, resultEl) {
     btnEl.disabled = true;
     btnEl.textContent = "⏳ Executing…";
     resultEl.textContent = "";
@@ -2915,7 +2864,7 @@ def index():
       const res = await fetch(API_BASE + "/vibe/execute", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({command: cmd}),
+        body: JSON.stringify({workdir, prompt}),
       });
       const data = await res.json();
       if (data.error) {
@@ -3547,11 +3496,14 @@ def vibe_plan(req: VibePlanRequest):
 
 @app.post("/vibe/execute")
 def vibe_execute(req: VibeExecuteRequest):
-    """Start a shell command run via SSH after user approval. Returns run_id for polling."""
-    command = (req.command or "").strip()
-    if not command:
-        return {"error": "command is required"}
-    run_id = start_vibe_run(command)
+    """Start a vibe run on the VPS via SSH after user approval. Returns run_id for polling."""
+    workdir = (req.workdir or "").strip()
+    prompt = (req.prompt or "").strip()
+    if not workdir:
+        return {"error": "workdir is required"}
+    if not prompt:
+        return {"error": "prompt is required"}
+    run_id = start_vibe_run(workdir, prompt)
     return {"run_id": run_id}
 
 
