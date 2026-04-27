@@ -4,18 +4,31 @@ This document provides copy/pasteable commands for the full end-to-end setup of
 the OpenClaw → VPS SSH execution gateway, from user creation through key
 generation to smoke-testing.
 
+The gateway is split into **two independent SSH lanes**:
+
+| Lane | Env var | User | Wrapper | Used for |
+|------|---------|------|---------|---------|
+| **Vibe (execution)** | `OPENCLAW_SSH_HOST` | `openclaw-vibe` | `bin/vibe-forced-command.sh` | Running `vibe` tasks; mutative operations |
+| **READONLY (probes)** | `OPENCLAW_SSH_READONLY_HOST` | `openclaw-readonly` | `bin/vibe-readonly-wrapper.sh` | Terminal pills, autopilot probes, snapshots, `/ops/report` |
+
+**No fallback**: if `OPENCLAW_SSH_READONLY_HOST` is unset, all read-only features
+are disabled gracefully. They will never silently use `OPENCLAW_SSH_HOST`.
+
 ---
 
 ## Overview
 
 ```
-Control plane (root)
-  └─ bin/vibe-openclaw --workdir <path> --prompt <text>
-       └─ ssh -i /root/.ssh/openclaw_vibe_ed25519 \
-              openclaw-vibe@<VPS> \
-              "vibe --workdir <path> --prompt <text>"
-                └─ /opt/openclaw/bin/vibe-forced-command.sh   (forced-command)
-                     └─ /usr/local/bin/vibe --workdir <path> --prompt <text>
+Control plane
+  ├─ VIBE lane (execution)
+  │    └─ ssh openclaw-vibe@<VPS>
+  │         └─ bin/vibe-forced-command.sh (forced-command)
+  │              └─ /usr/local/bin/vibe --workdir <path> --prompt <text>
+  │
+  └─ READONLY lane (probes / terminal pills / autopilot)
+       └─ ssh openclaw-readonly@<VPS>
+            └─ bin/vibe-readonly-wrapper.sh (forced-command)
+                 └─ bash -c "<allowlisted-command>"
 ```
 
 ---
@@ -236,7 +249,119 @@ sudo install -m 0755 bin/vibe-openclaw /usr/local/bin/vibe-openclaw
 
 ---
 
-## 8 — Smoke-test
+## 8 — Set up the READONLY lane (probes, terminal pills, autopilot)
+
+The READONLY lane uses a separate system user, SSH key, and forced-command
+wrapper (`bin/vibe-readonly-wrapper.sh`).  The wrapper allows only a finite
+allowlist of read-only commands (e.g. `docker`, `find`, `grep`, `git`,
+`sqlite3`, `uptime`).  No arbitrary passthrough, no shell expansion vectors.
+
+### 8.1 — Create the `openclaw-readonly` system user on the VPS
+
+```bash
+sudo useradd \
+    --system \
+    --shell /bin/bash \
+    --home-dir /var/lib/openclaw-readonly \
+    --create-home \
+    openclaw-readonly
+
+# Verify
+sudo getent passwd openclaw-readonly
+```
+
+### 8.2 — Install the readonly forced-command wrapper on the VPS
+
+```bash
+sudo install -d -m 0755 -o root -g root /opt/openclaw/bin
+
+# Copy from repo root
+sudo install -m 0755 -o root -g root \
+    bin/vibe-readonly-wrapper.sh \
+    /opt/openclaw/bin/vibe-readonly-wrapper.sh
+
+# Verify
+sudo ls -la /opt/openclaw/bin/vibe-readonly-wrapper.sh
+```
+
+### 8.3 — Generate a root-owned ED25519 key for the readonly lane
+
+```bash
+sudo ssh-keygen \
+    -t ed25519 \
+    -C "openclaw-readonly" \
+    -f /root/.ssh/openclaw_readonly_ed25519 \
+    -N ""
+
+sudo ls -la /root/.ssh/openclaw_readonly_ed25519 /root/.ssh/openclaw_readonly_ed25519.pub
+```
+
+### 8.4 — Install the public key into `authorized_keys`
+
+```bash
+sudo install -d -m 0700 -o openclaw-readonly -g openclaw-readonly \
+    /var/lib/openclaw-readonly/.ssh
+
+pubkey="$(sudo cat /root/.ssh/openclaw_readonly_ed25519.pub)"
+
+sudo tee /var/lib/openclaw-readonly/.ssh/authorized_keys >/dev/null <<EOF
+command="/opt/openclaw/bin/vibe-readonly-wrapper.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${pubkey}
+EOF
+
+sudo chmod 0600 /var/lib/openclaw-readonly/.ssh/authorized_keys
+sudo chown openclaw-readonly:openclaw-readonly \
+    /var/lib/openclaw-readonly/.ssh/authorized_keys
+
+# Verify
+sudo cat /var/lib/openclaw-readonly/.ssh/authorized_keys
+# Expected: command="...vibe-readonly-wrapper.sh",... ssh-ed25519 AAAA...
+```
+
+### 8.5 — Pin the VPS host key (if not already done in step 6)
+
+```bash
+sudo ssh-keyscan -H <VPS_HOST> | sudo tee -a /root/.ssh/known_hosts
+```
+
+### 8.6 — Add to `.env`
+
+```
+OPENCLAW_SSH_READONLY_HOST=openclaw-readonly@<VPS_HOST>
+```
+
+**No fallback**: if this variable is left unset, all read-only features
+(terminal pills, autopilot probes, snapshots, `/ops/report`) are disabled
+and display a clear "not configured" message. They never silently fall back
+to `OPENCLAW_SSH_HOST`.
+
+### 8.7 — Smoke-test the READONLY lane
+
+```bash
+# Must succeed — runs an allowlisted command via the wrapper
+sudo ssh \
+    -i /root/.ssh/openclaw_readonly_ed25519 \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    openclaw-readonly@<VPS_HOST> \
+    'uptime'
+
+# Must be rejected — blocklisted command
+sudo ssh \
+    -i /root/.ssh/openclaw_readonly_ed25519 \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    openclaw-readonly@<VPS_HOST> \
+    'rm -rf /tmp/test'
+# Expected: "vibe-readonly-wrapper: error: command 'rm' is on the blocklist"
+```
+
+---
+
+## 9 — Smoke-test (Vibe lane)
 
 ```bash
 # Direct SSH test (must succeed before testing the shim)
@@ -265,6 +390,8 @@ Expected output on success:
 
 ## Troubleshooting
 
+### Vibe lane (execution)
+
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Permission denied (publickey)` | Public key not in VPS `authorized_keys`, or wrong `.ssh` path | Confirm `sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys` contains the key |
@@ -276,3 +403,16 @@ Expected output on success:
 | `DENIED: command must start with 'vibe'` | Wrong command format sent | Check that `bin/vibe-openclaw` is up-to-date |
 | `OPENCLAW_SSH_HOST is not set` | `.env` missing the variable | Set `OPENCLAW_SSH_HOST=openclaw-vibe@<host>` in `.env` |
 | `connection timed out` | VPS unreachable or firewall | Check port 22 is open; verify `OPENCLAW_SSH_HOST` value |
+
+### READONLY lane (probes / terminal pills)
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `OPENCLAW_SSH_READONLY_HOST is not configured` in UI | `.env` missing the variable | Set `OPENCLAW_SSH_READONLY_HOST=openclaw-readonly@<host>` in `.env`; read-only features are disabled until set |
+| `Permission denied (publickey)` on readonly lane | Readonly key not in `/var/lib/openclaw-readonly/.ssh/authorized_keys` | Follow step 8.4 to install the public key |
+| `vibe-readonly-wrapper: error: command '…' is on the blocklist` | Command first token is blocked | Use an allowlisted command; mutations belong on the Vibe lane |
+| `vibe-readonly-wrapper: error: command '…' is not in the read-only allowlist` | Command first token not in allowlist | Add it to `ALLOWED_FIRST_TOKENS` in `bin/vibe-readonly-wrapper.sh` if it is genuinely read-only |
+| `vibe-readonly-wrapper: error: backtick sub-shell not permitted` | Command contains `` ` `` | Rewrite using `$()` alternative — actually `$()` is also blocked; simplify the command |
+| `vibe-readonly-wrapper: error: \$() process substitution not permitted` | Command contains `$(…)` | Simplify command to remove process substitution |
+| `vibe-readonly-wrapper: error: file redirect not permitted` | Command contains `>` or `<` | Only `2>&1` and `*/dev/null` redirects are allowed |
+| Terminal pills show "not configured" | `OPENCLAW_SSH_READONLY_HOST` unset | Configure the READONLY lane (§8) or leave disabled — pills will not silently fall back to `OPENCLAW_SSH_HOST` |

@@ -22,6 +22,7 @@ from openclaw_control.memory import agent_memory as _memory
 from openclaw_control.service import (
     handle_message, handle_agent_message,
     run_vibe_report,
+    run_ssh_readonly,
     start_team_review, get_team_review_events,
     start_vibe_run, get_vibe_run, handle_vibe_next,
     start_autopilot, stop_autopilot, get_autopilot_status,
@@ -135,7 +136,8 @@ def _build_issue_body(req: CopilotRequest) -> str:
         goal,
         "",
         "## Context",
-        f"- **Host:** {settings.ssh_host or '(not configured)'}",
+        f"- **Host (Vibe):** {settings.ssh_host or '(not configured)'}",
+        f"- **Host (READONLY):** {settings.ssh_readonly_host or '(not configured)'}",
         f"- **Repo:** {settings.repo_dir or '(not configured)'}",
         "- **Triggered from:** OpenClaw Web UI",
         "",
@@ -177,6 +179,7 @@ def _build_issue_body(req: CopilotRequest) -> str:
 def config():
     return {
         "ssh_host": settings.ssh_host,
+        "ssh_readonly_host": settings.ssh_readonly_host,
         "repo_dir": settings.repo_dir,
         "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
         "allowed_repos": sorted(_ALLOWED_REPOS),
@@ -219,6 +222,44 @@ def ops_report(report_id: str):
         )
     output = run_vibe_report(report_id)
     return {"report_id": report_id, "output": output}
+
+
+# Maximum command length accepted by the read-only SSH endpoint.
+_READONLY_CMD_MAX_LEN = 512
+
+
+class ReadonlySshRequest(BaseModel):
+    cmd: str
+
+
+@app.post("/ops/ssh-readonly-run")
+def ops_ssh_readonly_run(req: ReadonlySshRequest):
+    """Run a single read-only command on the READONLY SSH host (operator-approved).
+
+    The client must display the literal ssh command and receive explicit operator
+    confirmation (approval banner) before calling this endpoint.
+
+    The remote host enforces a first-token allowlist via bin/vibe-readonly-wrapper.sh.
+    This endpoint performs a length check only — content restriction is server-side.
+    """
+    cmd = (req.cmd or "").strip()
+    if not cmd:
+        raise HTTPException(status_code=422, detail="cmd must not be empty")
+    if len(cmd) > _READONLY_CMD_MAX_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cmd too long (max {_READONLY_CMD_MAX_LEN} chars)",
+        )
+    if not settings.ssh_readonly_host:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "OPENCLAW_SSH_READONLY_HOST is not configured — "
+                "read-only SSH features are disabled."
+            ),
+        )
+    result = run_ssh_readonly(cmd, timeout=30)
+    return result
 
 
 # ── Agent memory endpoints ─────────────────────────────────────────────────────
@@ -1460,6 +1501,7 @@ def index():
         <div class="vibeApprovalBanner" id="vibeApprovalBanner">
           <div class="vibeApprovalTitle">⚠️ Review &amp; Confirm Vibe Execution</div>
           <div class="vibeApprovalCmd" id="vibeApprovalCmd"></div>
+          <div class="vibeApprovalLane" style="font-size:11px;color:var(--muted);margin-top:2px;"></div>
           <div class="vibeApprovalBtns">
             <button class="vibeBtn vibePrimaryBtn" id="vibeConfirmBtn">✅ Confirm &amp; Execute</button>
             <button class="vibeBtn vibeDangerBtn" id="vibeCancelApprovalBtn">✗ Cancel</button>
@@ -1610,14 +1652,25 @@ def index():
 
       <div class="termBody" id="terminal"></div>
 
+      <!-- READONLY approval banner — shown before each terminal pill command -->
+      <div class="vibeApprovalBanner" id="readonlyApprovalBanner">
+        <div class="vibeApprovalTitle">🔒 READONLY lane — confirm before running</div>
+        <div class="vibeApprovalCmd" id="readonlyApprovalCmd"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="readonlyApprovalHost"></div>
+        <div class="vibeApprovalBtns">
+          <button class="vibeBtn vibePrimaryBtn" id="readonlyConfirmBtn">✅ Confirm &amp; Run</button>
+          <button class="vibeBtn vibeDangerBtn" id="readonlyCancelBtn">✗ Cancel</button>
+        </div>
+      </div>
+
       <div class="termControls">
-        <button class="pill" onclick="runQuick('uptime')">uptime</button>
-        <button class="pill" onclick="runQuick('whoami')">whoami</button>
-        <button class="pill" onclick="runQuick('docker ps')">docker ps</button>
-        <button class="pill" onclick="runQuick('docker compose ps')">docker compose ps</button>
-        <button class="pill" onclick="runQuick('ls -la')">ls -la</button>
-        <button class="pill" onclick="runQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
-        <button class="pill" onclick="runQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
+        <button class="pill" onclick="runReadonlyQuick('uptime')">uptime</button>
+        <button class="pill" onclick="runReadonlyQuick('whoami')">whoami</button>
+        <button class="pill" onclick="runReadonlyQuick('docker ps')">docker ps</button>
+        <button class="pill" onclick="runReadonlyQuick('docker compose ps')">docker compose ps</button>
+        <button class="pill" onclick="runReadonlyQuick('ls -la')">ls -la</button>
+        <button class="pill" onclick="runReadonlyQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
+        <button class="pill" onclick="runReadonlyQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
         <button class="pill" onclick="confirmDockerRefresh()">docker refresh</button>
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
@@ -1681,6 +1734,9 @@ def index():
   function saveHistory(ag) {
     localStorage.setItem(AGENT_STORE_KEYS[ag], JSON.stringify((histories[ag] || []).slice(-100)));
   }
+
+  /** Shell-quote a string: wrap in single-quotes, escaping any literal single-quotes. */
+  function shellQuote(s) { return "'" + s.replace(/'/g, "'\\''") + "'"; }
 
   function scrollChatBottom() {
     const pane = activeChatPane();
@@ -2053,8 +2109,10 @@ def index():
 
   // Fetch SSH host label from server config
   let serverRepoDir = "";
+  let vibeReadonlyHost = "";
   fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
     if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
+    if (cfg && cfg.ssh_readonly_host) vibeReadonlyHost = cfg.ssh_readonly_host;
     if (cfg && cfg.repo_dir) serverRepoDir = cfg.repo_dir;
     if (cfg && Array.isArray(cfg.allowed_repos) && cfg.allowed_repos.length) {
       ALLOWED_REPOS.length = 0;
@@ -2066,6 +2124,76 @@ def index():
     const urlEl  = document.getElementById("backendBannerUrl");
     if (banner && urlEl) { urlEl.textContent = API_BASE + "/config"; banner.style.display = "block"; }
   });
+
+  // ── READONLY lane — terminal pill approval gate ───────────────────────────
+
+  const readonlyApprovalBannerEl = document.getElementById("readonlyApprovalBanner");
+  const readonlyApprovalCmdEl    = document.getElementById("readonlyApprovalCmd");
+  const readonlyApprovalHostEl   = document.getElementById("readonlyApprovalHost");
+  const readonlyConfirmBtnEl     = document.getElementById("readonlyConfirmBtn");
+  const readonlyCancelBtnEl      = document.getElementById("readonlyCancelBtn");
+
+  let _pendingReadonlyCmd = "";
+
+  function showReadonlyApproval(cmd) {
+    const host = vibeReadonlyHost || "<OPENCLAW_SSH_READONLY_HOST>";
+    readonlyApprovalCmdEl.textContent = "ssh " + host + " " + shellQuote(cmd);
+    readonlyApprovalHostEl.textContent = "Lane: READONLY  •  Host: " + host;
+    _pendingReadonlyCmd = cmd;
+    readonlyApprovalBannerEl.style.display = "flex";
+    readonlyApprovalBannerEl.scrollIntoView({behavior: "smooth"});
+  }
+
+  function hideReadonlyApproval() {
+    readonlyApprovalBannerEl.style.display = "none";
+    _pendingReadonlyCmd = "";
+  }
+
+  readonlyCancelBtnEl.onclick = hideReadonlyApproval;
+
+  readonlyConfirmBtnEl.onclick = async () => {
+    const cmd = _pendingReadonlyCmd;
+    if (!cmd) return;
+    hideReadonlyApproval();
+    if (!vibeReadonlyHost) {
+      termLine("err", "READONLY SSH not configured (OPENCLAW_SSH_READONLY_HOST unset) — pill disabled.");
+      return;
+    }
+    const host = vibeReadonlyHost;
+    const prompt = host + ":$ " + cmd;
+    termLine("prompt", prompt);
+    setBusy(true);
+    try {
+      const res = await fetch(API_BASE + "/ops/ssh-readonly-run", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cmd}),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({detail: res.statusText}));
+        termLine("err", "READONLY SSH error: " + (detail.detail || res.statusText));
+        return;
+      }
+      const data = await res.json();
+      const out = (data.stdout || "");
+      const err = (data.stderr || data.error || "");
+      if (out) termLine("out", out.trimEnd());
+      if (err) termLine("err", err.trimEnd());
+      if (!out && !err) termLine("out", "[no output]");
+    } catch(e) {
+      termLine("err", "READONLY SSH request failed: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Run a read-only command via the READONLY SSH lane.
+   * Shows an approval banner (command + host) and waits for operator confirmation.
+   */
+  function runReadonlyQuick(cmd) {
+    showReadonlyApproval(cmd);
+  }
 
   // --- Copilot bridge ---
 
@@ -2626,10 +2754,11 @@ def index():
 
   function showVibeApproval(workdir, prompt) {
     const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-    // Shell-quote a value: always wrap in single quotes, escaping any literal single quotes.
-    const q = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
     vibeApprovalCmdEl.textContent =
-      "ssh " + host + " vibe --workdir " + q(workdir) + " --prompt " + q(prompt);
+      "ssh " + host + " vibe --workdir " + shellQuote(workdir) + " --prompt " + shellQuote(prompt);
+    // Show which lane this runs on
+    const laneEl = vibeApprovalBannerEl.querySelector(".vibeApprovalLane");
+    if (laneEl) laneEl.textContent = "Lane: VIBE (execution)  •  Host: " + host;
     vibeApprovalBannerEl.style.display = "flex";
     vibeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
   }
@@ -2828,7 +2957,7 @@ def index():
       const cmdEl = document.createElement("div");
       cmdEl.className = "apAction";
       const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-      cmdEl.textContent = "⚙ Command: ssh " + host + " vibe --workdir " + (f.vibe_workdir || "?") + " --prompt …";
+      cmdEl.textContent = "⚙ Command [VIBE lane]: ssh " + host + " vibe --workdir " + (f.vibe_workdir || "?") + " --prompt …";
       row.appendChild(cmdEl);
 
       const approveBtn = document.createElement("button");

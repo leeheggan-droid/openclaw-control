@@ -8,6 +8,11 @@ load_dotenv()
 class Settings:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     ssh_host: str = os.getenv("OPENCLAW_SSH_HOST", "")
+    # Read-only SSH lane — separate restricted user/key + forced-command wrapper
+    # (bin/vibe-readonly-wrapper.sh) for probes, snapshots, autopilot evidence,
+    # terminal pills, and /ops/report.  When unset, read-only features are
+    # disabled gracefully; they NEVER fall back to ssh_host.
+    ssh_readonly_host: str = os.getenv("OPENCLAW_SSH_READONLY_HOST", "")
     repo_dir: str = os.getenv("OPENCLAW_REPO_DIR", "")
     github_token: str = os.getenv("GITHUB_TOKEN", "")
     github_repo: str = os.getenv("GITHUB_REPO", "leeheggan-droid/openclaw-control")
