@@ -1,2 +1,11 @@
 python-dotenv
 pyyaml
+# OpenAI Agents SDK — provides the `agents` module (Agent, Runner, etc.)
+openai-agents>=0.0.19
+# Web framework and server
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+# HTTP client used by cheap_chat_feature, exchange_tools, github_tools, web_search
+requests>=2.32.0
+# Data validation (FastAPI models)
+pydantic>=2.0.0
