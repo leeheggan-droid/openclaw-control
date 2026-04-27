@@ -94,7 +94,7 @@ if [[ "$shebang_line" == "#!"* ]]; then
             die "vibe interpreter '${interp}' lives under /home — re-install per docs §3 (root-owned venv) so openclaw-vibe can execute it"
         fi
         if [[ ! -r "$interp" || ! -x "$interp" ]]; then
-            die "vibe interpreter '${interp}' is not readable+executable as $(id -un) — re-install per docs §3 (root-owned venv)"
+            die "vibe interpreter '${interp}' is not readable+executable for the openclaw-vibe service user — re-install per docs §3 (root-owned venv)"
         fi
     fi
 fi
