@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# vibe-openclaw — minimal SSH-forwarding Vibe client shim
+#
+# Forwards a `vibe` invocation to the configured VPS over SSH.
+# No credentials, keys, or server-side wiring are included here.
+# The target host must already have the `vibe` CLI installed and the
+# operator's SSH key authorised before this shim will succeed.
+#
+# Usage:
+#   vibe-openclaw --workdir <path> --prompt <text>
+#
+# Required environment variable:
+#   OPENCLAW_SSH_HOST   SSH target, e.g. user@203.0.113.10
+#
+# Optional environment variables:
+#   OPENCLAW_VIBE_WORKDIR   Default workdir when --workdir is omitted.
+#   OPENCLAW_SSH_OPTS       Extra options forwarded verbatim to ssh(1).
+#                           Default: "-o BatchMode=yes -o StrictHostKeyChecking=yes
+#                                    -o ConnectTimeout=10"
+#
+# Exit codes mirror the remote vibe process exit code.
+# Timeouts and SSH errors produce exit code 1 with a diagnostic on stderr.
+
+set -euo pipefail
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+usage() {
+    cat >&2 <<EOF
+Usage: $(basename "$0") --workdir <path> --prompt <text>
+
+Environment:
+  OPENCLAW_SSH_HOST       (required) SSH target, e.g. user@host
+  OPENCLAW_VIBE_WORKDIR   (optional) default workdir if --workdir is omitted
+  OPENCLAW_SSH_OPTS       (optional) extra ssh(1) options
+EOF
+    exit 1
+}
+
+die() { echo "vibe-openclaw: error: $*" >&2; exit 1; }
+
+# ── argument parsing ──────────────────────────────────────────────────────────
+
+workdir=""
+prompt=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --workdir)  shift; workdir="${1:-}"; shift ;;
+        --prompt)   shift; prompt="${1:-}";  shift ;;
+        --workdir=*) workdir="${1#*=}"; shift ;;
+        --prompt=*)  prompt="${1#*=}";  shift ;;
+        -h|--help) usage ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+# ── validation ────────────────────────────────────────────────────────────────
+
+ssh_host="${OPENCLAW_SSH_HOST:-}"
+[[ -n "$ssh_host" ]] || die "OPENCLAW_SSH_HOST is not set"
+
+[[ -n "$workdir" ]] || workdir="${OPENCLAW_VIBE_WORKDIR:-}"
+[[ -n "$workdir" ]] || die "--workdir is required (or set OPENCLAW_VIBE_WORKDIR)"
+
+[[ -n "$prompt"  ]] || die "--prompt is required"
+
+# ── build remote command ──────────────────────────────────────────────────────
+# printf %q produces POSIX shell-quoted tokens safe for eval on the remote side.
+
+quoted_workdir="$(printf '%q' "$workdir")"
+quoted_prompt="$(printf '%q' "$prompt")"
+remote_cmd="vibe --workdir ${quoted_workdir} --prompt ${quoted_prompt}"
+
+# ── ssh options ───────────────────────────────────────────────────────────────
+
+read -ra ssh_opts <<< "${OPENCLAW_SSH_OPTS:--o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10}"
+
+# ── execute ───────────────────────────────────────────────────────────────────
+
+echo "vibe-openclaw: connecting to ${ssh_host}" >&2
+echo "vibe-openclaw: workdir=${workdir}" >&2
+echo "vibe-openclaw: prompt=${prompt}" >&2
+
+exec ssh "${ssh_opts[@]}" "$ssh_host" "$remote_cmd"
