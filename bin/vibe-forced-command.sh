@@ -80,6 +80,25 @@ done
 
 [[ -x "$VIBE_BIN" ]] || die "vibe not found or not executable at ${VIBE_BIN}"
 
+# Defensive shebang preflight — catch the uv-entrypoint failure mode where
+# /usr/local/bin/vibe shebangs into /home/<user>/.local/share/uv/... and the
+# kernel cannot resolve the interpreter as the openclaw-vibe service user
+# (the original "bad interpreter: Permission denied" failure).  Fails early
+# with a clear, actionable error instead of an opaque exec error.
+shebang_line="$(head -c 256 "$VIBE_BIN" 2>/dev/null | head -n 1 || true)"
+if [[ "$shebang_line" == "#!"* ]]; then
+    # Extract the interpreter path (first whitespace-delimited token after #!).
+    interp="$(printf '%s\n' "$shebang_line" | awk '/^#!/ {sub(/^#![[:space:]]*/, ""); print $1; exit}')"
+    if [[ -n "$interp" ]]; then
+        if [[ "$interp" == /home/* ]]; then
+            die "vibe interpreter '${interp}' lives under /home — re-install per docs §3 (root-owned venv) so openclaw-vibe can execute it"
+        fi
+        if [[ ! -r "$interp" || ! -x "$interp" ]]; then
+            die "vibe interpreter '${interp}' is not readable+executable as $(id -un) — re-install per docs §3 (root-owned venv)"
+        fi
+    fi
+fi
+
 log "ALLOWED: workdir=${workdir}"
 
 # Prefer timeout(1) when available; fall back to plain exec.

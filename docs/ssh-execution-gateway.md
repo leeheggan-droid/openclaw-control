@@ -66,22 +66,23 @@ sudo ls -la /opt/openclaw/bin/vibe-forced-command.sh
 
 The forced-command wrapper calls `/usr/local/bin/vibe` explicitly to avoid
 depending on the SSH user's dotfiles or `$PATH`.  The `vibe` CLI must therefore
-be installed to that path — not to `/home/<user>/.local/bin/vibe` or any other
-user-home location, because those paths are unreachable by the `openclaw-vibe`
-system account.
+be installed to that path — and the binary's shebang interpreter must also be
+reachable by the `openclaw-vibe` system account (i.e. NOT under any user's
+`/home/...` tree).
 
-Choose one of the methods below:
+> **⚠️  Do NOT copy a `vibe` binary from another user's home directory.**
+> A `vibe` installed via `uv` for a regular user (e.g. `jacks`) is a thin
+> entrypoint whose shebang line points into `/home/jacks/.local/share/uv/...`.
+> Copying that file to `/usr/local/bin/vibe` preserves the bad shebang;
+> `openclaw-vibe` cannot read `/home/jacks/...` and the kernel returns
+> `bad interpreter: Permission denied` when the wrapper tries to exec it.
+> The wrapper preflights this and refuses to launch in this case (see Verify
+> below), but the right fix is to install via Option A or Option B.
 
-### Option A — Copy an existing user-local binary (simplest)
+Use one of the methods below — both produce a root-owned entrypoint with a
+shebang that does not depend on any user home directory.
 
-```bash
-# If vibe is already installed for another user (e.g. <username>):
-sudo cp "$(sudo -u <username> sh -lc 'command -v vibe')" /usr/local/bin/vibe
-sudo chown root:root /usr/local/bin/vibe
-sudo chmod 0755 /usr/local/bin/vibe
-```
-
-### Option B — Install vibe into a virtualenv owned by root
+### Option A — Install vibe into a virtualenv owned by root (recommended)
 
 ```bash
 sudo python3 -m venv /opt/vibe-venv
@@ -89,7 +90,10 @@ sudo /opt/vibe-venv/bin/pip install vibe   # adjust package name as needed
 sudo ln -sf /opt/vibe-venv/bin/vibe /usr/local/bin/vibe
 ```
 
-### Option C — Write a shim that delegates to the versioned install
+This produces a `vibe` whose shebang is `#!/opt/vibe-venv/bin/python3` —
+root-owned, world-readable, no `/home/<user>` dependency.
+
+### Option B — Write a shim that delegates to a versioned install
 
 ```bash
 sudo tee /usr/local/bin/vibe >/dev/null <<'EOF'
@@ -99,17 +103,47 @@ EOF
 sudo chmod 0755 /usr/local/bin/vibe
 ```
 
+The shebang is `/usr/bin/env bash` (system-wide, always readable) and the
+delegate is the same root-owned venv from Option A.
+
 ### Verify
 
 ```bash
+# 1. Wrapper sanity — must succeed as the openclaw-vibe service user
 sudo -u openclaw-vibe /usr/local/bin/vibe --version
-# Expected: prints vibe version string, no "not found" error
+# Expected: prints vibe version string.
+# If you see "bad interpreter: Permission denied", "exec format error", or the
+# wrapper's own diagnostic "vibe interpreter '/home/…' lives under /home",
+# the entrypoint's shebang points into a user home dir — re-install via
+# Option A above.
+
+# 2. Confirm the shebang interpreter is system-visible (no /home/...)
+sudo head -1 /usr/local/bin/vibe
+# Expected: shebang interpreter path that does NOT start with /home/
+# Examples that are fine:
+#   #!/opt/vibe-venv/bin/python3
+#   #!/usr/bin/env bash
+# Example that will fail at the wrapper preflight:
+#   #!/home/jacks/.local/share/uv/python/cpython-3.13.0-linux-x86_64-gnu/bin/python3
+
+# 3. Confirm the interpreter is readable+executable for openclaw-vibe
+interp="$(sudo head -1 /usr/local/bin/vibe | sed -n 's|^#!\([^[:space:]]*\).*|\1|p')"
+if [[ -n "$interp" ]]; then
+    if sudo -u openclaw-vibe test -r "$interp" -a -x "$interp"; then
+        echo "OK: $interp readable+executable for openclaw-vibe"
+    else
+        echo "FAIL: vibe shebang interpreter '$interp' not usable by openclaw-vibe"
+    fi
+fi
 ```
 
-> **Why this matters:** If `vibe` lives only in `/home/<user>/.local/bin/`, the
-> `openclaw-vibe` user has no access to that directory.  The forced-command
-> wrapper will exit with "vibe not found".  A system-visible path eliminates
-> this class of failure entirely.
+> **Why this matters:** if the entrypoint's shebang points into a user's
+> `/home/...` tree, the kernel cannot resolve the interpreter as the
+> `openclaw-vibe` service user (home directories are typically `0700` for the
+> owning user, so the system account cannot traverse them).  The forced-
+> command wrapper preflights this and exits with a clear `lives under /home`
+> error, but installing correctly per Option A or Option B avoids the failure
+> entirely.
 
 ---
 
@@ -236,6 +270,8 @@ Expected output on success:
 | `Permission denied (publickey)` | Public key not in VPS `authorized_keys`, or wrong `.ssh` path | Confirm `sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys` contains the key |
 | `Host key verification failed` | Host key not in `/root/.ssh/known_hosts` | Re-run `ssh-keyscan` (step 6) |
 | `vibe not found or not executable` | No `/usr/local/bin/vibe` on VPS | Follow step 3 to install a system-visible `vibe` |
+| `bad interpreter: Permission denied` (kernel) **or** `vibe interpreter '/home/…' lives under /home` (wrapper) | `vibe` was installed via `uv` under a user's `/home/...` tree; copying that entrypoint to `/usr/local/bin/vibe` preserves the unreadable shebang | Re-install per docs §3 Option A (root-owned venv) |
+| `vibe interpreter '…' is not readable+executable as openclaw-vibe` (wrapper) | `vibe` shebang interpreter exists outside `/home/` but is not readable+executable for the system account | Fix permissions on the interpreter, or re-install per docs §3 Option A |
 | `--workdir does not exist` | Forced-command rejected the path | Create the workdir on the VPS, or fix the path |
 | `DENIED: command must start with 'vibe'` | Wrong command format sent | Check that `bin/vibe-openclaw` is up-to-date |
 | `OPENCLAW_SSH_HOST is not set` | `.env` missing the variable | Set `OPENCLAW_SSH_HOST=openclaw-vibe@<host>` in `.env` |
