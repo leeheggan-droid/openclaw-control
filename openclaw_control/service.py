@@ -2,6 +2,7 @@ import atexit as _atexit
 import hashlib as _hashlib
 import json as _json
 import re as _re
+import shlex as _shlex
 import subprocess
 import threading as _threading
 import time as _time
@@ -282,14 +283,21 @@ def _consolidate_evidence(
 def run_ssh(command: str, timeout: int = 10) -> dict:
     try:
         proc = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-             settings.ssh_host, command],
+            [
+                "ssh",
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=yes",
+                "-o", "ConnectTimeout=5",
+                settings.ssh_host,
+                command,
+            ],
             capture_output=True,
             text=True,
             timeout=timeout,
         )
         return {
             "type": "ssh",
+            "returncode": proc.returncode,
             "stdout": proc.stdout,
             "stderr": proc.stderr,
         }
@@ -1200,8 +1208,19 @@ _VIBE_RUNS: dict[str, dict] = {}
 _VIBE_RUNS_LOCK = _threading.Lock()
 
 
-def start_vibe_run(command: str) -> str:
-    """Run an approved shell command on the VPS via SSH in a background thread. Returns run_id."""
+_VIBE_TIMEOUT = 900  # seconds — vibe runs can take up to 15 minutes
+
+
+def start_vibe_run(workdir: str, prompt: str) -> str:
+    """Run ``vibe --workdir <workdir> --prompt <prompt>`` on the VPS via SSH.
+
+    Constructs the remote command from *workdir* and *prompt* using
+    ``shlex.quote`` to prevent shell injection.  Runs in a daemon thread and
+    returns a run_id that callers can poll with :func:`get_vibe_run`.
+    """
+    vibe_command = (
+        f"vibe --workdir {_shlex.quote(workdir)} --prompt {_shlex.quote(prompt)}"
+    )
     run_id = _uuid.uuid4().hex[:8]
     run: dict = {"status": "running", "output": "", "error": ""}
     with _VIBE_RUNS_LOCK:
@@ -1216,7 +1235,7 @@ def start_vibe_run(command: str) -> str:
                     "Set it in .env to enable remote Vibe execution."
                 )
             return
-        result = run_ssh(command)
+        result = run_ssh(vibe_command, timeout=_VIBE_TIMEOUT)
         with _VIBE_RUNS_LOCK:
             if "error" in result:
                 run["status"] = "error"
@@ -1224,6 +1243,7 @@ def start_vibe_run(command: str) -> str:
             else:
                 run["status"] = "done"
                 run["output"] = (
+                    f"exit={result.get('returncode', -1)}\n"
                     f"STDOUT:\n{result.get('stdout', '')}\n"
                     f"STDERR:\n{result.get('stderr', '')}"
                 )
@@ -1587,10 +1607,10 @@ def _autopilot_analyze(evidence: str) -> dict:
         return _FALLBACK
 
 
-def _autopilot_conclude(summary: str, recommended_action: str) -> str:
-    """Use vibe_planner to generate a concrete shell command for the given finding.
+def _autopilot_conclude(summary: str, recommended_action: str) -> tuple[str, str]:
+    """Use vibe_planner to generate workdir + prompt for the given finding.
 
-    Returns the command string, or empty string if generation fails.
+    Returns a ``(workdir, prompt)`` tuple, or ``("", "")`` if generation fails.
     """
     ctx_lines = []
     if settings.ssh_host:
@@ -1601,7 +1621,7 @@ def _autopilot_conclude(summary: str, recommended_action: str) -> str:
         f"System anomaly detected.\n"
         f"Summary: {summary}\n"
         f"Recommended action: {recommended_action}\n\n"
-        "Output ONLY the JSON command to resolve this issue on the VPS."
+        "Output ONLY the JSON with workdir and prompt to resolve this issue on the VPS."
     )
     prompt = "\n".join(ctx_lines)
 
@@ -1613,10 +1633,10 @@ def _autopilot_conclude(summary: str, recommended_action: str) -> str:
         result = fut.result(timeout=_AUTOPILOT_CONCLUDE_TIMEOUT)
         _record_run_usage(result)
         parsed = _json.loads(result.final_output)
-        return parsed.get("command", "")
+        return parsed.get("workdir", ""), parsed.get("prompt", "")
     except Exception as exc:
         _autopilot_push_event("error", f"⚠️ Command generation failed ({type(exc).__name__}) — operator must act manually.")
-        return ""
+        return "", ""
 
 
 def _autopilot_run_once() -> None:
@@ -1663,7 +1683,17 @@ def _autopilot_run_once() -> None:
     _autopilot_push_event("conclude", f"⚠️ Issue detected ({urgency.upper()}): {summary}")
 
     # Phase 3: Conclude — branch by action_type
-    vibe_command = finding.get("vibe_command", "")
+    # Legacy field support: agent finding may still provide a raw vibe_command string;
+    # we prefer vibe_workdir/vibe_prompt if present.
+    vibe_workdir = finding.get("vibe_workdir", "")
+    vibe_prompt_text = finding.get("vibe_prompt", "")
+    if not vibe_workdir and not vibe_prompt_text:
+        # Fall back to parsing a legacy vibe_command string if provided by the agent
+        legacy_cmd = finding.get("vibe_command", "")
+        if legacy_cmd:
+            # Treat the whole legacy command as the prompt with the default workdir
+            vibe_workdir = settings.vibe_workdir or settings.repo_dir or "/opt/openclaw-crypto"
+            vibe_prompt_text = legacy_cmd
     github_issue_url = ""
     github_issue_number = None
 
@@ -1704,12 +1734,12 @@ def _autopilot_run_once() -> None:
                 )
 
     elif action_type == "vibe_action":
-        # State change needed — use agent-generated vibe_command if present, else call planner
-        if not vibe_command:
+        # State change needed — use agent-generated vibe fields if present, else call planner
+        if not vibe_workdir and not vibe_prompt_text:
             _autopilot_push_event("conclude", "💡 Generating remediation command…")
-            vibe_command = _autopilot_conclude(summary, recommended)
-        if vibe_command:
-            _autopilot_push_event("escalate", f"📋 Proposed command: {vibe_command}")
+            vibe_workdir, vibe_prompt_text = _autopilot_conclude(summary, recommended)
+        if vibe_workdir or vibe_prompt_text:
+            _autopilot_push_event("escalate", f"📋 Proposed vibe: workdir={vibe_workdir!r} prompt={vibe_prompt_text!r}")
             _autopilot_push_event("escalate", "⏳ Awaiting operator approval via Vibe.")
         else:
             action_text = recommended or "(see finding)"
@@ -1733,7 +1763,8 @@ def _autopilot_run_once() -> None:
             "summary": summary,
             "recommended_action": recommended,
             "action_type": action_type,
-            "vibe_command": vibe_command,
+            "vibe_workdir": vibe_workdir,
+            "vibe_prompt": vibe_prompt_text,
             "github_issue_url": github_issue_url,
             "github_issue_number": github_issue_number,
             "acked": False,

@@ -159,8 +159,85 @@ Poll the status of a running or completed Vibe job.
 
 - The `/vibe/execute` endpoint accepts arbitrary `workdir` and `prompt` values. Deploy OpenClaw Control in a **trusted internal network** only.
 - The `workdir` and `prompt` values are shell-quoted via `shlex.quote` before being passed as the remote SSH command string, preventing shell injection on the VPS.
+- SSH connections use `BatchMode=yes` (no interactive prompts) and `StrictHostKeyChecking=yes` (no TOFU/silent MITM), enforcing that the VPS host key must already be in `~/.ssh/known_hosts` on the control plane host.
 - The subprocess timeout is 900 seconds. Long-running Vibe invocations block one daemon thread per run; in-flight runs survive a server restart only if the SSH connection is still alive.
 - Operator authentication (e.g. reverse-proxy basic auth) is outside the scope of this component but is strongly recommended.
+
+---
+
+## VPS-Side Setup (Forced-Command Wrapper)
+
+To lock the dedicated SSH key so it can **only** run `vibe` (no interactive shell, no other commands):
+
+### 1 — Generate a dedicated key on the control plane
+
+```bash
+ssh-keygen -t ed25519 -C "openclaw-vibe" -f ~/.ssh/openclaw_vibe_ed25519 -N ""
+```
+
+### 2 — Add the key to `~/.ssh/authorized_keys` on the VPS
+
+The simplest approach is to use `restrict` (OpenSSH 7.4+) with `command="vibe"`, which prevents
+any interactive shell while still allowing the control plane to pass `--workdir` and `--prompt`
+as arguments on the SSH command line:
+
+```
+restrict,command="vibe" ssh-ed25519 AAAA… openclaw-vibe
+```
+
+With this entry, `ssh <host> "vibe --workdir /opt/repo --prompt 'fix thing'"` executes correctly,
+but `ssh <host>` (no command) is rejected by the forced-command wrapper.
+
+To restrict the workdir to a specific subtree you can wrap `vibe` in a small shell script on the
+VPS (e.g. `/usr/local/bin/openclaw-vibe`) that validates the `--workdir` argument before
+delegating to `vibe`, and reference that script in `command=` instead.
+
+### 3 — Register the VPS host key on the control plane
+
+```bash
+ssh-keyscan -H <VPS_IP_OR_HOSTNAME> >> ~/.ssh/known_hosts
+```
+
+`StrictHostKeyChecking=yes` will reject the connection if the host key is not already trusted.
+
+### 4 — Configure the control plane
+
+Add to `.env`:
+
+```
+OPENCLAW_SSH_HOST=<user>@<vps-ip-or-hostname>
+OPENCLAW_VIBE_WORKDIR=/opt/openclaw-crypto
+```
+
+Optionally specify the key explicitly in `~/.ssh/config`:
+
+```
+Host <vps-ip-or-hostname>
+    IdentityFile ~/.ssh/openclaw_vibe_ed25519
+    IdentitiesOnly yes
+```
+
+### 5 — Smoke-test
+
+```bash
+ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    <user>@<vps-ip-or-hostname> \
+    "vibe --workdir /opt/openclaw-crypto --prompt 'echo hello'"
+```
+
+Expected: exit 0, vibe output in stdout.
+
+---
+
+## Common Failure Modes
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Host key verification failed` | Host key not in `known_hosts` | Run `ssh-keyscan` (step 3 above) |
+| `Permission denied (publickey)` | Wrong key, key not in `authorized_keys` | Check `~/.ssh/authorized_keys` on VPS; verify key fingerprint |
+| `command not found: vibe` | `vibe` not on `PATH` for the SSH user | Install vibe or use an absolute path in the `authorized_keys` `command=` |
+| `SSH error (TimeoutExpired)` | VPS unreachable or firewall blocking port 22 | Check VPS firewall rules; verify `OPENCLAW_SSH_HOST` |
+| `OPENCLAW_SSH_HOST is not configured` | `.env` missing the variable | Set `OPENCLAW_SSH_HOST=user@host` in `.env` |
 
 ---
 
