@@ -1,0 +1,25 @@
+# Caddyfile — TLS reverse proxy for the OpenClaw cockpit
+#
+# Place this file at /opt/openclaw-control/Caddyfile on the VPS.
+# See docs/vps-deployment.md for full setup instructions.
+#
+# Caddy automatically obtains and renews Let's Encrypt certificates for every
+# hostname listed here as long as ports 80/443 are open and DNS resolves to
+# this server (72.61.123.4).
+#
+# Current DNS state (TTL ≈ 50 s):
+#   leeheggan.tech  A     72.61.123.4   ← root apex — active
+#   www             CNAME leeheggan.tech ← www alias — active
+#   cockpit         A     72.61.123.4   ← add this record to enable cockpit subdomain
+
+# Root domain + www — serve the cockpit at the apex while the cockpit subdomain
+# A record is pending (or as the permanent home if preferred).
+leeheggan.tech, www.leeheggan.tech {
+    reverse_proxy 127.0.0.1:8001
+}
+
+# Cockpit subdomain — becomes active once the DNS A record is added.
+# Remove this block if you prefer to serve only from the root domain above.
+cockpit.leeheggan.tech {
+    reverse_proxy 127.0.0.1:8001
+}

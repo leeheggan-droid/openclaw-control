@@ -1,0 +1,33 @@
+# OpenClaw cockpit — VPS compose file
+# Deploy with:
+#   docker compose -f docker-compose.cockpit.yml up -d --build
+#
+# Prerequisites on the VPS:
+#   /etc/openclaw-control.env  — environment file with API keys and SSH config
+#   SSH keys for OPENCLAW_SSH_HOST / OPENCLAW_SSH_READONLY_HOST accessible to
+#   the container (mounted as a read-only volume below).
+#
+# Place Caddy in front of this service (see docs/vps-deployment.md) and
+# bind-mount the SSH agent socket or keys as needed.
+
+services:
+  openclaw-cockpit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openclaw-cockpit
+    restart: unless-stopped
+    # Bind to localhost only when behind Caddy; remove '127.0.0.1:' prefix if
+    # you need direct external access (not recommended — firewall port 8001 instead).
+    ports:
+      - "127.0.0.1:8001:8001"
+    env_file: /etc/openclaw-control.env
+    volumes:
+      # Mount the SSH config and keys from the host so the container can reach
+      # OPENCLAW_SSH_HOST and OPENCLAW_SSH_READONLY_HOST.
+      - /root/.ssh:/root/.ssh:ro
+      # Persist SQLite session databases between restarts.
+      - cockpit_data:/app/data
+
+volumes:
+  cockpit_data:
