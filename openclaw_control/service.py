@@ -17,8 +17,8 @@ from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession
 # installs don't export it.  Import conditionally so the module loads on any
 # supported version — when unavailable we simply omit the session limit kwarg.
 try:
-    from agents import SessionSettings as _SessionSettings  # type: ignore[attr-defined]
-    _SESSION_SETTINGS: Any = _SessionSettings(limit=100)
+    from agents import SessionSettings as _SessionSettingsCompat  # type: ignore[attr-defined]
+    _SESSION_SETTINGS: Any = _SessionSettingsCompat(limit=100)
     _SESSION_KWARGS: dict[str, Any] = {"session_settings": _SESSION_SETTINGS}
 except ImportError:
     _SESSION_SETTINGS = None
