@@ -1,0 +1,242 @@
+# SSH Execution Gateway — Setup Guide
+
+This document provides copy/pasteable commands for the full end-to-end setup of
+the OpenClaw → VPS SSH execution gateway, from user creation through key
+generation to smoke-testing.
+
+---
+
+## Overview
+
+```
+Control plane (root)
+  └─ bin/vibe-openclaw --workdir <path> --prompt <text>
+       └─ ssh -i /root/.ssh/openclaw_vibe_ed25519 \
+              openclaw-vibe@<VPS> \
+              "vibe --workdir <path> --prompt <text>"
+                └─ /opt/openclaw/bin/vibe-forced-command.sh   (forced-command)
+                     └─ /usr/local/bin/vibe --workdir <path> --prompt <text>
+```
+
+---
+
+## 1 — Create the `openclaw-vibe` system user on the VPS
+
+```bash
+# Create the user with a stable home directory under /var/lib/
+sudo useradd \
+    --system \
+    --shell /bin/bash \
+    --home-dir /var/lib/openclaw-vibe \
+    --create-home \
+    openclaw-vibe
+
+# Verify — home must be /var/lib/openclaw-vibe, NOT /home/openclaw-vibe
+sudo getent passwd openclaw-vibe
+# Expected: openclaw-vibe:x:<uid>:<gid>::/var/lib/openclaw-vibe:/bin/bash
+```
+
+> **Note:** If the user already exists but has a different home directory you
+> can check and correct it with:
+> ```bash
+> sudo usermod --home /var/lib/openclaw-vibe --move-home openclaw-vibe
+> ```
+
+---
+
+## 2 — Install the forced-command wrapper on the VPS
+
+```bash
+# Create the installation directory
+sudo install -d -m 0755 -o root -g root /opt/openclaw/bin
+
+# Copy the wrapper from the repo (run from repo root)
+sudo install -m 0755 -o root -g root \
+    bin/vibe-forced-command.sh \
+    /opt/openclaw/bin/vibe-forced-command.sh
+
+# Verify
+sudo ls -la /opt/openclaw/bin/vibe-forced-command.sh
+# Expected: -rwxr-xr-x 1 root root ... /opt/openclaw/bin/vibe-forced-command.sh
+```
+
+---
+
+## 3 — Ensure a system-visible `vibe` binary at `/usr/local/bin/vibe`
+
+The forced-command wrapper calls `/usr/local/bin/vibe` explicitly to avoid
+depending on the SSH user's dotfiles or `$PATH`.  The `vibe` CLI must therefore
+be installed to that path — not to `/home/<user>/.local/bin/vibe` or any other
+user-home location, because those paths are unreachable by the `openclaw-vibe`
+system account.
+
+Choose one of the methods below:
+
+### Option A — Copy an existing user-local binary (simplest)
+
+```bash
+# If vibe is already installed for another user (e.g. jacks):
+sudo cp "$(sudo -u jacks sh -lc 'command -v vibe')" /usr/local/bin/vibe
+sudo chown root:root /usr/local/bin/vibe
+sudo chmod 0755 /usr/local/bin/vibe
+```
+
+### Option B — Install vibe into a virtualenv owned by root
+
+```bash
+sudo python3 -m venv /opt/vibe-venv
+sudo /opt/vibe-venv/bin/pip install vibe   # adjust package name as needed
+sudo ln -sf /opt/vibe-venv/bin/vibe /usr/local/bin/vibe
+```
+
+### Option C — Write a shim that delegates to the versioned install
+
+```bash
+sudo tee /usr/local/bin/vibe >/dev/null <<'EOF'
+#!/usr/bin/env bash
+exec /opt/vibe-venv/bin/vibe "$@"
+EOF
+sudo chmod 0755 /usr/local/bin/vibe
+```
+
+### Verify
+
+```bash
+sudo -u openclaw-vibe /usr/local/bin/vibe --version
+# Expected: prints vibe version string, no "not found" error
+```
+
+> **Why this matters:** If `vibe` lives only in `/home/jacks/.local/bin/`, the
+> `openclaw-vibe` user has no access to that directory.  The forced-command
+> wrapper will exit with "vibe not found".  A system-visible path eliminates
+> this class of failure entirely.
+
+---
+
+## 4 — Generate a root-owned ED25519 key on the control plane
+
+```bash
+# Run as root on the control plane
+sudo ssh-keygen \
+    -t ed25519 \
+    -C "openclaw-vibe" \
+    -f /root/.ssh/openclaw_vibe_ed25519 \
+    -N ""
+
+# Confirm both files exist
+sudo ls -la /root/.ssh/openclaw_vibe_ed25519 /root/.ssh/openclaw_vibe_ed25519.pub
+# Expected:
+#   -rw------- 1 root root ... /root/.ssh/openclaw_vibe_ed25519
+#   -rw-r--r-- 1 root root ... /root/.ssh/openclaw_vibe_ed25519.pub
+```
+
+---
+
+## 5 — Install the public key into the VPS `authorized_keys`
+
+The key must live under the user's **actual** home directory
+(`/var/lib/openclaw-vibe`), not `/home/openclaw-vibe`.
+
+```bash
+# On the VPS — ensure the .ssh directory exists with correct permissions
+sudo install -d -m 0700 -o openclaw-vibe -g openclaw-vibe \
+    /var/lib/openclaw-vibe/.ssh
+
+# Copy the public key from the control plane to the VPS
+# (replace <VPS_HOST> with the actual hostname/IP)
+pubkey="$(sudo cat /root/.ssh/openclaw_vibe_ed25519.pub)"
+
+sudo tee /var/lib/openclaw-vibe/.ssh/authorized_keys >/dev/null <<EOF
+command="/opt/openclaw/bin/vibe-forced-command.sh",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ${pubkey}
+EOF
+
+sudo chmod 0600 /var/lib/openclaw-vibe/.ssh/authorized_keys
+sudo chown openclaw-vibe:openclaw-vibe \
+    /var/lib/openclaw-vibe/.ssh/authorized_keys
+
+# Verify
+sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys
+# Expected: one line starting with:
+#   command="/opt/openclaw/bin/vibe-forced-command.sh",no-port-... ssh-ed25519 AAAA...
+```
+
+> **Remove the decoy home directory** if one was accidentally created:
+> ```bash
+> sudo rm -rf /home/openclaw-vibe
+> ```
+> sshd will never look there for this user.
+
+---
+
+## 6 — Pin the VPS host key on the control plane
+
+`StrictHostKeyChecking=yes` means sshd will refuse the connection unless the
+host key is already in `known_hosts`.  Pin it explicitly:
+
+```bash
+# Run as root on the control plane
+# Replace <VPS_HOST> with the hostname or IP used in OPENCLAW_SSH_HOST
+sudo ssh-keyscan -H <VPS_HOST> | sudo tee -a /root/.ssh/known_hosts
+
+# Verify the fingerprint matches what you expect (optional but recommended)
+sudo ssh-keygen -lf /root/.ssh/known_hosts
+```
+
+---
+
+## 7 — Configure the control plane
+
+Add to `.env`:
+
+```
+OPENCLAW_SSH_HOST=openclaw-vibe@<VPS_HOST>
+OPENCLAW_VIBE_WORKDIR=/srv/openclaw-vibe   # optional default workdir
+```
+
+Install the client shim from the repo:
+
+```bash
+# From the repo root, run as root on the control plane
+sudo install -m 0755 bin/vibe-openclaw /usr/local/bin/vibe-openclaw
+```
+
+---
+
+## 8 — Smoke-test
+
+```bash
+# Direct SSH test (must succeed before testing the shim)
+sudo ssh \
+    -i /root/.ssh/openclaw_vibe_ed25519 \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    openclaw-vibe@<VPS_HOST> \
+    'vibe --workdir /srv/openclaw-vibe --prompt ping'
+
+# Shim test
+OPENCLAW_SSH_HOST=openclaw-vibe@<VPS_HOST> \
+sudo -E /usr/local/bin/vibe-openclaw \
+    --workdir /srv/openclaw-vibe \
+    --prompt "ping"
+```
+
+Expected output on success:
+- `Authenticated to <host> using "publickey".` in verbose mode
+- Remote: key options line referencing `/var/lib/openclaw-vibe/.ssh/authorized_keys`
+- `vibe` output on stdout
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Permission denied (publickey)` | Public key not in VPS `authorized_keys`, or wrong `.ssh` path | Confirm `sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys` contains the key |
+| `Host key verification failed` | Host key not in `/root/.ssh/known_hosts` | Re-run `ssh-keyscan` (step 6) |
+| `vibe not found or not executable` | No `/usr/local/bin/vibe` on VPS | Follow step 3 to install a system-visible `vibe` |
+| `--workdir does not exist` | Forced-command rejected the path | Create the workdir on the VPS, or fix the path |
+| `DENIED: command must start with 'vibe'` | Wrong command format sent | Check that `bin/vibe-openclaw` is up-to-date |
+| `OPENCLAW_SSH_HOST is not set` | `.env` missing the variable | Set `OPENCLAW_SSH_HOST=openclaw-vibe@<host>` in `.env` |
+| `connection timed out` | VPS unreachable or firewall | Check port 22 is open; verify `OPENCLAW_SSH_HOST` value |
