@@ -1,11 +1,16 @@
 python-dotenv
 pyyaml
 # OpenAI Agents SDK — provides the `agents` module (Agent, Runner, etc.)
-openai-agents>=0.0.19
+# Pinned to 0.7.0 to prevent pip resolver backtracking/conflicts in Docker builds;
+# openai-agents>=0.8.0 requires pydantic>=2.12.3 which the looser >=2.0.0 spec could not
+# reliably satisfy when mixed with older index caches.
+openai-agents==0.7.0
 # Web framework and server
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 # HTTP client used by cheap_chat_feature, exchange_tools, github_tools, web_search
 requests>=2.32.0
 # Data validation (FastAPI models)
-pydantic>=2.0.0
+# Pinned to 2.13.3 to satisfy openai-agents==0.7.0 (requires pydantic>=2.12.3,<3) and
+# prevent resolver conflicts during Docker builds.
+pydantic==2.13.3
