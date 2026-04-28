@@ -32,5 +32,19 @@ class Settings:
     kraken_api_secret: str = os.getenv("KRAKEN_API_SECRET", "")
     alpaca_api_key: str = os.getenv("ALPACA_API_KEY", os.getenv("APCA_API_KEY_ID", ""))
     alpaca_api_secret: str = os.getenv("ALPACA_API_SECRET", os.getenv("APCA_API_SECRET_KEY", ""))
+    # LLM provider selection for the VPS agent (anthropic | gemini | groq)
+    llm_provider: str = os.getenv("LLM_PROVIDER", "anthropic")
+    # Anthropic (Claude) — used when LLM_PROVIDER=anthropic
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
+    # Google Gemini — used when LLM_PROVIDER=gemini
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    # Vibe executor (local HTTP gateway or CLI; used by the VPS agent)
+    vibe_api_base: str = os.getenv("VIBE_API_BASE", "")
+    vibe_api_key: str = os.getenv("VIBE_API_KEY", "")
+    vibe_allowlist: str = os.getenv("VIBE_ALLOWLIST", "")
+    # VPS agent polling interval (seconds)
+    poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
 
 settings = Settings()
