@@ -1,0 +1,38 @@
+[Unit]
+Description=OpenClaw VPS Agent — GitHub issue poller with LLM planning and Vibe execution
+Documentation=https://github.com/leeheggan-droid/openclaw-control/blob/main/docs/anthropic_setup.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as a dedicated non-root user for least privilege.
+# Create with: sudo useradd -r -s /usr/sbin/nologin openclaw-agent
+User=openclaw-agent
+Group=openclaw-agent
+
+# Working directory — repo must be present here on the VPS.
+WorkingDirectory=/opt/openclaw-control
+
+# Load all secrets from the config file; chmod 600 root:root.
+EnvironmentFile=/etc/openclaw-agent/config.env
+
+# Python environment — adjust path if using a virtualenv.
+ExecStart=/usr/bin/python3 -m openclaw_control.vps_agent
+
+# Restart policy.
+Restart=on-failure
+RestartSec=15s
+
+# Harden the process.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/openclaw-control
+
+# Write stdout/stderr to journald (queryable with: journalctl -u openclaw-agent).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-agent
+
+[Install]
+WantedBy=multi-user.target
