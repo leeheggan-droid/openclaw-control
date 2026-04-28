@@ -36,18 +36,19 @@ pip install -r requirements.txt
 
 # 4. Copy and fill in environment variables
 cp config.env.example .env
-#   At minimum set: OPENAI_API_KEY, AUTH_SECRET_KEY
+#   Required: OPENAI_API_KEY, AUTH_SECRET_KEY, AUTH_ADMIN_DEFAULT_PASSWORD
 
 # 5. Run the web app
 uvicorn web_app:app --reload --port 8001
 
 # Open http://localhost:8001/login in your browser
-# Default credentials: leeheggan@gmail.com / changeme123
+# Log in with: leeheggan@gmail.com / <your AUTH_ADMIN_DEFAULT_PASSWORD>
 ```
 
-> **Important:** Change the default password immediately via the "Change password"
-> button in the chat UI, or set `AUTH_ADMIN_DEFAULT_PASSWORD` in your `.env` before
-> the first boot.
+> **Security:** Set `AUTH_SECRET_KEY` to a long random string and
+> `AUTH_ADMIN_DEFAULT_PASSWORD` to a strong, unique password in your `.env`
+> **before the first boot**. The placeholder values in `config.env.example`
+> must never be used in production.
 
 ---
 
@@ -69,7 +70,7 @@ uvicorn web_app:app --reload --port 8001
 | `CHAT_DB_PATH` | `data/chat.db` | Path to the SQLite database |
 | `CHAT_MAX_HISTORY` | `40` | Maximum past messages per OpenAI request |
 | `AUTH_ADMIN_EMAIL` | `leeheggan@gmail.com` | Admin account created on first boot |
-| `AUTH_ADMIN_DEFAULT_PASSWORD` | `changeme123` | Temporary password — change it! |
+| `AUTH_ADMIN_DEFAULT_PASSWORD` | *(required — no default in production)* | Password for admin account on first boot — set to a strong secret |
 | `AUTH_TOKEN_EXPIRE_HOURS` | `168` (7 days) | JWT session lifetime |
 
 ### Telegram bot
