@@ -10,9 +10,20 @@
 #
 # It validates and executes ONLY commands of the form:
 #   vibe --workdir /absolute/path --prompt <text>
+#   vibe --workdir /absolute/path -p <text>
+#
+# <text> may span multiple words; all tokens after --prompt / -p are joined
+# with spaces, so the client does NOT need to quote the prompt.  --workdir
+# MUST appear before --prompt / -p (everything after the flag is consumed).
 #
 # All other commands are rejected.  Invocation is logged via syslog.
 # Max runtime is enforced at 900 seconds (15 minutes).
+#
+# Non-interactive execution:
+#   • setsid -w  — detaches from any controlling TTY so vibe never opens a TUI
+#   • --output text — forces machine-readable plain-text output
+#   • printf '\n' piped to stdin — prevents the read(0,...) = 0 EOF-loop hang
+#     that occurs when vibe polls stdin indefinitely in non-interactive contexts
 
 set -euo pipefail
 
@@ -37,8 +48,9 @@ log "invoked; SSH_ORIGINAL_COMMAND=${cmd}"
 # Expected pattern: vibe --workdir /abs/path --prompt <text>
 # We parse positionally; extra or reordered flags are rejected.
 
-# Tokenise into an array (word-split is intentional here, prompt may have spaces
-# but they will be properly quoted by the client via printf %q / shell quoting).
+# Tokenise into an array (word-split is intentional here).  The --prompt
+# handler collects all remaining tokens so multi-word prompts work even
+# without client-side quoting.
 # shellcheck disable=SC2086
 set -- $cmd
 
@@ -56,12 +68,15 @@ while [[ $# -gt 0 ]]; do
             workdir="$1"
             shift
             ;;
-        --prompt)
+        --prompt|-p)
             shift
-            [[ $# -gt 0 ]] || die "--prompt requires a value"
-            # Remaining tokens are the prompt (may be multi-word after shell-quoting)
-            prompt="$1"
-            shift
+            [[ $# -gt 0 ]] || die "--prompt/-p requires a value"
+            # Consume ALL remaining tokens as the prompt, joined with spaces.
+            # This supports multi-word prompts even when the client does not
+            # quote them (e.g. vibe --workdir /x -p fix the bug).
+            # Because prompt absorbs the remainder, --workdir MUST precede it.
+            prompt="$*"
+            break
             ;;
         *) die "unexpected argument: $1" ;;
     esac
@@ -101,9 +116,17 @@ fi
 
 log "ALLOWED: workdir=${workdir}"
 
-# Prefer timeout(1) when available; fall back to plain exec.
+# Log executed parameters; prompt text is intentionally omitted (may be sensitive).
+log "EXEC: workdir=${workdir} prompt_len=${#prompt} output=text"
+
+# setsid -w detaches from any controlling TTY so vibe does not open an
+# interactive TUI.  --output text forces plain machine-readable output.
+# printf '\n' provides a minimal stdin byte before EOF so vibe does not
+# loop on read(0,...) = 0 (EOF-loop hang) in non-interactive contexts.
 if command -v timeout >/dev/null 2>&1; then
-    exec timeout "$MAX_RUNTIME" "$VIBE_BIN" --workdir "$workdir" --prompt "$prompt"
+    printf '\n' | exec setsid -w timeout "$MAX_RUNTIME" "$VIBE_BIN" \
+        --workdir "$workdir" --prompt "$prompt" --output text
 else
-    exec "$VIBE_BIN" --workdir "$workdir" --prompt "$prompt"
+    printf '\n' | exec setsid -w "$VIBE_BIN" \
+        --workdir "$workdir" --prompt "$prompt" --output text
 fi
