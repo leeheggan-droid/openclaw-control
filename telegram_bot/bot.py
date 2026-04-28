@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 
 import httpx
 from telegram import Update
@@ -30,10 +31,30 @@ from telegram.ext import (
     filters,
 )
 
+_LOG_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "telegram_bot_error.log",
+)
+
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     level=logging.INFO,
 )
+
+# Also write WARNING+ messages to a rotating file so errors are visible
+# without needing access to journald.
+_file_handler = RotatingFileHandler(
+    _LOG_FILE,
+    maxBytes=1_000_000,  # 1 MB
+    backupCount=3,
+    encoding="utf-8",
+)
+_file_handler.setLevel(logging.WARNING)
+_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+)
+logging.getLogger().addHandler(_file_handler)
+
 log = logging.getLogger(__name__)
 
 _CHAT_API_BASE = os.environ.get("CHAT_API_URL", "http://127.0.0.1:8001").rstrip("/")
@@ -108,12 +129,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 def main() -> None:
     if not _BOT_TOKEN:
-        raise RuntimeError(
+        msg = (
             "TELEGRAM_BOT_TOKEN is not set. "
-            "Add it to your .env or /etc/openclaw-control.env file."
+            "Add it to your /etc/openclaw-control.env file."
         )
+        log.error(msg)
+        raise RuntimeError(msg)
 
-    application = ApplicationBuilder().token(_BOT_TOKEN).build()
+    log.info("Building Telegram application (token length=%d)…", len(_BOT_TOKEN))
+    try:
+        application = ApplicationBuilder().token(_BOT_TOKEN).build()
+    except Exception as exc:
+        log.exception("Failed to build Telegram application")
+        raise
 
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("help", cmd_help))
@@ -123,7 +151,11 @@ def main() -> None:
     )
 
     log.info("OpenClaw Telegram bot starting (polling)…")
-    application.run_polling()
+    try:
+        application.run_polling()
+    except Exception as exc:
+        log.exception("Telegram polling failed")
+        raise
 
 
 if __name__ == "__main__":
