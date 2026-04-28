@@ -9,9 +9,21 @@ import time as _time
 import uuid as _uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone as _tz
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
-from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession, SessionSettings
+from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession
+
+# SessionSettings was introduced in a later version of openai-agents; older
+# installs don't export it.  Import conditionally so the module loads on any
+# supported version — when unavailable we simply omit the session limit kwarg.
+try:
+    from agents import SessionSettings as _SessionSettingsCompat  # type: ignore[attr-defined]
+    _SESSION_SETTINGS: Any = _SessionSettingsCompat(limit=100)
+    _SESSION_KWARGS: dict[str, Any] = {"session_settings": _SESSION_SETTINGS}
+except ImportError:
+    _SESSION_SETTINGS = None
+    _SESSION_KWARGS = {}
+
 from openclaw_control import budget
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 from openclaw_control.config import settings
@@ -35,15 +47,13 @@ from openclaw_control.evidence_pipeline import (
 
 EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
-_SESSION_SETTINGS = SessionSettings(limit=100)
-
-_ops_session = SQLiteSession("openclaw_ops_session", session_settings=_SESSION_SETTINGS)
-_analysis_session = SQLiteSession("openclaw_analysis_session", session_settings=_SESSION_SETTINGS)
-_main_session = SQLiteSession("openclaw_main_session", session_settings=_SESSION_SETTINGS)
-_pnl_session = SQLiteSession("openclaw_pnl_session", session_settings=_SESSION_SETTINGS)
-_quant_session = SQLiteSession("openclaw_quant_session", session_settings=_SESSION_SETTINGS)
-_coo_session = SQLiteSession("openclaw_coo_session", session_settings=_SESSION_SETTINGS)
-_vibe_session = SQLiteSession("openclaw_vibe_session", session_settings=_SESSION_SETTINGS)
+_ops_session = SQLiteSession("openclaw_ops_session", **_SESSION_KWARGS)
+_analysis_session = SQLiteSession("openclaw_analysis_session", **_SESSION_KWARGS)
+_main_session = SQLiteSession("openclaw_main_session", **_SESSION_KWARGS)
+_pnl_session = SQLiteSession("openclaw_pnl_session", **_SESSION_KWARGS)
+_quant_session = SQLiteSession("openclaw_quant_session", **_SESSION_KWARGS)
+_coo_session = SQLiteSession("openclaw_coo_session", **_SESSION_KWARGS)
+_vibe_session = SQLiteSession("openclaw_vibe_session", **_SESSION_KWARGS)
 
 # ── Memory constants ──────────────────────────────────────────────────────────
 # Number of leading fingerprint characters used for a quick config-mismatch check.
