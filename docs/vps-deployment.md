@@ -52,6 +52,11 @@ Minimum required variables:
 ```ini
 OPENAI_API_KEY=sk-...
 
+# Auth — generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+AUTH_SECRET_KEY=<long-random-string>
+# Enable the Secure flag on session cookies (required behind HTTPS/Caddy)
+SECURE_COOKIES=true
+
 # SSH lanes
 OPENCLAW_SSH_HOST=user@<vps-or-target-host>
 OPENCLAW_SSH_READONLY_HOST=readonly@<vps-or-target-host>
@@ -122,6 +127,9 @@ on `http://127.0.0.1:8001`, which Caddy then proxies to your domain.
 ### Option A — systemd (recommended for direct VPS installs)
 
 This approach runs uvicorn directly as a systemd service — no Docker required.
+The service file references the project virtualenv at
+`/opt/openclaw-control/.venv`, so the venv **must** exist before the service
+starts.
 
 ```bash
 # 1. Create the system user (skip if it already exists)
@@ -132,9 +140,10 @@ sudo git clone https://github.com/leeheggan-droid/openclaw-control.git \
     /opt/openclaw-control
 sudo chown -R openclaw-agent:openclaw-agent /opt/openclaw-control
 
-# 3. Install Python dependencies into the system Python
+# 3. Create the virtualenv and install dependencies
 cd /opt/openclaw-control
-sudo pip3 install -r requirements.txt
+sudo -u openclaw-agent python3 -m venv .venv
+sudo -u openclaw-agent .venv/bin/pip install -r requirements.txt
 
 # 4. Install and start the systemd service
 sudo cp systemd/openclaw-cockpit.service /etc/systemd/system/

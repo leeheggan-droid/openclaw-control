@@ -3784,6 +3784,9 @@ def cheap_chat(req: CheapChatRequest):
 # ── Auth & OpenAI Chat endpoints ──────────────────────────────────────────────
 
 _AUTH_COOKIE = "openclaw_session"
+# Set SECURE_COOKIES=true in production (behind HTTPS/Caddy).
+# Leave unset or set to false for local HTTP development.
+_SECURE_COOKIES = os.environ.get("SECURE_COOKIES", "false").lower() in ("1", "true", "yes")
 
 
 def _current_user(token: str | None) -> str | None:
@@ -3828,6 +3831,7 @@ def auth_login(req: LoginRequest, response: Response):
         _AUTH_COOKIE,
         token,
         httponly=True,
+        secure=_SECURE_COOKIES,
         samesite="lax",
         max_age=7 * 24 * 3600,
     )
@@ -3836,7 +3840,12 @@ def auth_login(req: LoginRequest, response: Response):
 
 @app.post("/auth/logout")
 def auth_logout(response: Response):
-    response.delete_cookie(_AUTH_COOKIE)
+    response.delete_cookie(
+        _AUTH_COOKIE,
+        httponly=True,
+        secure=_SECURE_COOKIES,
+        samesite="lax",
+    )
     return {"ok": True}
 
 

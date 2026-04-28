@@ -18,7 +18,8 @@ EnvironmentFile=/etc/openclaw-control.env
 
 # Bind to the loopback interface so Caddy (or nginx) proxies the request;
 # port 8001 should NOT be exposed directly to the internet.
-ExecStart=/usr/bin/python3 -m uvicorn web_app:app --host 127.0.0.1 --port 8001
+# Use the project virtualenv so all pip-installed dependencies are available.
+ExecStart=/opt/openclaw-control/.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 8001
 
 # Restart on failure with a short back-off.
 Restart=on-failure
