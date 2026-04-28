@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,6 +39,17 @@ _ADMIN_DEFAULT_PASSWORD = os.environ.get("AUTH_ADMIN_DEFAULT_PASSWORD", "changem
 
 _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _lock = threading.Lock()
+
+# Warn loudly if the secret key is still the placeholder — all JWTs signed
+# with this known string can be trivially forged.
+_PLACEHOLDER_KEY = "CHANGE-ME-IN-PRODUCTION-use-a-random-secret"
+if _SECRET_KEY == _PLACEHOLDER_KEY:
+    warnings.warn(
+        "AUTH_SECRET_KEY is set to the default placeholder value: all session tokens "
+        "can be trivially forged. Set AUTH_SECRET_KEY to a long random string in "
+        "/etc/openclaw-control.env before exposing this service to the internet.",
+        stacklevel=1,
+    )
 
 # ── Database helpers ──────────────────────────────────────────────────────────
 
