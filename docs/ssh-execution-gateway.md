@@ -416,3 +416,101 @@ Expected output on success:
 | `vibe-readonly-wrapper: error: \$() process substitution not permitted` | Command contains `$(…)` | Simplify command to remove process substitution |
 | `vibe-readonly-wrapper: error: file redirect not permitted` | Command contains `>` or `<` | Only `2>&1` and `*/dev/null` redirects are allowed |
 | Terminal pills show "not configured" | `OPENCLAW_SSH_READONLY_HOST` unset | Configure the READONLY lane (§8) or leave disabled — pills will not silently fall back to `OPENCLAW_SSH_HOST` |
+
+---
+
+## 10 — Repair / recover `authorized_keys`
+
+Use this runbook when `authorized_keys` contains an **unrestricted key** (no
+`command=` prefix — allows a full shell) or uses a **stale forced-command path**
+(e.g. the legacy `/opt/openclaw/bin/vibe-forced-command.sh` instead of the
+current `/opt/openclaw/gateway/bin/forced-command.sh`).
+
+Both problems can be fixed in one step with the repair script from the repo
+without re-running the full installer.
+
+### When to use this
+
+| Symptom | Root cause |
+|---|---|
+| `ssh openclaw-vibe@<host>` opens an interactive shell | Key has no `command=` restriction |
+| `vibe` commands succeed but hit a missing-file error inside the forced-command | `command=` points to the legacy path |
+| You manually added the key and forgot the options prefix | Unrestricted key |
+| You copy-pasted the old docs (§5) that referenced `/opt/openclaw/bin/vibe-forced-command.sh` | Wrong path; the installer now uses `/opt/openclaw/gateway/bin/forced-command.sh` |
+
+### Quick-fix: repair script
+
+Run as root **on the VPS** (the script must be reachable there — copy it from
+the repo if needed):
+
+```bash
+# Repair both lanes at once (recommended)
+sudo bash vibe-gateway/bin/repair-authorized-keys.sh
+
+# Repair only the vibe execution lane
+sudo bash vibe-gateway/bin/repair-authorized-keys.sh --lane vibe
+
+# Repair only the readonly lane
+sudo bash vibe-gateway/bin/repair-authorized-keys.sh --lane readonly
+
+# Seed a key when authorized_keys is missing or empty
+sudo bash vibe-gateway/bin/repair-authorized-keys.sh \
+    --lane vibe \
+    --pubkey-file /root/.ssh/openclaw_vibe_ed25519.pub
+```
+
+The script:
+1. Reads every key already in `authorized_keys` (stripping any stale options).
+2. Rewrites the file atomically with the correct `command=…,no-pty,…` prefix.
+3. Restores `openclaw-vibe:openclaw-vibe` ownership and `0600` permissions.
+4. Prints a before/after summary so you can confirm exactly what changed.
+
+It is **idempotent** — if `authorized_keys` is already correct it makes no
+changes and exits cleanly.
+
+### Manual one-liner alternative (vibe lane only)
+
+If you prefer not to copy the script to the VPS:
+
+```bash
+# On the VPS as root — replace AAAA… with the actual public key material
+pubkey="ssh-ed25519 AAAA… openclaw-vibe"
+
+sudo tee /var/lib/openclaw-vibe/.ssh/authorized_keys >/dev/null <<EOF
+command="/opt/openclaw/gateway/bin/forced-command.sh",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ${pubkey}
+EOF
+
+sudo chown openclaw-vibe:openclaw-vibe /var/lib/openclaw-vibe/.ssh/authorized_keys
+sudo chmod 0600 /var/lib/openclaw-vibe/.ssh/authorized_keys
+
+# Verify
+sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys
+# Expected: one line starting with command="/opt/openclaw/gateway/bin/forced-command.sh",…
+```
+
+### Verify the repair
+
+> Replace `<VPS_HOST>` with the hostname or IP used in `OPENCLAW_SSH_HOST`.
+
+```bash
+# Must fail with a forced-command rejection (not open a shell):
+sudo ssh \
+    -i /root/.ssh/openclaw_vibe_ed25519 \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    openclaw-vibe@<VPS_HOST>
+# Expected: "no command provided (interactive shell not permitted)" then exit 1
+
+# Full smoke-test (see §9):
+PROMPT_B64=$(printf '%s' 'echo hello' | base64 -w0)
+sudo ssh \
+    -i /root/.ssh/openclaw_vibe_ed25519 \
+    -o IdentitiesOnly=yes \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    openclaw-vibe@<VPS_HOST> \
+    "OPENCLAW_PROMPT_B64=${PROMPT_B64} vibe --workdir /srv/openclaw-work -p __B64__"
+```
