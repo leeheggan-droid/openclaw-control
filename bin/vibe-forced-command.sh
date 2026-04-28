@@ -12,6 +12,10 @@
 #   vibe --workdir /absolute/path --prompt <text>
 #   vibe --workdir /absolute/path -p <text>
 #
+# <text> may span multiple words; all tokens after --prompt / -p are joined
+# with spaces, so the client does NOT need to quote the prompt.  --workdir
+# MUST appear before --prompt / -p (everything after the flag is consumed).
+#
 # All other commands are rejected.  Invocation is logged via syslog.
 # Max runtime is enforced at 900 seconds (15 minutes).
 #
@@ -44,8 +48,9 @@ log "invoked; SSH_ORIGINAL_COMMAND=${cmd}"
 # Expected pattern: vibe --workdir /abs/path --prompt <text>
 # We parse positionally; extra or reordered flags are rejected.
 
-# Tokenise into an array (word-split is intentional here, prompt may have spaces
-# but they will be properly quoted by the client via printf %q / shell quoting).
+# Tokenise into an array (word-split is intentional here).  The --prompt
+# handler collects all remaining tokens so multi-word prompts work even
+# without client-side quoting.
 # shellcheck disable=SC2086
 set -- $cmd
 
@@ -66,9 +71,12 @@ while [[ $# -gt 0 ]]; do
         --prompt|-p)
             shift
             [[ $# -gt 0 ]] || die "--prompt/-p requires a value"
-            # Remaining tokens are the prompt (may be multi-word after shell-quoting)
-            prompt="$1"
-            shift
+            # Consume ALL remaining tokens as the prompt, joined with spaces.
+            # This supports multi-word prompts even when the client does not
+            # quote them (e.g. vibe --workdir /x -p fix the bug).
+            # Because prompt absorbs the remainder, --workdir MUST precede it.
+            prompt="$*"
+            break
             ;;
         *) die "unexpected argument: $1" ;;
     esac
