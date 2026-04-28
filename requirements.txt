@@ -4,12 +4,24 @@ pyyaml
 # Pinned to 0.8.0: first release that exports SessionSettings (used in
 # openclaw_control/service.py).  Requires pydantic>=2.12.3,<3.
 openai-agents==0.8.0
+# OpenAI Python SDK (also installed transitively by openai-agents; listed
+# explicitly so chat_feature.py can be imported standalone).
+openai>=1.30.0
 # Web framework and server
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 # HTTP client used by cheap_chat_feature, exchange_tools, github_tools, web_search
 requests>=2.32.0
+# Async HTTP client used by the Telegram bot
+httpx>=0.27.0
 # Data validation (FastAPI models)
 # Pinned to 2.13.3 — satisfies openai-agents==0.8.0 (pydantic>=2.12.3,<3) and
 # prevents resolver conflicts during Docker builds.
 pydantic==2.13.3
+# ── Auth & Chat extras ────────────────────────────────────────────────────────
+# JWT tokens for session cookies (>=2.12.0 patches CVE-2024-33663 unknown-crit-header)
+PyJWT>=2.12.0
+# Password hashing
+passlib[bcrypt]>=1.7.4
+# Telegram bot
+python-telegram-bot>=21.0
