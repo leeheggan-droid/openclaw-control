@@ -1,0 +1,38 @@
+[Unit]
+Description=OpenClaw Telegram Bot — forwards Telegram messages to the OpenAI chat API
+Documentation=https://github.com/leeheggan-droid/openclaw-control/blob/main/README.md
+After=network-online.target openclaw-cockpit.service
+Wants=network-online.target
+
+[Service]
+# Run under the same user as the cockpit agent, or a dedicated bot user.
+User=openclaw-agent
+Group=openclaw-agent
+
+# Working directory — repo must be cloned here on the VPS.
+WorkingDirectory=/opt/openclaw-control
+
+# Load secrets from the same env file as the cockpit.
+EnvironmentFile=/etc/openclaw-control.env
+
+# Start the bot.  Adjust Python path if using a virtualenv.
+ExecStart=/usr/bin/python3 -m telegram_bot.bot
+
+# Restart on failure with a short back-off so a transient network error doesn't
+# kill the bot permanently.
+Restart=on-failure
+RestartSec=10s
+
+# Harden the process.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/openclaw-control
+
+# Write stdout/stderr to journald.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-telegram-bot
+
+[Install]
+WantedBy=multi-user.target

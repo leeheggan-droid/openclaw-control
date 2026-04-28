@@ -5,9 +5,12 @@ import requests as _requests
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
+
+import auth_feature as _auth
+import chat_feature as _chat
 
 from cheap_chat_feature import cheap_chat as _cheap_chat
 from openclaw_control.config import settings
@@ -3776,3 +3779,469 @@ def cheap_chat(req: CheapChatRequest):
     if reply.startswith("❌"):
         return {"error": reply}
     return {"reply": reply}
+
+
+# ── Auth & OpenAI Chat endpoints ──────────────────────────────────────────────
+
+_AUTH_COOKIE = "openclaw_session"
+
+
+def _current_user(token: str | None) -> str | None:
+    """Return the email from the session cookie, or None if unauthenticated."""
+    if not token:
+        return None
+    return _auth.decode_token(token)
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    email: str
+    old_password: str
+    new_password: str
+
+
+class ChatRequest(BaseModel):
+    user_id: str = ""   # optional; defaults to the authenticated email
+    message: str
+
+
+class ClearHistoryRequest(BaseModel):
+    user_id: str = ""
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    """Serve the login page."""
+    return HTMLResponse(_LOGIN_HTML)
+
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest, response: Response):
+    if not _auth.authenticate(req.email, req.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = _auth.create_token(req.email)
+    response.set_cookie(
+        _AUTH_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+    )
+    return {"ok": True, "email": req.email}
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(_AUTH_COOKIE)
+    return {"ok": True}
+
+
+@app.post("/auth/change-password")
+def auth_change_password(
+    req: ChangePasswordRequest,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    caller = _current_user(openclaw_session)
+    if caller != req.email:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=422, detail="New password must be at least 8 characters")
+    ok = _auth.change_password(req.email, req.old_password, req.new_password)
+    if not ok:
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
+    return {"ok": True}
+
+
+@app.post("/chat")
+def openai_chat(
+    req: ChatRequest,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Send a message to the OpenAI LLM and return the reply with memory."""
+    caller = _current_user(openclaw_session)
+    # Allow bot calls with an explicit user_id even without a session cookie.
+    user_id = req.user_id.strip() if req.user_id.strip() else caller
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not req.message.strip():
+        raise HTTPException(status_code=422, detail="message must not be empty")
+    try:
+        reply = _chat.chat(user_id, req.message)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OpenAI error: {exc}") from exc
+    return {"reply": reply, "user_id": user_id}
+
+
+@app.post("/chat/clear")
+def openai_chat_clear(
+    req: ClearHistoryRequest,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Clear conversation history for a user."""
+    caller = _current_user(openclaw_session)
+    user_id = req.user_id.strip() if req.user_id.strip() else caller
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _chat.clear_history(user_id)
+    return {"ok": True, "user_id": user_id}
+
+
+@app.get("/chat-web", response_class=HTMLResponse)
+def chat_web(openclaw_session: str | None = Cookie(default=None)):
+    """Serve the authenticated web chat interface."""
+    email = _current_user(openclaw_session)
+    if not email:
+        return RedirectResponse("/login", status_code=303)
+    return HTMLResponse(_CHAT_WEB_HTML.replace("__EMAIL__", json.dumps(email)))
+
+
+# ── Login page HTML ───────────────────────────────────────────────────────────
+
+_LOGIN_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>OpenClaw — Sign in</title>
+  <style>
+    :root{
+      --bg:#0b0f14;--panel:#0f1621;--border:rgba(255,255,255,.08);
+      --text:#e6eefc;--muted:rgba(230,238,252,.55);
+      --accent:#22c55e;--accent2:#16a34a;
+      --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    html,body{height:100%;font-family:var(--sans);background:radial-gradient(1200px 600px at 30% 0%,rgba(34,197,94,.10),transparent 55%),var(--bg);color:var(--text);}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));border:1px solid var(--border);border-radius:24px;padding:40px 36px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.5);}
+    .logo{display:flex;align-items:center;gap:10px;margin-bottom:28px;}
+    .logo svg{flex-shrink:0;}
+    .logo span{font-size:1.25rem;font-weight:700;letter-spacing:.3px;}
+    h1{font-size:1.1rem;font-weight:600;margin-bottom:6px;}
+    p.sub{color:var(--muted);font-size:.85rem;margin-bottom:28px;}
+    label{display:block;font-size:.82rem;color:var(--muted);margin-bottom:6px;margin-top:16px;}
+    input{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:10px;padding:11px 14px;color:var(--text);font-size:.95rem;outline:none;transition:border .15s;}
+    input:focus{border-color:var(--accent);}
+    button{margin-top:24px;width:100%;background:var(--accent);color:#0b0f14;font-weight:700;font-size:.95rem;border:none;border-radius:12px;padding:13px;cursor:pointer;transition:background .15s;}
+    button:hover{background:var(--accent2);}
+    #err{color:#f87171;font-size:.85rem;margin-top:14px;display:none;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="logo">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <rect width="32" height="32" rx="8" fill="#22c55e" fill-opacity=".15"/>
+        <path d="M8 22 L16 10 L24 22" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="16" cy="10" r="2.5" fill="#22c55e"/>
+      </svg>
+      <span>OpenClaw</span>
+    </div>
+    <h1>Sign in</h1>
+    <p class="sub">Access your AI chat assistant</p>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" required placeholder="you@example.com"/>
+      <label for="pass">Password</label>
+      <input id="pass" type="password" autocomplete="current-password" required placeholder="••••••••"/>
+      <button type="submit">Sign in</button>
+    </form>
+    <div id="err"></div>
+  </div>
+</div>
+<script>
+  document.getElementById("loginForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const err = document.getElementById("err");
+    err.style.display = "none";
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("pass").value;
+    try {
+      const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({email, password}),
+      });
+      if (res.ok) {
+        window.location.href = "/chat-web";
+      } else {
+        const data = await res.json().catch(() => ({}));
+        err.textContent = data.detail || "Login failed";
+        err.style.display = "block";
+      }
+    } catch {
+      err.textContent = "Network error — please try again";
+      err.style.display = "block";
+    }
+  });
+</script>
+</body>
+</html>"""
+
+# ── Web chat HTML ─────────────────────────────────────────────────────────────
+
+_CHAT_WEB_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>OpenClaw — Chat</title>
+  <style>
+    :root{
+      --bg:#0b0f14;--panel:#0f1621;--panel2:#0c121b;
+      --border:rgba(255,255,255,.08);--text:#e6eefc;
+      --muted:rgba(230,238,252,.55);--accent:#22c55e;--accent2:#16a34a;
+      --bubbleUser:#1d2a3a;--bubbleAgent:#101b27;
+      --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    html,body{height:100%;font-family:var(--sans);background:radial-gradient(1200px 600px at 30% 0%,rgba(34,197,94,.10),transparent 55%),radial-gradient(900px 600px at 85% 20%,rgba(59,130,246,.08),transparent 55%),var(--bg);color:var(--text);overflow:hidden;}
+    /* Layout */
+    .shell{height:100vh;display:flex;flex-direction:column;}
+    header{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.02);flex-shrink:0;}
+    .header-left{display:flex;align-items:center;gap:10px;}
+    .logo-mark{width:28px;height:28px;background:rgba(34,197,94,.15);border-radius:7px;display:flex;align-items:center;justify-content:center;}
+    .app-name{font-weight:700;font-size:1rem;}
+    .user-info{font-size:.82rem;color:var(--muted);}
+    .header-right{display:flex;align-items:center;gap:8px;}
+    .btn-sm{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:.8rem;padding:5px 12px;cursor:pointer;transition:all .15s;}
+    .btn-sm:hover{background:rgba(255,255,255,.10);color:var(--text);}
+    .btn-sm.danger:hover{background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.4);color:#fca5a5;}
+    /* Chat */
+    .messages{flex:1;overflow-y:auto;padding:20px 16px;display:flex;flex-direction:column;gap:12px;}
+    .messages::-webkit-scrollbar{width:4px;}
+    .messages::-webkit-scrollbar-track{background:transparent;}
+    .messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px;}
+    .bubble{max-width:75%;padding:12px 16px;border-radius:16px;font-size:.93rem;line-height:1.55;word-break:break-word;}
+    .bubble.user{background:var(--bubbleUser);border:1px solid rgba(34,197,94,.15);align-self:flex-end;border-bottom-right-radius:4px;}
+    .bubble.assistant{background:var(--bubbleAgent);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:4px;}
+    .bubble .sender{font-size:.72rem;font-weight:600;margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;}
+    .bubble.user .sender{color:var(--accent);}
+    .bubble.assistant .sender{color:var(--muted);}
+    .bubble pre{background:rgba(0,0,0,.3);border-radius:8px;padding:10px 12px;margin-top:8px;overflow-x:auto;font-family:var(--mono);font-size:.82rem;}
+    /* Composer */
+    .composer{padding:12px 16px 16px;border-top:1px solid var(--border);background:rgba(255,255,255,.01);flex-shrink:0;}
+    .composer-row{display:flex;gap:8px;align-items:flex-end;}
+    textarea{flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:14px;padding:12px 14px;color:var(--text);font-size:.93rem;font-family:var(--sans);resize:none;outline:none;transition:border .15s;line-height:1.5;max-height:140px;}
+    textarea:focus{border-color:var(--accent);}
+    .send-btn{background:var(--accent);border:none;border-radius:12px;width:44px;height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
+    .send-btn:hover{background:var(--accent2);}
+    .send-btn:disabled{background:rgba(34,197,94,.25);cursor:not-allowed;}
+    .send-btn svg{flex-shrink:0;}
+    .typing{display:none;align-self:flex-start;padding:10px 14px;background:var(--bubbleAgent);border:1px solid var(--border);border-radius:12px;border-bottom-left-radius:4px;}
+    .typing span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin:0 2px;animation:blink 1.2s infinite;}
+    .typing span:nth-child(2){animation-delay:.2s;}
+    .typing span:nth-child(3){animation-delay:.4s;}
+    @keyframes blink{0%,80%,100%{opacity:.2;}40%{opacity:1;}}
+    /* Change password modal */
+    .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;}
+    .modal-bg.open{display:flex;}
+    .modal{background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:28px;width:100%;max-width:360px;}
+    .modal h2{font-size:1rem;font-weight:600;margin-bottom:16px;}
+    .modal label{display:block;font-size:.8rem;color:var(--muted);margin-bottom:5px;margin-top:12px;}
+    .modal input{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:.9rem;outline:none;}
+    .modal input:focus{border-color:var(--accent);}
+    .modal-btns{display:flex;gap:8px;margin-top:20px;}
+    .modal-btns button{flex:1;padding:10px;border-radius:10px;border:none;font-weight:600;cursor:pointer;font-size:.88rem;}
+    .modal-btns .save{background:var(--accent);color:#0b0f14;}
+    .modal-btns .cancel{background:rgba(255,255,255,.07);color:var(--text);}
+    #pwErr{color:#f87171;font-size:.82rem;margin-top:10px;display:none;}
+    #pwOk{color:var(--accent);font-size:.82rem;margin-top:10px;display:none;}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="header-left">
+      <div class="logo-mark">
+        <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+          <path d="M8 22 L16 10 L24 22" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="16" cy="10" r="3" fill="#22c55e"/>
+        </svg>
+      </div>
+      <span class="app-name">OpenClaw AI</span>
+    </div>
+    <div class="header-right">
+      <span class="user-info" id="userEmail"></span>
+      <button class="btn-sm" onclick="openPwModal()">Change password</button>
+      <button class="btn-sm danger" onclick="clearChat()">Clear history</button>
+      <button class="btn-sm danger" onclick="logout()">Sign out</button>
+    </div>
+  </header>
+
+  <div class="messages" id="messages">
+    <div class="bubble assistant">
+      <div class="sender">Assistant</div>
+      Hello! I'm your OpenClaw AI assistant. How can I help you today?
+    </div>
+    <div class="typing" id="typing"><span></span><span></span><span></span></div>
+  </div>
+
+  <div class="composer">
+    <div class="composer-row">
+      <textarea id="input" rows="1" placeholder="Message OpenClaw AI…" autofocus></textarea>
+      <button class="send-btn" id="sendBtn" title="Send">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M22 2L11 13" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Change password modal -->
+<div class="modal-bg" id="pwModal">
+  <div class="modal">
+    <h2>Change password</h2>
+    <label>Current password</label>
+    <input type="password" id="oldPw" placeholder="••••••••"/>
+    <label>New password (min 8 chars)</label>
+    <input type="password" id="newPw" placeholder="••••••••"/>
+    <label>Confirm new password</label>
+    <input type="password" id="confirmPw" placeholder="••••••••"/>
+    <div id="pwErr"></div>
+    <div id="pwOk"></div>
+    <div class="modal-btns">
+      <button class="cancel" onclick="closePwModal()">Cancel</button>
+      <button class="save" onclick="submitPwChange()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const EMAIL = __EMAIL__;
+document.getElementById("userEmail").textContent = EMAIL;
+
+const messagesEl = document.getElementById("messages");
+const inputEl    = document.getElementById("input");
+const sendBtn    = document.getElementById("sendBtn");
+const typingEl   = document.getElementById("typing");
+
+// Auto-grow textarea
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
+});
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+sendBtn.addEventListener("click", send);
+
+function scrollBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addBubble(role, text) {
+  // Move typing indicator to end
+  messagesEl.insertBefore(makeBubble(role, text), typingEl);
+  scrollBottom();
+}
+
+function makeBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "bubble " + role;
+  const sender = document.createElement("div");
+  sender.className = "sender";
+  sender.textContent = role === "user" ? "You" : "Assistant";
+  div.appendChild(sender);
+  // Simple markdown: code blocks
+  const content = document.createElement("div");
+  content.innerHTML = escapeAndFormat(text);
+  div.appendChild(content);
+  return div;
+}
+
+function escapeAndFormat(text) {
+  // Escape HTML then render ```code``` blocks
+  const escaped = text
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return escaped.replace(/```([\\s\\S]*?)```/g, "<pre>$1</pre>")
+    .replace(/\\n/g, "<br/>");
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  sendBtn.disabled = true;
+  addBubble("user", text);
+  typingEl.style.display = "flex";
+  scrollBottom();
+  try {
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message: text}),
+    });
+    if (res.status === 401) { window.location.href = "/login"; return; }
+    const data = await res.json();
+    const reply = data.reply || data.detail || data.error || "(no response)";
+    typingEl.style.display = "none";
+    addBubble("assistant", reply);
+  } catch(e) {
+    typingEl.style.display = "none";
+    addBubble("assistant", "⚠️ Network error — please try again.");
+  } finally {
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+async function clearChat() {
+  if (!confirm("Clear your entire conversation history?")) return;
+  await fetch("/chat/clear", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({})});
+  document.querySelectorAll(".bubble").forEach(b => b.remove());
+  messagesEl.appendChild(typingEl);
+  addBubble("assistant", "Conversation history cleared. How can I help you?");
+}
+
+async function logout() {
+  await fetch("/auth/logout", {method:"POST"});
+  window.location.href = "/login";
+}
+
+function openPwModal() {
+  document.getElementById("pwModal").classList.add("open");
+  document.getElementById("oldPw").focus();
+}
+function closePwModal() {
+  document.getElementById("pwModal").classList.remove("open");
+  ["oldPw","newPw","confirmPw"].forEach(id => document.getElementById(id).value="");
+  document.getElementById("pwErr").style.display="none";
+  document.getElementById("pwOk").style.display="none";
+}
+
+async function submitPwChange() {
+  const oldPw = document.getElementById("oldPw").value;
+  const newPw = document.getElementById("newPw").value;
+  const confirmPw = document.getElementById("confirmPw").value;
+  const errEl = document.getElementById("pwErr");
+  const okEl  = document.getElementById("pwOk");
+  errEl.style.display="none"; okEl.style.display="none";
+  if (newPw !== confirmPw) { errEl.textContent="Passwords do not match"; errEl.style.display="block"; return; }
+  if (newPw.length < 8) { errEl.textContent="Password must be at least 8 characters"; errEl.style.display="block"; return; }
+  const res = await fetch("/auth/change-password", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({email: EMAIL, old_password: oldPw, new_password: newPw}),
+  });
+  if (res.ok) {
+    okEl.textContent = "Password changed successfully!";
+    okEl.style.display = "block";
+    setTimeout(closePwModal, 1500);
+  } else {
+    const data = await res.json().catch(()=>({}));
+    errEl.textContent = data.detail || "Failed to change password";
+    errEl.style.display = "block";
+  }
+}
+</script>
+</body>
+</html>"""
