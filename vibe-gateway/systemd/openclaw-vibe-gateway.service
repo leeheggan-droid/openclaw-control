@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenClaw Vibe Gateway — ensure Docker image is current
+Documentation=https://github.com/leeheggan-droid/openclaw-control/blob/main/vibe-gateway/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Pull or build the latest vibe-gateway image at boot / on-demand.
+# Set OPENCLAW_VIBE_IMAGE to override the image tag.
+Environment=OPENCLAW_VIBE_IMAGE=openclaw-vibe-gateway:latest
+# Point to the repo checkout so docker build can find the Dockerfile.
+# Override with OPENCLAW_GATEWAY_REPO if the repo lives elsewhere.
+Environment=OPENCLAW_GATEWAY_REPO=/opt/openclaw/openclaw-control
+ExecStart=/bin/bash -c '\
+  img="${OPENCLAW_VIBE_IMAGE:-openclaw-vibe-gateway:latest}"; \
+  repo="${OPENCLAW_GATEWAY_REPO:-/opt/openclaw/openclaw-control}"; \
+  dockerfile="${repo}/vibe-gateway/docker"; \
+  if [ -d "$dockerfile" ]; then \
+    echo "Building ${img} from ${dockerfile}"; \
+    docker build -t "$img" "$dockerfile"; \
+  else \
+    echo "Dockerfile dir not found at ${dockerfile} — pulling ${img}"; \
+    docker pull "$img"; \
+  fi'
+RemainAfterExit=yes
+TimeoutStartSec=300
+
+# Run as root so docker commands work without socket group tricks.
+User=root
+
+[Install]
+WantedBy=multi-user.target
