@@ -114,7 +114,39 @@ ssh -i /etc/openclaw-ssh/id_ed25519 \
 
 ---
 
-## 4. Build and start the cockpit container
+## 4. Start the cockpit
+
+Choose **one** of the two options below.  Both end up with the web app listening
+on `http://127.0.0.1:8001`, which Caddy then proxies to your domain.
+
+### Option A — systemd (recommended for direct VPS installs)
+
+This approach runs uvicorn directly as a systemd service — no Docker required.
+
+```bash
+# 1. Create the system user (skip if it already exists)
+sudo useradd -r -s /usr/sbin/nologin openclaw-agent
+
+# 2. Clone the repo (if not already present)
+sudo git clone https://github.com/leeheggan-droid/openclaw-control.git \
+    /opt/openclaw-control
+sudo chown -R openclaw-agent:openclaw-agent /opt/openclaw-control
+
+# 3. Install Python dependencies into the system Python
+cd /opt/openclaw-control
+sudo pip3 install -r requirements.txt
+
+# 4. Install and start the systemd service
+sudo cp systemd/openclaw-cockpit.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-cockpit
+
+# Check it started correctly
+sudo systemctl status openclaw-cockpit
+journalctl -u openclaw-cockpit -n 30
+```
+
+### Option B — Docker Compose (Traefik)
 
 ```bash
 cd /opt/openclaw-control
@@ -232,10 +264,63 @@ container comes back up automatically after a VPS reboot.
 
 ---
 
-## 8. Troubleshooting
+## 8. Telegram bot (optional)
+
+The bot relays Telegram messages to the `/chat` endpoint.
+
+### Start as a systemd service
+
+```bash
+sudo cp systemd/openclaw-telegram-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now openclaw-telegram-bot
+```
+
+### Required environment variable
+
+Make sure `/etc/openclaw-control.env` contains your bot token:
+
+```ini
+TELEGRAM_BOT_TOKEN=<token-from-BotFather>
+# The bot calls the local web app; keep the default unless the port changes.
+CHAT_API_URL=http://127.0.0.1:8001
+```
+
+After editing the file, restart the service:
+
+```bash
+sudo systemctl restart openclaw-telegram-bot
+```
+
+### Viewing errors
+
+The bot logs **warnings and errors** to a rotating file at
+`/opt/openclaw-control/telegram_bot_error.log` in addition to journald:
+
+```bash
+# Live journal stream
+journalctl -u openclaw-telegram-bot -f
+
+# Error log file (warnings + errors only)
+tail -f /opt/openclaw-control/telegram_bot_error.log
+```
+
+Common causes of startup failure:
+
+| Error message | Fix |
+|---------------|-----|
+| `TELEGRAM_BOT_TOKEN is not set` | Add the token to `/etc/openclaw-control.env` and restart |
+| `Unauthorized` / `401` | The token is invalid — regenerate it via @BotFather |
+| `Failed to build Telegram application` | Check the full stack trace in `telegram_bot_error.log` |
+| Bot starts but chat replies fail | Verify the cockpit is running (`systemctl status openclaw-cockpit`) |
+
+---
+
+## 9. Troubleshooting
 
 | Symptom | Action |
 |---------|--------|
+| Cockpit not reachable at domain | Check `systemctl status openclaw-cockpit` and `systemctl status caddy` |
 | Container restart loop | `docker logs openclaw-cockpit --tail 50` |
 | `ModuleNotFoundError: No module named 'agents'` | Rebuild the image — `openai-agents` is now in `requirements.txt` |
 | `ImportError: cannot import name 'Agent' from 'agents' (…/openclaw_control/agents/__init__.py)` | Do **not** set `PYTHONPATH=/app/openclaw_control`; the local `agents/` sub-package shadows the pip package |
