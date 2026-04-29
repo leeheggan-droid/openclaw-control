@@ -38,7 +38,12 @@ pip install -r requirements.txt
 cp config.env.example .env
 #   Required: OPENAI_API_KEY, AUTH_SECRET_KEY, AUTH_ADMIN_DEFAULT_PASSWORD
 
-# 5. Run the web app
+# 5. Initialise the database and create the admin account (first time only)
+export AUTH_ADMIN_EMAIL=leeheggan@gmail.com
+export AUTH_ADMIN_DEFAULT_PASSWORD=YourStrongPassword123!
+python init_db.py
+
+# 6. Run the web app
 uvicorn web_app:app --reload --port 8001
 
 # Open http://localhost:8001/login in your browser
@@ -49,6 +54,51 @@ uvicorn web_app:app --reload --port 8001
 > `AUTH_ADMIN_DEFAULT_PASSWORD` to a strong, unique password in your `.env`
 > **before the first boot**. The placeholder values in `config.env.example`
 > must never be used in production.
+
+---
+
+## First-time initialisation
+
+Run `init_db.py` **before** starting the web app on any fresh install or new
+server.  It is safe to re-run — it will not overwrite an existing admin
+account.
+
+```bash
+# Optional: override defaults via environment variables
+export CHAT_DB_PATH=data/chat.db            # default: data/chat.db
+export AUTH_ADMIN_EMAIL=leeheggan@gmail.com # default: leeheggan@gmail.com
+export AUTH_ADMIN_DEFAULT_PASSWORD=secret   # default: changeme123 (change this!)
+
+python init_db.py
+```
+
+The script will:
+1. Verify `bcrypt` is installed and working.
+2. Create the `data/` directory if it does not exist.
+3. Create the `auth_users` table in the SQLite database.
+4. Insert the admin user (if not already present).
+5. Print the absolute database path and confirm success.
+
+### Verify the admin was created
+
+```bash
+sqlite3 data/chat.db "SELECT email, created_at FROM auth_users;"
+```
+
+Expected output:
+```
+leeheggan@gmail.com|2026-01-01T00:00:00.000Z
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `ModuleNotFoundError: No module named 'bcrypt'` | `pip install bcrypt` |
+| `PermissionError` on `data/` | `sudo chown -R $USER data/` — or check that your user can write to the project directory |
+| bcrypt error on `_ensure_admin()` | Reinstall: `pip install --upgrade bcrypt` |
+| Admin not appearing in DB after `init_db.py` | Re-run with `AUTH_ADMIN_DEFAULT_PASSWORD` set; check the script output for errors |
+| Web app starts but login fails | Confirm `AUTH_ADMIN_EMAIL` and `AUTH_ADMIN_DEFAULT_PASSWORD` match what was set when `init_db.py` was run |
 
 ---
 

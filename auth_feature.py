@@ -13,10 +13,16 @@ AUTH_ADMIN_DEFAULT_PASSWORD (default: changeme123  — change on first login)
 AUTH_SECRET_KEY             (REQUIRED in production — random string ≥ 32 chars)
 AUTH_TOKEN_EXPIRE_HOURS     (default: 168 = 7 days)
 CHAT_DB_PATH                (default: data/chat.db)
+
+First-time setup
+----------------
+Run ``python init_db.py`` to create the database directory, tables, and admin
+account before starting the web app for the first time.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
@@ -24,8 +30,12 @@ import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+_log = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -37,7 +47,6 @@ _TOKEN_EXPIRE_HOURS = int(os.environ.get("AUTH_TOKEN_EXPIRE_HOURS", "168"))
 _ADMIN_EMAIL = os.environ.get("AUTH_ADMIN_EMAIL", "leeheggan@gmail.com")
 _ADMIN_DEFAULT_PASSWORD = os.environ.get("AUTH_ADMIN_DEFAULT_PASSWORD", "changeme123")
 
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _lock = threading.Lock()
 
 # Warn loudly if the secret key is still the placeholder — all JWTs signed
@@ -51,6 +60,24 @@ if _SECRET_KEY == _PLACEHOLDER_KEY:
         stacklevel=1,
     )
 
+# Ensure the data directory exists at import time so that any code that checks
+# the directory (e.g. health probes, Docker volume mounts) never races with the
+# first DB open.
+_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# ── Password helpers (direct bcrypt — no passlib required) ───────────────────
+
+
+def _hash_password(plain: str) -> str:
+    """Return a bcrypt hash of *plain*."""
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    """Return True if *plain* matches *hashed*."""
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
 # ── Database helpers ──────────────────────────────────────────────────────────
 
 _conn: sqlite3.Connection | None = None
@@ -59,6 +86,7 @@ _conn: sqlite3.Connection | None = None
 def _db() -> sqlite3.Connection:
     global _conn
     if _conn is None:
+        db_existed = _DB_PATH.exists()
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         _conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
         _conn.row_factory = sqlite3.Row
@@ -72,6 +100,10 @@ def _db() -> sqlite3.Connection:
             );
         """)
         _conn.commit()
+        if db_existed:
+            _log.info("Auth DB opened: %s", _DB_PATH.resolve())
+        else:
+            _log.info("Auth DB created: %s", _DB_PATH.resolve())
     return _conn
 
 
@@ -82,12 +114,13 @@ def _ensure_admin() -> None:
             "SELECT id FROM auth_users WHERE email = ?", (_ADMIN_EMAIL,)
         ).fetchone()
         if not row:
-            hashed = _pwd_ctx.hash(_ADMIN_DEFAULT_PASSWORD)
+            hashed = _hash_password(_ADMIN_DEFAULT_PASSWORD)
             _db().execute(
                 "INSERT INTO auth_users (email, password_hash) VALUES (?, ?)",
                 (_ADMIN_EMAIL, hashed),
             )
             _db().commit()
+            _log.info("Admin account created for %s", _ADMIN_EMAIL)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -102,7 +135,7 @@ def authenticate(email: str, password: str) -> bool:
         ).fetchone()
     if not row:
         return False
-    return _pwd_ctx.verify(password, row["password_hash"])
+    return _verify_password(password, row["password_hash"])
 
 
 def create_token(email: str) -> str:
@@ -124,7 +157,7 @@ def change_password(email: str, old_password: str, new_password: str) -> bool:
     """Change the password for *email*.  Returns False if *old_password* is wrong."""
     if not authenticate(email, old_password):
         return False
-    hashed = _pwd_ctx.hash(new_password)
+    hashed = _hash_password(new_password)
     with _lock:
         _db().execute(
             "UPDATE auth_users SET password_hash = ? WHERE email = ?",
