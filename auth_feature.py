@@ -11,7 +11,9 @@ Environment variables
 AUTH_ADMIN_EMAIL            (default: leeheggan@gmail.com)
 AUTH_ADMIN_DEFAULT_PASSWORD (default: changeme123  — change on first login)
 AUTH_SECRET_KEY             (REQUIRED in production — random string ≥ 32 chars)
-AUTH_TOKEN_EXPIRE_HOURS     (default: 168 = 7 days)
+JWT_ALGORITHM               (default: HS256)
+JWT_EXPIRES_SECONDS         (overrides AUTH_TOKEN_EXPIRE_HOURS when set)
+AUTH_TOKEN_EXPIRE_HOURS     (default: 168 = 7 days; ignored when JWT_EXPIRES_SECONDS is set)
 CHAT_DB_PATH                (default: data/chat.db)
 
 First-time setup
@@ -41,8 +43,19 @@ _log = logging.getLogger(__name__)
 
 _DB_PATH = Path(os.environ.get("CHAT_DB_PATH", "data/chat.db"))
 _SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "CHANGE-ME-IN-PRODUCTION-use-a-random-secret")
-_ALGORITHM = "HS256"
-_TOKEN_EXPIRE_HOURS = int(os.environ.get("AUTH_TOKEN_EXPIRE_HOURS", "168"))
+_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+# JWT_EXPIRES_SECONDS takes precedence; AUTH_TOKEN_EXPIRE_HOURS is kept for backward compat
+_jwt_expires_seconds = os.environ.get("JWT_EXPIRES_SECONDS")
+if _jwt_expires_seconds:
+    try:
+        _TOKEN_EXPIRE_HOURS = int(_jwt_expires_seconds) // 3600
+    except ValueError:
+        _TOKEN_EXPIRE_HOURS = 168
+else:
+    try:
+        _TOKEN_EXPIRE_HOURS = int(os.environ.get("AUTH_TOKEN_EXPIRE_HOURS", "168"))
+    except ValueError:
+        _TOKEN_EXPIRE_HOURS = 168
 
 _ADMIN_EMAIL = os.environ.get("AUTH_ADMIN_EMAIL", "leeheggan@gmail.com")
 _ADMIN_DEFAULT_PASSWORD = os.environ.get("AUTH_ADMIN_DEFAULT_PASSWORD", "changeme123")

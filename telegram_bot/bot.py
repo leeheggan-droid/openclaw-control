@@ -60,7 +60,7 @@ log = logging.getLogger(__name__)
 _CHAT_API_BASE = os.environ.get("CHAT_API_URL", "http://127.0.0.1:8001").rstrip("/")
 # Note: 8001 is the OpenClaw cockpit port (see Dockerfile/docker-compose.cockpit.yml).
 # Override via CHAT_API_URL if the web app runs on a different host or port.
-_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+_BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
