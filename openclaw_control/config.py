@@ -23,6 +23,10 @@ class Settings:
     # terminal pills, and /ops/report.  When unset, read-only features are
     # disabled gracefully; they NEVER fall back to ssh_host.
     ssh_readonly_host: str = os.getenv("OPENCLAW_SSH_READONLY_HOST", "")
+    # Private key file for the read-only SSH lane.  When set, passed as -i to
+    # SSH so the correct key is used even if the default SSH agent/key differs.
+    # Leave blank to rely on the default SSH key (~/.ssh/id_ed25519 etc.).
+    ssh_readonly_key: str = os.getenv("OPENCLAW_SSH_READONLY_KEY", "")
     repo_dir: str = os.getenv("OPENCLAW_REPO_DIR", "")
     github_token: str = os.getenv("GITHUB_TOKEN", "")
     github_repo: str = os.getenv("GITHUB_REPO", "leeheggan-droid/openclaw-control")

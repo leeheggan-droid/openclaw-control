@@ -1623,7 +1623,7 @@ def index():
         </div>
 
         <div class="hintBar">
-          <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code></div>
+          <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code> • Team review: type <code>@filename</code> to attach a file</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span>Shell: <code>!uptime</code>, <code>!docker ps</code></span>
             <select class="repoSelect" id="repoSelect" title="Target repo for Copilot issues">
@@ -1931,7 +1931,10 @@ def index():
     const text = await f.text();
     const extra = `<div class="attachment">FILE: ${escapeHtml(f.name)}\\n\\n${escapeHtml(text)}</div>`;
     addChat("user", `Attached: ${f.name}`, extra);
-    histories[activeAgent].push({role:"user", text:`Attached: ${f.name}`, extraHTML: extra});
+    // Include file content in the text field (capped at 4000 chars) so it is
+    // available when conversation history is built for team review context.
+    const fileSnippet = text.slice(0, 4000);
+    histories[activeAgent].push({role:"user", text:`Attached file: ${f.name}\n\n${fileSnippet}`, extraHTML: extra});
     saveHistory(activeAgent);
     fileInput.value = "";
   };
@@ -2437,6 +2440,39 @@ def index():
   let teamPollTimer = null;
   let teamRunCancelled = false;
 
+  /**
+   * Resolve @filename tokens in a prompt string via the browser file picker.
+   * Each @token triggers a single file-open dialog; the selected file's text
+   * replaces the token.  Returns the resolved string, or null if the user
+   * cancels without selecting a file.
+   *
+   * Example: "Review this: @system_logs.txt" → "Review this: [FILE:system_logs.txt]\n<content>"
+   */
+  async function resolveAtRefs(text) {
+    const atPattern = /@([A-Za-z0-9_.\-]+)/g;
+    let result = text;
+    let match;
+    // Collect unique tokens first so we show one picker per unique @ref
+    const tokens = [];
+    while ((match = atPattern.exec(text)) !== null) {
+      if (!tokens.includes(match[0])) tokens.push(match[0]);
+    }
+    for (const token of tokens) {
+      const fname = token.slice(1); // strip leading @
+      const file = await new Promise(resolve => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.onchange = ev => resolve(ev.target.files && ev.target.files[0] || null);
+        inp.click();
+      });
+      if (!file) return null; // user cancelled
+      const content = await file.text();
+      const snippet = content.slice(0, 8000);
+      result = result.split(token).join(`[FILE:${file.name}]\n${snippet}`);
+    }
+    return result;
+  }
+
   try {
     teamFeedEvents = JSON.parse(localStorage.getItem(TEAM_FEED_KEY) || "[]");
   } catch { teamFeedEvents = []; }
@@ -2646,7 +2682,7 @@ def index():
     const convHistory = (histories[sourceAgent] || [])
       .slice(-30)
       .filter(h => h.role === "user" || h.role === "agent")
-      .map(h => ({role: h.role, text: (h.text || "").slice(0, 600)}));
+      .map(h => ({role: h.role, text: (h.text || "").slice(0, 2000)}));
 
     // Determine prompt: typed text in input > last user message in history > ask user
     let userPrompt = inputEl.value.trim();
@@ -2659,6 +2695,14 @@ def index():
         userPrompt = input.trim();
       }
       // Else: leave userPrompt empty; backend will extract from conversation history
+    }
+
+    // Resolve @filename references (e.g. @system_logs.txt) by opening a file
+    // picker for each token and substituting the file's text content inline.
+    if (userPrompt.includes("@")) {
+      const resolved = await resolveAtRefs(userPrompt);
+      if (resolved === null) return; // user cancelled a file picker
+      userPrompt = resolved;
     }
 
     const defaultPrompt = period
