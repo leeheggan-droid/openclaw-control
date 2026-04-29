@@ -2031,7 +2031,10 @@ def index():
         body: JSON.stringify({
           agent: activeAgent,
           text,
-          workspace: {terminal_tail: getShellOutput()},
+          workspace: {
+            terminal_tail: getShellOutput(),
+            conversation_history: (histories[activeAgent] || []).slice(-30),
+          },
         })
       });
       const data = await res.json();
@@ -2039,6 +2042,19 @@ def index():
       addChat("agent", out);
       histories[activeAgent].push({role: "agent", text: out});
       saveHistory(activeAgent);
+      // Auto-switch to Team tab when the backend escalated to a Team Review
+      if (data.team_run_id) {
+        activeTeamRunId = data.team_run_id;
+        teamPollCursor = 0;
+        teamRunCancelled = false;
+        activeAgent = "team";
+        document.querySelectorAll(".tabBtn").forEach(b =>
+          b.classList.toggle("active", b.getAttribute("data-agent") === "team"));
+        showAgentTab("team");
+        setTeamRunning(true);
+        await pollTeamReview();
+        teamPollTimer = setInterval(pollTeamReview, 2000);
+      }
     } catch(err) {
       const msg = "Web error: " + (err && err.message ? err.message : String(err));
       addChat("agent", msg);

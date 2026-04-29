@@ -23,7 +23,7 @@ class OpenClawTUI(App):
 
     def __init__(self):
         super().__init__()
-        self.session_ops = SQLiteSession("openclaw_ops_session")
+        self.session_main = SQLiteSession("openclaw_main_session")
         self.session_analysis = SQLiteSession("openclaw_analysis_session")
 
     def compose(self) -> ComposeResult:
@@ -59,7 +59,7 @@ class OpenClawTUI(App):
         if route.name == "analysis":
             self.run_agent(text, analysis_agent, self.session_analysis, "Analysis")
         else:
-            self.run_agent(text, controller, self.session_ops, "Ops")
+            self.run_agent(text, main_agent, self.session_main, "Main")
 
     @work(thread=True)
     def run_ssh(self, cmd: str) -> None:
@@ -97,10 +97,27 @@ class OpenClawTUI(App):
 
         future = EXECUTOR.submit(_call)
 
+        # Heartbeat: write a progress line every 30 s while the agent is running
+        stop_event = threading.Event()
+
+        def _heartbeat():
+            elapsed = 0
+            while not stop_event.wait(30):
+                elapsed += 30
+                self.call_from_thread(
+                    log.write,
+                    f"[dim]⏳ Still working ({label}, {elapsed}s)…[/dim]",
+                )
+
+        hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+        hb_thread.start()
+
         try:
-            result = future.result(timeout=25)
+            result = future.result(timeout=300)
             log.write(f"[bold magenta]{label}:[/bold magenta] {result.final_output}")
         except FuturesTimeout:
-            log.write(f"[bold red]{label} timed out[/bold red] (25s). Try again or use ! commands.")
+            log.write(f"[bold red]{label} timed out[/bold red] (300s). Try again or use ! commands.")
         except Exception as e:
             log.write(f"[bold red]{label} error:[/bold red] {e}")
+        finally:
+            stop_event.set()
