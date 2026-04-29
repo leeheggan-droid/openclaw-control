@@ -3865,6 +3865,19 @@ def auth_change_password(
     return {"ok": True}
 
 
+@app.get("/admin/users")
+def admin_users(openclaw_session: str | None = Cookie(default=None)):
+    """Return all registered users (email + created_at). Requires an active session.
+
+    Password hashes are never returned.  Only authenticated operators can call
+    this endpoint — unauthenticated requests receive 401.
+    """
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"users": _auth.list_users()}
+
+
 @app.post("/chat")
 def openai_chat(
     req: ChatRequest,

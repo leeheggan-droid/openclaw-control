@@ -165,3 +165,17 @@ def change_password(email: str, old_password: str, new_password: str) -> bool:
         )
         _db().commit()
     return True
+
+
+def list_users() -> list[dict]:
+    """Return all registered users as a list of dicts with *email* and *created_at*.
+
+    Password hashes are never included.  Call ``_ensure_admin()`` first so the
+    admin account is present even before the first explicit login.
+    """
+    _ensure_admin()
+    with _lock:
+        rows = _db().execute(
+            "SELECT email, created_at FROM auth_users ORDER BY created_at ASC"
+        ).fetchall()
+    return [{"email": row["email"], "created_at": row["created_at"]} for row in rows]

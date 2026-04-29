@@ -191,6 +191,31 @@ def ask_quant(text: str) -> str:
     return _delegate_to_agent(quant_agent, text)
 
 
+@function_tool
+def list_registered_users() -> str:
+    """List all users registered in the OpenClaw control panel.
+
+    Use this when the user asks about:
+    - Who has access to the control panel
+    - Registered users or email addresses in the system
+    - Number of accounts / user list
+
+    Returns a formatted list of email addresses and registration dates.
+    Password hashes are never included or returned.
+    """
+    from auth_feature import list_users  # lazy import avoids circular load at module level
+    try:
+        users = list_users()
+    except Exception as exc:
+        return f"[Could not query user list: {type(exc).__name__}: {exc}]"
+    if not users:
+        return "No users found in the local auth database."
+    lines = [f"Registered users ({len(users)} total):"]
+    for u in users:
+        lines.append(f"  {u['email']}  (registered: {u['created_at']})")
+    return "\n".join(lines)
+
+
 # ── Repo capability map injected into instructions ────────────────────────────
 
 _REPO_CAPABILITY_MAP = """
@@ -275,6 +300,11 @@ main_agent = Agent(
         "   Use for: live crypto prices, exchange status, news, docs\n"
         "   Example: web_search('BTC price today'), web_search('Kraken API status')\n"
         "\n"
+        "7. list_registered_users() — list all users registered in this control panel\n"
+        "   Use for: 'who has access?', 'list users', 'show me the user list', 'what emails are registered?'\n"
+        "   Returns emails and registration dates — no passwords are ever returned.\n"
+        "   Example: list_registered_users()\n"
+        "\n"
         "═══════════════════════════════════\n"
         "RULES\n"
         "═══════════════════════════════════\n"
@@ -317,5 +347,5 @@ main_agent = Agent(
         "that applies to the VPS (openclaw-crypto, alpaca_orb_bite_bot if on same host).\n"
         "openclaw-control is on the operator's local machine — they must run git pull locally.\n"
     ),
-    tools=[run_vibe_report, ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history],
+    tools=[run_vibe_report, ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history, list_registered_users],
 )
