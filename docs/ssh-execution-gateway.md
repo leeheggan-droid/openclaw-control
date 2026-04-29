@@ -552,19 +552,27 @@ sudo chmod 0644 "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub"
 
 ### 11.2 — Write `~/.ssh/config` for `openclaw-vibe`
 
+Use `~`-relative paths so the same config works both on the host and inside the
+Docker container (where `~/.ssh` is bind-mounted from the host):
+
 ```bash
 sudo tee "${VIBE_HOME}/.ssh/config" >/dev/null <<'EOF'
 Host localhost 127.0.0.1
-    IdentityFile /var/lib/openclaw-vibe/.ssh/openclaw_vibe_outbound_ed25519
+    IdentityFile ~/.ssh/openclaw_vibe_outbound_ed25519
     IdentitiesOnly yes
     BatchMode yes
     StrictHostKeyChecking yes
-    UserKnownHostsFile /var/lib/openclaw-vibe/.ssh/known_hosts
+    UserKnownHostsFile ~/.ssh/known_hosts
 EOF
 
 sudo chown openclaw-vibe:openclaw-vibe "${VIBE_HOME}/.ssh/config"
 sudo chmod 0600 "${VIBE_HOME}/.ssh/config"
 ```
+
+> **Existing installs** with absolute paths in the config can be fixed automatically:
+> ```bash
+> sudo bash vibe-gateway/bin/repair-authorized-keys.sh --fix-ssh-config
+> ```
 
 ### 11.3 — Pre-seed `known_hosts`
 

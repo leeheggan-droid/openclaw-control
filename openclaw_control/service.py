@@ -1,4 +1,5 @@
 import atexit as _atexit
+import base64 as _base64
 import hashlib as _hashlib
 import json as _json
 import re as _re
@@ -1490,12 +1491,18 @@ _VIBE_TIMEOUT = 900  # seconds — vibe runs can take up to 15 minutes
 def start_vibe_run(workdir: str, prompt: str) -> str:
     """Run ``vibe --workdir <workdir> --prompt <prompt>`` on the VPS via SSH.
 
-    Constructs the remote command from *workdir* and *prompt* using
-    ``shlex.quote`` to prevent shell injection.  Runs in a daemon thread and
-    returns a run_id that callers can poll with :func:`get_vibe_run`.
+    Uses the OPENCLAW_PROMPT_B64 gateway protocol: the prompt is base64-encoded
+    and placed in an inline env-var assignment so that shell quoting cannot
+    corrupt prompts containing special characters or whitespace.  The forced
+    command on the VPS side accepts this pattern and decodes the value before
+    dispatching to the vibe container.
+
+    Runs in a daemon thread and returns a run_id callers can poll via
+    :func:`get_vibe_run`.
     """
+    prompt_b64 = _base64.b64encode(prompt.encode()).decode()
     vibe_command = (
-        f"vibe --workdir {_shlex.quote(workdir)} --prompt {_shlex.quote(prompt)}"
+        f"OPENCLAW_PROMPT_B64={prompt_b64} vibe --workdir {_shlex.quote(workdir)} -p __B64__"
     )
     run_id = _uuid.uuid4().hex[:8]
     run: dict = {"status": "running", "output": "", "error": ""}

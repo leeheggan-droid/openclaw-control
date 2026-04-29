@@ -158,11 +158,12 @@ Set these environment variables before invoking `run-vibe-container.sh`
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENCLAW_VIBE_IMAGE` | `openclaw-vibe-gateway:latest` | Docker image tag |
-| `OPENCLAW_VIBE_CACHE_DIR` | `/var/lib/openclaw-vibe` | Host path for persistent vibe cache |
+| `OPENCLAW_VIBE_CACHE_DIR` | `/var/lib/openclaw-vibe/cache` | Host path for persistent vibe cache (bind-mounted to `/home/vibeuser/.cache/vibe`) |
+| `OPENCLAW_VIBE_SSH_DIR` | `/var/lib/openclaw-vibe/.ssh` | Host `.ssh` directory bind-mounted read-only into the container so vibe can reach `openclaw-readonly@localhost` for probe actions |
 | `OPENCLAW_VIBE_PIDS_LIMIT` | `64` | Max processes in container |
 | `OPENCLAW_VIBE_MEMORY` | `2g` | Container memory limit |
 | `OPENCLAW_VIBE_CPUS` | `1.0` | Container CPU quota |
-| `OPENCLAW_VIBE_CONTAINER_USER` | `1500:1500` | UID:GID to run as inside container |
+| `OPENCLAW_VIBE_CONTAINER_USER` | `1500:1500` | UID:GID to run as inside container — must match the `openclaw-vibe` host user UID (1500) so 0600 key files are readable |
 
 ### Model / API keys
 

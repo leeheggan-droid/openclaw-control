@@ -60,11 +60,13 @@ ssh_host="${OPENCLAW_SSH_HOST:-}"
 [[ -n "$prompt"  ]] || die "--prompt is required"
 
 # ── build remote command ──────────────────────────────────────────────────────
-# printf %q produces POSIX shell-quoted tokens safe for eval on the remote side.
+# The forced command on the VPS requires the prompt to be delivered via the
+# OPENCLAW_PROMPT_B64 env-var protocol so that prompts containing spaces or
+# special characters survive the SSH command-string transport without quoting
+# bugs.  Base64-encode the prompt and use the __B64__ sentinel.
 
-quoted_workdir="$(printf '%q' "$workdir")"
-quoted_prompt="$(printf '%q' "$prompt")"
-remote_cmd="vibe --workdir ${quoted_workdir} --prompt ${quoted_prompt}"
+prompt_b64="$(printf '%s' "$prompt" | base64 -w0)"
+remote_cmd="OPENCLAW_PROMPT_B64=${prompt_b64} vibe --workdir $(printf '%q' "$workdir") -p __B64__"
 
 # ── execute ───────────────────────────────────────────────────────────────────
 

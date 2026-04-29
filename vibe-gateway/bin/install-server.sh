@@ -66,18 +66,22 @@ EOF
 done
 
 # ── 1. create system user ─────────────────────────────────────────────────────
+# openclaw-vibe is given a fixed UID of 1500 so that it matches the UID used
+# inside the vibe Docker container (vibeuser UID 1500).  The container
+# bind-mounts ~/.ssh read-only; without matching UIDs the container process
+# cannot read the 0600 SSH key files owned by the host user.
 
-info "creating system user '${VIBE_USER}'"
+info "creating user '${VIBE_USER}' (uid=1500)"
 if id "$VIBE_USER" &>/dev/null; then
     info "user '${VIBE_USER}' already exists — skipping useradd"
 else
     useradd \
-        --system \
+        --uid 1500 \
         --shell /usr/sbin/nologin \
         --home-dir "$VIBE_HOME" \
         --create-home \
         "$VIBE_USER"
-    info "user '${VIBE_USER}' created"
+    info "user '${VIBE_USER}' created (uid=1500)"
 fi
 
 # ── 2. create install directory and copy scripts ──────────────────────────────
@@ -181,15 +185,19 @@ else
 fi
 
 # 6b — write ~/.ssh/config for openclaw-vibe
+# Use ~ -relative paths for IdentityFile and UserKnownHostsFile so that the
+# same config file works both on the host (home=/var/lib/openclaw-vibe) and
+# inside the vibe Docker container (home=/home/vibeuser) where the .ssh
+# directory is bind-mounted from the host.
 if [[ ! -f "${VIBE_SSH_CONFIG}" ]]; then
-    cat > "${VIBE_SSH_CONFIG}" <<EOF
+    cat > "${VIBE_SSH_CONFIG}" <<'EOF'
 # Written by install-server.sh — SSH client config for openclaw-vibe outbound connections.
 Host localhost 127.0.0.1
-    IdentityFile ${VIBE_OUTBOUND_KEY}
+    IdentityFile ~/.ssh/openclaw_vibe_outbound_ed25519
     IdentitiesOnly yes
     BatchMode yes
     StrictHostKeyChecking yes
-    UserKnownHostsFile ${VIBE_HOME}/.ssh/known_hosts
+    UserKnownHostsFile ~/.ssh/known_hosts
 EOF
     chown "${VIBE_USER}:${VIBE_USER}" "${VIBE_SSH_CONFIG}"
     chmod 0600 "${VIBE_SSH_CONFIG}"

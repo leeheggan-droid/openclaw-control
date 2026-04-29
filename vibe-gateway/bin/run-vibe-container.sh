@@ -29,7 +29,8 @@ set -euo pipefail
 
 readonly PROG="run-vibe-container"
 readonly IMAGE="${OPENCLAW_VIBE_IMAGE:-openclaw-vibe-gateway:latest}"
-readonly CACHE_DIR="${OPENCLAW_VIBE_CACHE_DIR:-/var/lib/openclaw-vibe}"
+readonly CACHE_DIR="${OPENCLAW_VIBE_CACHE_DIR:-/var/lib/openclaw-vibe/cache}"
+readonly SSH_DIR="${OPENCLAW_VIBE_SSH_DIR:-/var/lib/openclaw-vibe/.ssh}"
 readonly PIDS_LIMIT="${OPENCLAW_VIBE_PIDS_LIMIT:-64}"
 readonly MEMORY="${OPENCLAW_VIBE_MEMORY:-2g}"
 readonly CPUS="${OPENCLAW_VIBE_CPUS:-1.0}"
@@ -87,6 +88,15 @@ docker_args=(
     --env "OPENCLAW_PROMPT_B64=${prompt_b64}"
     --network=host
 )
+
+# Bind-mount the SSH directory so vibe can authenticate to openclaw-readonly
+# for read-only probe actions (uptime, docker ps, etc.).  The mount is
+# read-only inside the container; the container never writes to ~/.ssh.
+if [[ -d "$SSH_DIR" ]]; then
+    docker_args+=(
+        --mount "type=bind,source=${SSH_DIR},target=/home/vibeuser/.ssh,readonly"
+    )
+fi
 
 # Forward model / API env vars when present (never hardcode secrets).
 for var in MISTRAL_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
