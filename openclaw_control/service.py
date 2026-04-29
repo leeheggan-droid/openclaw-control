@@ -400,15 +400,17 @@ def run_ssh_readonly(command: str, timeout: int = 10) -> dict:
             ),
         }
     try:
+        ssh_cmd = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "ConnectTimeout=5",
+        ]
+        if settings.ssh_readonly_key:
+            ssh_cmd += ["-i", settings.ssh_readonly_key]
+        ssh_cmd += [settings.ssh_readonly_host, command]
         proc = subprocess.run(
-            [
-                "ssh",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=yes",
-                "-o", "ConnectTimeout=5",
-                settings.ssh_readonly_host,
-                command,
-            ],
+            ssh_cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
