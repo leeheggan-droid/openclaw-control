@@ -587,7 +587,7 @@ sudo install -d -m 0700 -o openclaw-readonly -g openclaw-readonly \
     "${READONLY_HOME}/.ssh"
 
 # Add the key with the forced-command restriction.
-pubkey="$(sudo cat ${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub)"
+pubkey="$(sudo cat "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub")"
 sudo tee -a "${READONLY_HOME}/.ssh/authorized_keys" >/dev/null <<EOF
 command="${READONLY_WRAPPER}",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ${pubkey}
 EOF
