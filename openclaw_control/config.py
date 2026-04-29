@@ -4,6 +4,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _int_env(key: str, default: int) -> int:
+    """Read an integer environment variable, returning *default* on missing or invalid values."""
+    try:
+        return int(os.getenv(key) or default)
+    except (ValueError, TypeError):
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
@@ -17,7 +26,7 @@ class Settings:
     github_token: str = os.getenv("GITHUB_TOKEN", "")
     github_repo: str = os.getenv("GITHUB_REPO", "leeheggan-droid/openclaw-control")
     vibe_workdir: str = os.getenv("OPENCLAW_VIBE_WORKDIR", "")
-    autopilot_interval: int = int(os.getenv("OPENCLAW_AUTOPILOT_INTERVAL", "300"))
+    autopilot_interval: int = _int_env("OPENCLAW_AUTOPILOT_INTERVAL", 300)
     # Cheap Chat inference providers
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
     mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
@@ -25,7 +34,7 @@ class Settings:
     # Web search
     brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
     # Trade log / inactivity alerting
-    trade_inactivity_hours: int = int(os.getenv("OPENCLAW_TRADE_INACTIVITY_HOURS", "12"))
+    trade_inactivity_hours: int = _int_env("OPENCLAW_TRADE_INACTIVITY_HOURS", 12)
     alert_webhook_url: str = os.getenv("OPENCLAW_ALERT_WEBHOOK_URL", "")
     # Exchange API credentials (read-only trade history)
     kraken_api_key: str = os.getenv("KRAKEN_API_KEY", "")
@@ -49,11 +58,11 @@ class Settings:
     vibe_api_key: str = os.getenv("VIBE_API_KEY", "")
     vibe_allowlist: str = os.getenv("VIBE_ALLOWLIST", "")
     # VPS agent polling interval (seconds)
-    poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
+    poll_interval_seconds: int = _int_env("POLL_INTERVAL_SECONDS", 30)
     # Agent / environment identifiers (used for multi-tenant deployments)
     agent_id: str = os.getenv("AGENT_ID", "")
     env_id: str = os.getenv("ENV_ID", "")
     # Web server port (used by uvicorn; default matches the Dockerfile / systemd service)
-    port: int = int(os.getenv("PORT", "8001"))
+    port: int = _int_env("PORT", 8001)
 
 settings = Settings()

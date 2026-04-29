@@ -47,9 +47,15 @@ _ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
 # JWT_EXPIRES_SECONDS takes precedence; AUTH_TOKEN_EXPIRE_HOURS is kept for backward compat
 _jwt_expires_seconds = os.environ.get("JWT_EXPIRES_SECONDS")
 if _jwt_expires_seconds:
-    _TOKEN_EXPIRE_HOURS = int(_jwt_expires_seconds) // 3600
+    try:
+        _TOKEN_EXPIRE_HOURS = int(_jwt_expires_seconds) // 3600
+    except ValueError:
+        _TOKEN_EXPIRE_HOURS = 168
 else:
-    _TOKEN_EXPIRE_HOURS = int(os.environ.get("AUTH_TOKEN_EXPIRE_HOURS", "168"))
+    try:
+        _TOKEN_EXPIRE_HOURS = int(os.environ.get("AUTH_TOKEN_EXPIRE_HOURS", "168"))
+    except ValueError:
+        _TOKEN_EXPIRE_HOURS = 168
 
 _ADMIN_EMAIL = os.environ.get("AUTH_ADMIN_EMAIL", "leeheggan@gmail.com")
 _ADMIN_DEFAULT_PASSWORD = os.environ.get("AUTH_ADMIN_DEFAULT_PASSWORD", "changeme123")
