@@ -334,3 +334,4 @@ ssh ... openclaw-vibe@HOST \
 | `runner not found or not executable` | install-server not run | Run `install-server.sh` again |
 | Container exits immediately | Docker not installed, or image not built | `docker build -t openclaw-vibe-gateway:latest vibe-gateway/docker/` |
 | `bad interpreter: Permission denied` | vibe installed under /home | Re-install vibe system-wide inside the Docker image (see Dockerfile) |
+| `Permission denied (publickey,password)` on vibe SSH actions (e.g. `uptime`, `ls`) | `openclaw-vibe` has no outbound SSH identity to reach `openclaw-readonly@localhost` | Re-run `install-server.sh` (step 6 generates the outbound key); or follow `docs/ssh-execution-gateway.md` §11 |
