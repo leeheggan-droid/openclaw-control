@@ -7,6 +7,7 @@ import subprocess
 import threading as _threading
 import time as _time
 import uuid as _uuid
+from collections import Counter as _Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone as _tz
 from typing import Any, NamedTuple
@@ -155,6 +156,13 @@ def _report_commands_from_map() -> dict[str, list[str]]:
 # Regex to detect VIBE_REPORT_REQUEST in agent output.
 _VIBE_REQUEST_RE = _re.compile(r"VIBE_REPORT_REQUEST:\s*(\w+)", _re.IGNORECASE)
 
+# Patience settings for VIBE_REPORT_REQUEST retries.
+# When a probe returns empty (e.g. a long-running backtest not yet complete),
+# the system retries up to this many times, waiting _VIBE_REQUEST_RETRY_DELAY
+# seconds between attempts, before passing whatever data it has to the agent.
+_VIBE_REQUEST_MAX_RETRIES: int = 3
+_VIBE_REQUEST_RETRY_DELAY: float = 15.0  # seconds between retry attempts
+
 
 def run_vibe_report(report_id: str) -> str:
     """Execute all read-only SSH commands for *report_id* and return combined output.
@@ -213,7 +221,7 @@ def run_vibe_report(report_id: str) -> str:
         return f"[Unknown report_id '{report_id}'. Valid ids: {valid}]"
 
     for cmd in (commands or []):
-        result = run_ssh_readonly(cmd, timeout=15)
+        result = run_ssh_readonly(cmd, timeout=120)
         if "error" in result:
             sections.append(f"--- {cmd[:60]}... ---\n[SSH error]")
             continue
@@ -499,13 +507,47 @@ _COO_DETAIL_KEYWORDS = frozenset(["detailed", "full review", "deep dive"])
 
 # Outer timeout (seconds) per agent.  COO has a shorter soft budget so the
 # fallback partial memo is delivered promptly instead of hanging until 25 s.
-# Main has a longer budget because it may call ask_pnl + ask_quant + web_search
-# in the same turn, each of which takes several seconds.
+# Main has a generous budget because it may call ask_pnl + ask_quant +
+# web_search + SSH probes in the same turn, each of which can take many seconds.
 _AGENT_TIMEOUT: dict[str, int] = {
-    "main": 60,
+    "main": 300,
     "coo": 15,
 }
-_DEFAULT_TIMEOUT = 25
+_DEFAULT_TIMEOUT = 60
+
+# ── Compound-request detection ────────────────────────────────────────────────
+# Keywords that indicate a multi-step analysis task that benefits from Team
+# Review rather than a single-agent response.
+_COMPOUND_KEYWORDS: frozenset[str] = frozenset({
+    "analyse", "analyze", "analysis",
+    "strategy", "strategies",
+    "backtest", "back-test", "back test",
+    "test", "tests",
+    "propose", "proposal",
+    "assess", "assessment",
+    "compare", "comparison",
+    "history", "historical",
+    "kraken",
+    "review",
+    "2 year", "2-year", "two year",
+    "success rate", "win rate",
+    "holding btc", "hold btc",
+})
+
+
+def _is_compound_request(text: str) -> bool:
+    """Return True when *text* looks like a multi-agent analysis task.
+
+    Triggers when ≥ 2 compound keywords appear in the (lower-cased) text,
+    or when the message itself is longer than 300 characters.
+    Any of these indicates a task too complex for a single-agent turn and
+    better suited to Team Review orchestration.
+    """
+    lc = text.lower()
+    if len(lc) > 300:
+        return True
+    hits = sum(1 for kw in _COMPOUND_KEYWORDS if kw in lc)
+    return hits >= 2
 
 
 def _coo_partial_memo(workspace: dict) -> str:
@@ -552,6 +594,22 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         return {
             "agent": name,
             "error": "Agent not available (agents SDK not installed).",
+        }
+
+    # ── Auto-escalation to Team Review for compound analysis requests ─────────
+    # When the user sends a complex multi-step analysis to the Main agent,
+    # automatically start a Team Review orchestration run (which uses streaming
+    # events, parallel sub-agents, and SSH evidence collection) rather than
+    # attempting a single long-running Main agent turn that is likely to time out.
+    if name == "main" and _is_compound_request(text):
+        run_id = start_team_review("detailed", text, workspace)
+        return {
+            "agent": "main",
+            "team_run_id": run_id,
+            "output": (
+                "🔀 Complex analysis detected — Team Review started automatically.\n"
+                "Switching to Team tab… all agents (P&L, Quant, COO) will work on this in sequence."
+            ),
         }
 
     # Per-agent terminal_tail cap; COO gets a larger cap if the user asks for detail.
@@ -661,6 +719,11 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         # VPS data without asking the operator to paste logs.
         # After a successful probe, save a derived summary to agent memory
         # so subsequent calls don't need to re-probe for the same data.
+        #
+        # Patience: if the first probe returns empty (the remote command may
+        # still be running, e.g. a long backtest), we retry up to
+        # _VIBE_REQUEST_MAX_RETRIES times with _VIBE_REQUEST_RETRY_DELAY s
+        # between attempts before giving up and returning whatever data we have.
         # ------------------------------------------------------------------
         if name in ("main", "pnl", "quant") and settings.ssh_readonly_host:
             match = _VIBE_REQUEST_RE.search(final_output)
@@ -669,7 +732,14 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
                 # Validate against the known set before executing any SSH commands.
                 _known_ids = set(_report_commands_from_map().keys())
                 if report_id in _known_ids:
-                    report_data = run_vibe_report(report_id)
+                    # ── Retry loop: wait for data with patience ────────────
+                    report_data = ""
+                    for _attempt in range(_VIBE_REQUEST_MAX_RETRIES):
+                        report_data = run_vibe_report(report_id)
+                        if _is_valid_report_data(report_data):
+                            break
+                        if _attempt < _VIBE_REQUEST_MAX_RETRIES - 1:
+                            _time.sleep(_VIBE_REQUEST_RETRY_DELAY)
                     augmented_prompt = (
                         f"{ctx_header}\n\n{text}\n\n"
                         f"=== VIBE REPORT: {report_id} ===\n{report_data}\n"
@@ -783,6 +853,52 @@ def _push_event(run: dict, agent: str, etype: str, content: str, **extra) -> Non
         run["events"].append(ev)
 
 
+def _start_heartbeat(run: dict, deadline: float, interval: float = 30.0) -> None:
+    """Spawn a daemon thread that emits system heartbeat events every *interval* s.
+
+    The thread stops automatically when the orchestration deadline passes or
+    run["done"] becomes True.  Heartbeats keep the frontend feed visibly alive
+    during long LLM waits or slow SSH probes so the operator knows work is
+    in progress.
+    """
+    def _beat() -> None:
+        while True:
+            _time.sleep(interval)
+            with run["lock"]:
+                done = run["done"]
+            if done or _time.monotonic() >= deadline:
+                return
+            rem = max(0, int(deadline - _time.monotonic()))
+            _push_event(run, "system", "heartbeat", f"⏳ Still working… ({rem}s remaining)")
+
+    _threading.Thread(target=_beat, daemon=True).start()
+
+
+def _run_ssh_with_heartbeat(run: dict, label: str, cmd: str, timeout_s: float) -> dict:
+    """Run a read-only SSH probe, emitting progress heartbeats every 15 s.
+
+    Long-running SSH commands (e.g. backtests, 2-year history pulls) block for
+    up to *timeout_s* seconds.  A background thread emits vibe-feed events every
+    15 s so the team feed shows that the probe is still running rather than
+    appearing frozen.  SSH timeout is capped at 300 s regardless of *timeout_s*.
+    """
+    capped_timeout = int(min(timeout_s, 300))
+    stop = _threading.Event()
+
+    def _narrate() -> None:
+        elapsed = 0
+        while not stop.wait(15):
+            elapsed += 15
+            _push_event(run, "vibe", "message", f"  ↳ ⏳ {label} still running… ({elapsed}s elapsed)")
+
+    t = _threading.Thread(target=_narrate, daemon=True)
+    t.start()
+    try:
+        return run_ssh_readonly(cmd, timeout=capped_timeout)
+    finally:
+        stop.set()
+
+
 def _build_team_ctx(workspace: dict) -> str:
     lines: list[str] = []
     if settings.ssh_host:
@@ -893,12 +1009,34 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> _VibeSnapshot:
 
     probe_results: list[tuple[str, str]] = []
 
+    # ── Per-run probe loop guard ──────────────────────────────────────────────
+    # Initialise the per-run probe counter the first time _gather_vibe_snapshot
+    # is called for this run.  Subsequent calls (e.g. from a retry path) share
+    # the same counter so a probe that has already run 3 times is skipped.
+    with run["lock"]:
+        if "probe_counts" not in run:
+            run["probe_counts"] = _Counter()
+    # Snapshot the counter reference outside the lock for the loop below.
+    probe_counts: _Counter = run["probe_counts"]
+
     for label, cmd, t in PRIMARY_PROBES + SECONDARY_PROBES:
         if _time.monotonic() >= t_deadline:
             _push_event(run, "vibe", "message", "⏱ Time budget low — remaining probes skipped")
             break
+        # Loop guard: skip probes that have already run the maximum number of times.
+        with run["lock"]:
+            count = probe_counts[label]
+        if count >= 3:
+            _push_event(run, "vibe", "message", f"🔁 Loop guard — {label} already ran {count}× this run, skipping")
+            probe_results.append((label, ""))
+            continue
+        with run["lock"]:
+            probe_counts[label] += 1
         _push_event(run, "vibe", "message", f"📡 {label}…")
-        r = run_ssh_readonly(cmd, timeout=t)
+        # Use heartbeat wrapper so the feed stays alive during slow SSH calls.
+        remaining = max(1.0, t_deadline - _time.monotonic())
+        probe_timeout = min(t, remaining)
+        r = _run_ssh_with_heartbeat(run, label, cmd, probe_timeout)
         if "error" in r:
             _push_event(run, "vibe", "message", "  ↳ [SSH error]")
             probe_results.append((label, ""))
@@ -1075,6 +1213,9 @@ def _dispatch_team_action(coo_output: str, run: dict) -> None:
 
 
 def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
+    # Start heartbeat so the feed stays alive during long LLM or SSH waits.
+    _start_heartbeat(run, deadline)
+
     # Narrate exactly what context was assembled
     ctx_sources = []
     if "Conversation context:" in ctx:
@@ -1143,6 +1284,9 @@ def _orchestrate_quick(run: dict, user_prompt: str, ctx: str, deadline: float) -
 
 
 def _orchestrate_detailed(run: dict, user_prompt: str, ctx: str, deadline: float) -> None:
+    # Start heartbeat so the feed stays alive during long LLM or SSH waits.
+    _start_heartbeat(run, deadline)
+
     # Narrate exactly what context was assembled
     ctx_sources = []
     if "Conversation context:" in ctx:
@@ -1273,10 +1417,11 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
         _TEAM_RUNS[run_id] = run
 
     # Sequential execution (Vibe → P&L → Quant → COO) requires more wall-clock time
-    # than the former parallel P&L+Quant approach.  Budgets are raised accordingly:
-    # quick: 55 s (was 35 s) — Vibe(10) + P&L(15) + Quant(15) + COO(10) + slack(5)
-    # detailed: 110 s (was 65 s) — Vibe(14) + R1(P&L+Q+COO ~45) + R2(P&L+Q+COO ~45) + slack(6)
-    timeout = 55 if mode == "quick" else 110
+    # than the former parallel P&L+Quant approach.  Budgets are raised to allow
+    # long-running SSH operations (e.g. 2-year backtests) to complete:
+    # quick:    180 s — Vibe(20) + P&L(50) + Quant(50) + COO(40) + slack(20)
+    # detailed: 540 s (9 min) — 2 full rounds with generous headroom for slow SSH
+    timeout = 180 if mode == "quick" else 540
 
     # Determine user prompt: explicit prompt > last user message from conversation > default
     user_prompt = (prompt or "").strip()

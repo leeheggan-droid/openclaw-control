@@ -30,7 +30,7 @@ def run_vibe_report(report_id: str) -> str:
     return _run(report_id)
 
 
-def _delegate_to_agent(agent, prompt: str, timeout: int = 12) -> str:
+def _delegate_to_agent(agent, prompt: str, timeout: int = 25) -> str:
     """Run a specialist agent synchronously with a timeout, in a fresh thread.
 
     Runs with max_turns=1 (no tools on specialists) to prevent recursion.

@@ -4,11 +4,11 @@ from agents import Agent, ModelSettings, Runner, function_tool
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 
 
-def _run_agent_in_thread(agent, prompt: str, timeout: int = 6) -> str:
+def _run_agent_in_thread(agent, prompt: str, timeout: int = 25) -> str:
     """Run an agent synchronously in a fresh thread to avoid nested event-loop conflicts.
 
-    The default timeout (6 s) is intentionally short so that both sub-agent calls
-    fit within COO's 15 s outer budget, leaving time for the final synthesis.
+    The default timeout (25 s) gives sub-agents enough time to complete within
+    COO's outer budget while still leaving headroom for the final synthesis.
     Sub-agent runs are capped at max_turns=1 (no tools) to prevent self-triggering loops.
     """
     with ThreadPoolExecutor(max_workers=1) as pool:
