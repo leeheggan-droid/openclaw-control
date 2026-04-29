@@ -147,7 +147,115 @@ else
     info "public key added to ${auth_keys}"
 fi
 
-# ── 6. install systemd unit (optional) ───────────────────────────────────────
+# ── 6. generate outbound SSH identity for vibe's SSH actions ─────────────────
+#
+# When vibe runs as openclaw-vibe and needs to reach openclaw-readonly@localhost
+# (e.g. for uptime, ls, git, docker checks), it needs a private key that is
+# authorised for that user.  This step:
+#   a. Generates an ed25519 key pair for openclaw-vibe (outbound use only).
+#   b. Writes ~/.ssh/config to point SSH at that key for localhost connections.
+#   c. Pre-seeds ~/.ssh/known_hosts so BatchMode=yes never blocks on a TOFU prompt.
+#   d. Ensures openclaw-readonly exists, has its wrapper installed, and accepts
+#      the new key (with the forced-command restriction).
+
+readonly VIBE_OUTBOUND_KEY="${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519"
+readonly VIBE_SSH_CONFIG="${VIBE_HOME}/.ssh/config"
+readonly READONLY_USER="openclaw-readonly"
+readonly READONLY_HOME="/var/lib/openclaw-readonly"
+readonly READONLY_WRAPPER="/opt/openclaw/bin/vibe-readonly-wrapper.sh"
+
+# 6a — generate outbound key
+info "generating outbound SSH key for ${VIBE_USER} (for vibe SSH actions)"
+if [[ -f "${VIBE_OUTBOUND_KEY}" ]]; then
+    info "outbound key already exists — skipping keygen"
+else
+    ssh-keygen \
+        -t ed25519 \
+        -C "openclaw-vibe-outbound" \
+        -f "${VIBE_OUTBOUND_KEY}" \
+        -N ""
+    chown "${VIBE_USER}:${VIBE_USER}" "${VIBE_OUTBOUND_KEY}" "${VIBE_OUTBOUND_KEY}.pub"
+    chmod 0600 "${VIBE_OUTBOUND_KEY}"
+    chmod 0644 "${VIBE_OUTBOUND_KEY}.pub"
+    info "outbound key generated: ${VIBE_OUTBOUND_KEY}"
+fi
+
+# 6b — write ~/.ssh/config for openclaw-vibe
+if [[ ! -f "${VIBE_SSH_CONFIG}" ]]; then
+    cat > "${VIBE_SSH_CONFIG}" <<EOF
+# Written by install-server.sh — SSH client config for openclaw-vibe outbound connections.
+Host localhost 127.0.0.1
+    IdentityFile ${VIBE_OUTBOUND_KEY}
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile ${VIBE_HOME}/.ssh/known_hosts
+EOF
+    chown "${VIBE_USER}:${VIBE_USER}" "${VIBE_SSH_CONFIG}"
+    chmod 0600 "${VIBE_SSH_CONFIG}"
+    info "wrote SSH client config: ${VIBE_SSH_CONFIG}"
+else
+    info "SSH client config already present — skipping (not overwritten)"
+fi
+
+# 6c — pre-seed known_hosts for localhost
+info "pre-seeding ${VIBE_HOME}/.ssh/known_hosts for localhost"
+known_hosts_file="${VIBE_HOME}/.ssh/known_hosts"
+[[ -f "$known_hosts_file" ]] || install -m 0644 -o "$VIBE_USER" -g "$VIBE_USER" /dev/null "$known_hosts_file"
+ssh-keyscan -H 127.0.0.1 2>/dev/null >> "$known_hosts_file" || info "ssh-keyscan 127.0.0.1 failed — sshd may not be running yet; re-run install-server.sh after sshd starts"
+ssh-keyscan -H localhost  2>/dev/null >> "$known_hosts_file" || info "ssh-keyscan localhost failed — sshd may not be running yet; re-run install-server.sh after sshd starts"
+chown "${VIBE_USER}:${VIBE_USER}" "$known_hosts_file"
+info "known_hosts updated"
+
+# 6d — ensure openclaw-readonly user exists
+info "ensuring system user '${READONLY_USER}' exists"
+if id "$READONLY_USER" &>/dev/null; then
+    info "user '${READONLY_USER}' already exists"
+else
+    useradd \
+        --system \
+        --shell /usr/sbin/nologin \
+        --home-dir "$READONLY_HOME" \
+        --create-home \
+        "$READONLY_USER"
+    info "user '${READONLY_USER}' created"
+fi
+
+# 6e — install readonly forced-command wrapper (if not already present)
+install -d -m 0755 -o root -g root /opt/openclaw/bin
+readonly_wrapper_src="${REPO_ROOT}/bin/vibe-readonly-wrapper.sh"
+if [[ ! -x "$READONLY_WRAPPER" ]]; then
+    if [[ -f "$readonly_wrapper_src" ]]; then
+        install -m 0755 -o root -g root "$readonly_wrapper_src" "$READONLY_WRAPPER"
+        info "installed readonly wrapper: ${READONLY_WRAPPER}"
+    else
+        info "warning: ${readonly_wrapper_src} not found — skipping wrapper install"
+        info "         Copy bin/vibe-readonly-wrapper.sh to ${READONLY_WRAPPER} manually"
+    fi
+else
+    info "readonly wrapper already installed: ${READONLY_WRAPPER}"
+fi
+
+# 6f — add outbound key to openclaw-readonly authorized_keys
+info "authorising openclaw-vibe outbound key for ${READONLY_USER}"
+readonly_ssh_dir="${READONLY_HOME}/.ssh"
+readonly_auth_keys="${readonly_ssh_dir}/authorized_keys"
+install -d -m 0700 -o "$READONLY_USER" -g "$READONLY_USER" "$readonly_ssh_dir"
+[[ -f "$readonly_auth_keys" ]] || \
+    install -m 0600 -o "$READONLY_USER" -g "$READONLY_USER" /dev/null "$readonly_auth_keys"
+
+vibe_outbound_pubkey="$(cat "${VIBE_OUTBOUND_KEY}.pub")"
+readonly_forced_cmd="command=\"${READONLY_WRAPPER}\",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding"
+if grep -qF "$vibe_outbound_pubkey" "$readonly_auth_keys" 2>/dev/null; then
+    info "outbound key already present in ${readonly_auth_keys}"
+else
+    printf '%s %s\n' "$readonly_forced_cmd" "$vibe_outbound_pubkey" >> "$readonly_auth_keys"
+    chown "${READONLY_USER}:${READONLY_USER}" "$readonly_auth_keys"
+    chmod 0600 "$readonly_auth_keys"
+    info "outbound key added to ${readonly_auth_keys}"
+fi
+
+# ── 8. install systemd unit (optional) ───────────────────────────────────────
 
 systemd_unit="${GATEWAY_SRC}/systemd/openclaw-vibe-gateway.service"
 if [[ -f "$systemd_unit" ]]; then
@@ -158,7 +266,7 @@ if [[ -f "$systemd_unit" ]]; then
     info "systemd unit installed — enable with: systemctl enable --now openclaw-vibe-gateway"
 fi
 
-# ── 7. summary ────────────────────────────────────────────────────────────────
+# ── 9. summary ────────────────────────────────────────────────────────────────
 
 info ""
 info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -168,7 +276,10 @@ info "Next steps:"
 info "  1. Edit the allowlist:  ${INSTALL_DIR}/config/allowed-workdirs.txt"
 info "  2. Build the Docker image (from repo root):"
 info "       docker build -t openclaw-vibe-gateway:latest vibe-gateway/docker/"
-info "  3. Smoke-test (from the control plane):"
+info "  3. Smoke-test vibe SSH actions (from the VPS, as root):"
+info "       sudo -u ${VIBE_USER} ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \\"
+info "           ${READONLY_USER}@127.0.0.1 uptime"
+info "  4. Smoke-test the gateway (from the control plane):"
 info "       PROMPT='echo hello'"
 info "       PROMPT_B64=\$(printf '%s' \"\$PROMPT\" | base64 -w0)"
 info "       ssh -i ~/.ssh/openclaw_vibe_ed25519 \\"

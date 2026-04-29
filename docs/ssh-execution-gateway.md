@@ -395,6 +395,7 @@ Expected output on success:
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Permission denied (publickey)` | Public key not in VPS `authorized_keys`, or wrong `.ssh` path | Confirm `sudo cat /var/lib/openclaw-vibe/.ssh/authorized_keys` contains the key |
+| `Permission denied (publickey,password)` on **vibe SSH actions** (e.g. `uptime`, `ls`) | `openclaw-vibe` user has no outbound SSH identity; vibe cannot authenticate to `openclaw-readonly@localhost` | Re-run `install-server.sh` (step 6 generates the outbound key and authorises it); or follow §11 below |
 | `Host key verification failed` | Host key not in `/root/.ssh/known_hosts` | Re-run `ssh-keyscan` (step 6) |
 | `vibe not found or not executable` | No `/usr/local/bin/vibe` on VPS | Follow step 3 to install a system-visible `vibe` |
 | `bad interpreter: Permission denied` (kernel) **or** `vibe interpreter '/home/…' lives under /home` (wrapper) | `vibe` was installed via `uv` under a user's `/home/...` tree; copying that entrypoint to `/usr/local/bin/vibe` preserves the unreadable shebang | Re-install per docs §3 Option A (root-owned venv) |
@@ -514,3 +515,105 @@ sudo ssh \
     openclaw-vibe@<VPS_HOST> \
     "OPENCLAW_PROMPT_B64=${PROMPT_B64} vibe --workdir /srv/openclaw-work -p __B64__"
 ```
+
+---
+
+## 11 — Fix vibe SSH actions (outbound identity for `openclaw-vibe`)
+
+When `vibe` runs on the VPS under the `openclaw-vibe` system user, it performs
+read-only SSH "actions" (e.g. `uptime`, `ls`, `git log`) by connecting to
+`openclaw-readonly@localhost`.  Because `openclaw-vibe` is a dedicated system
+account with no SSH key of its own, these connections fail with:
+
+```
+Permission denied (publickey,password)
+```
+
+Running `install-server.sh` (step 6) fixes this automatically.  If you need to
+apply the fix manually, follow these steps on the VPS as root.
+
+### 11.1 — Generate the outbound key
+
+```bash
+VIBE_HOME="/var/lib/openclaw-vibe"
+
+sudo ssh-keygen \
+    -t ed25519 \
+    -C "openclaw-vibe-outbound" \
+    -f "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519" \
+    -N ""
+
+sudo chown openclaw-vibe:openclaw-vibe \
+    "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519" \
+    "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub"
+sudo chmod 0600 "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519"
+sudo chmod 0644 "${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub"
+```
+
+### 11.2 — Write `~/.ssh/config` for `openclaw-vibe`
+
+```bash
+sudo tee "${VIBE_HOME}/.ssh/config" >/dev/null <<'EOF'
+Host localhost 127.0.0.1
+    IdentityFile /var/lib/openclaw-vibe/.ssh/openclaw_vibe_outbound_ed25519
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile /var/lib/openclaw-vibe/.ssh/known_hosts
+EOF
+
+sudo chown openclaw-vibe:openclaw-vibe "${VIBE_HOME}/.ssh/config"
+sudo chmod 0600 "${VIBE_HOME}/.ssh/config"
+```
+
+### 11.3 — Pre-seed `known_hosts`
+
+```bash
+sudo ssh-keyscan -H 127.0.0.1 2>/dev/null | \
+    sudo tee -a "${VIBE_HOME}/.ssh/known_hosts" >/dev/null
+sudo ssh-keyscan -H localhost 2>/dev/null | \
+    sudo tee -a "${VIBE_HOME}/.ssh/known_hosts" >/dev/null
+sudo chown openclaw-vibe:openclaw-vibe "${VIBE_HOME}/.ssh/known_hosts"
+```
+
+### 11.4 — Authorise the outbound key for `openclaw-readonly`
+
+```bash
+READONLY_HOME="/var/lib/openclaw-readonly"
+READONLY_WRAPPER="/opt/openclaw/bin/vibe-readonly-wrapper.sh"
+
+# Ensure user and .ssh directory exist (see §8.1 if the user is missing).
+sudo install -d -m 0700 -o openclaw-readonly -g openclaw-readonly \
+    "${READONLY_HOME}/.ssh"
+
+# Add the key with the forced-command restriction.
+pubkey="$(sudo cat ${VIBE_HOME}/.ssh/openclaw_vibe_outbound_ed25519.pub)"
+sudo tee -a "${READONLY_HOME}/.ssh/authorized_keys" >/dev/null <<EOF
+command="${READONLY_WRAPPER}",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ${pubkey}
+EOF
+
+sudo chown openclaw-readonly:openclaw-readonly \
+    "${READONLY_HOME}/.ssh/authorized_keys"
+sudo chmod 0600 "${READONLY_HOME}/.ssh/authorized_keys"
+```
+
+### 11.5 — Smoke-test
+
+```bash
+# Run as root on the VPS; must exit 0 and print uptime output.
+sudo -u openclaw-vibe ssh \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=yes \
+    openclaw-readonly@127.0.0.1 \
+    uptime
+```
+
+Expected: `uptime` output, exit 0.
+
+> If this still fails with `Permission denied`, check:
+> 1. `/var/lib/openclaw-vibe/.ssh/openclaw_vibe_outbound_ed25519` exists and is
+>    owned by `openclaw-vibe` (mode `0600`).
+> 2. `/var/lib/openclaw-readonly/.ssh/authorized_keys` contains a line with the
+>    matching public key and the `command=` prefix.
+> 3. `/var/lib/openclaw-vibe/.ssh/known_hosts` contains an entry for `127.0.0.1`
+>    (re-run `ssh-keyscan` if empty).
