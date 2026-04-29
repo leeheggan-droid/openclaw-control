@@ -1,6 +1,10 @@
 import json
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv("/etc/openclaw-control.env", override=True)
+
 import requests as _requests
 
 from contextlib import asynccontextmanager
