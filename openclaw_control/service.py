@@ -11,16 +11,52 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from datetime import datetime, timezone as _tz
 from typing import Any, NamedTuple
 
-from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession
+# ── Agents SDK (openai-agents) ────────────────────────────────────────────────
+# Import core symbols. SQLiteSession / SessionSettings are not available in all
+# builds; import them conditionally so the module still loads when the package
+# is absent or incomplete.
+try:
+    from agents import Agent, ModelSettings, Runner, RunResult, SQLiteSession
+    _AGENTS_SDK_AVAILABLE: bool = True
+except ImportError:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "agents SDK not installed — agent features will be unavailable."
+    )
+    _AGENTS_SDK_AVAILABLE = False
+    Agent = None  # type: ignore[assignment]
+    ModelSettings = None  # type: ignore[assignment]
+    RunResult = None  # type: ignore[assignment]
+
+    class _SQLiteSessionStub:
+        """No-op stub used when the agents SDK is not installed."""
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    SQLiteSession = _SQLiteSessionStub  # type: ignore[assignment,misc]
+
+    class _RunnerStub:
+        """Stub runner that raises a descriptive error when called."""
+        @staticmethod
+        def run_sync(*args: object, **kwargs: object) -> None:  # type: ignore[return]
+            raise RuntimeError(
+                "agents SDK is not installed; agent features are unavailable."
+            )
+
+    Runner = _RunnerStub  # type: ignore[assignment]
 
 # SessionSettings was introduced in a later version of openai-agents; older
 # installs don't export it.  Import conditionally so the module loads on any
 # supported version — when unavailable we simply omit the session limit kwarg.
-try:
-    from agents import SessionSettings as _SessionSettingsCompat  # type: ignore[attr-defined]
-    _SESSION_SETTINGS: Any = _SessionSettingsCompat(limit=100)
-    _SESSION_KWARGS: dict[str, Any] = {"session_settings": _SESSION_SETTINGS}
-except ImportError:
+if _AGENTS_SDK_AVAILABLE:
+    try:
+        from agents import SessionSettings as _SessionSettingsCompat  # type: ignore[attr-defined]
+        _SESSION_SETTINGS: Any = _SessionSettingsCompat(limit=100)
+        _SESSION_KWARGS: dict[str, Any] = {"session_settings": _SESSION_SETTINGS}
+    except ImportError:
+        _SESSION_SETTINGS = None
+        _SESSION_KWARGS = {}
+else:
     _SESSION_SETTINGS = None
     _SESSION_KWARGS = {}
 
@@ -28,15 +64,26 @@ from openclaw_control import budget
 from openclaw_control.budget import COO_BUDGET_MESSAGE
 from openclaw_control.config import settings
 from openclaw_control.github_tools import ALLOWED_REPOS as _GH_ALLOWED_REPOS, create_github_issue
-from openclaw_control.agents.controller import controller
-from openclaw_control.agents.analysis_agent import analysis_agent
+# router.py has no agents-SDK dependency and is always safe to import.
 from openclaw_control.agents.router import route_message
-from openclaw_control.agents.main_agent import main_agent
-from openclaw_control.agents.pnl_agent import pnl_agent
-from openclaw_control.agents.quant_agent import quant_agent
-from openclaw_control.agents.coo_agent import coo_agent
-from openclaw_control.agents.vibe_agent import vibe_planner, vibe_evaluator
-from openclaw_control.agents.investigate_agent import investigate_agent
+# The remaining agent modules all import from the agents SDK; guard them so that
+# a missing / incomplete agents package does not prevent the server from starting.
+try:
+    from openclaw_control.agents.controller import controller
+    from openclaw_control.agents.analysis_agent import analysis_agent
+    from openclaw_control.agents.main_agent import main_agent
+    from openclaw_control.agents.pnl_agent import pnl_agent
+    from openclaw_control.agents.quant_agent import quant_agent
+    from openclaw_control.agents.coo_agent import coo_agent
+    from openclaw_control.agents.vibe_agent import vibe_planner, vibe_evaluator
+    from openclaw_control.agents.investigate_agent import investigate_agent
+except ImportError:
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "One or more agent modules could not be imported — agent features will be unavailable."
+    )
+    controller = analysis_agent = main_agent = pnl_agent = None  # type: ignore[assignment]
+    quant_agent = coo_agent = vibe_planner = vibe_evaluator = investigate_agent = None  # type: ignore[assignment]
 from openclaw_control.ops import map_loader as _map_loader
 from openclaw_control.memory import agent_memory as _memory
 from openclaw_control import vibe_reports as _vibe_reports
@@ -378,6 +425,13 @@ def run_agent(text: str) -> dict:
     session = _ops_session if route.name == "ops" else _analysis_session
     label = route.name
 
+    if agent is None:
+        return {
+            "type": "agent",
+            "agent": label,
+            "error": "Agent not available (agents SDK not installed).",
+        }
+
     def _call():
         prompt = (
             f"Host={settings.ssh_host}\n"
@@ -493,6 +547,12 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
         return {"agent": name, "error": f"Unknown agent: {name!r}"}
 
     agent, session = entry
+
+    if agent is None:
+        return {
+            "agent": name,
+            "error": "Agent not available (agents SDK not installed).",
+        }
 
     # Per-agent terminal_tail cap; COO gets a larger cap if the user asks for detail.
     tail_cap = _TERMINAL_TAIL_CAPS.get(name, 200)
@@ -689,22 +749,26 @@ DEFAULT_TEAM_PROMPT = (
 
 # COO synthesis agent for team review — reports are injected into the prompt;
 # no sub-agent tool calls are made so there is no recursion risk.
-_team_coo = Agent(
-    name="COO Synthesis",
-    instructions=(
-        "You are the OpenClaw COO. Your team's P&L and Quant reports are already provided "
-        "in the prompt — do NOT call any tools.\n"
-        "Produce a concise decision memo:\n"
-        "1) What we know / what we don't know\n"
-        "2) Risks & constraints\n"
-        "3) Next actions (max 3 items)\n"
-        "4) If a code change is justified: one /copilot task sentence with acceptance criteria\n"
-        "Always end your response with 'Next actions (max 3)' and the numbered list.\n"
-        "Do NOT execute SSH commands or suggest destructive actions.\n"
-    ),
-    model_settings=ModelSettings(max_tokens=800),
-    tools=[],
-)
+# Only constructed when the agents SDK is available.
+if _AGENTS_SDK_AVAILABLE:
+    _team_coo = Agent(
+        name="COO Synthesis",
+        instructions=(
+            "You are the OpenClaw COO. Your team's P&L and Quant reports are already provided "
+            "in the prompt — do NOT call any tools.\n"
+            "Produce a concise decision memo:\n"
+            "1) What we know / what we don't know\n"
+            "2) Risks & constraints\n"
+            "3) Next actions (max 3 items)\n"
+            "4) If a code change is justified: one /copilot task sentence with acceptance criteria\n"
+            "Always end your response with 'Next actions (max 3)' and the numbered list.\n"
+            "Do NOT execute SSH commands or suggest destructive actions.\n"
+        ),
+        model_settings=ModelSettings(max_tokens=800),
+        tools=[],
+    )
+else:
+    _team_coo = None  # type: ignore[assignment]
 
 
 def _now_iso() -> str:
@@ -867,6 +931,8 @@ def _run_for_team(agent, prompt: str, timeout_s: float) -> tuple[str, bool]:
     is_error is True for both timeouts and exceptions so callers can use a single flag
     to distinguish successful agent output from failure sentinels.
     """
+    if agent is None:
+        return "[Agent not available — agents SDK not installed]", True
     fut = _TEAM_EXECUTOR.submit(Runner.run_sync, agent, prompt, max_turns=1)
     try:
         res = fut.result(timeout=max(1.0, timeout_s))
