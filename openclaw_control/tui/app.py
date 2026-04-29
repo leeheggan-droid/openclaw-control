@@ -4,11 +4,12 @@ from textual.containers import Vertical
 from textual import work
 
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 from agents import Runner, SQLiteSession
 from openclaw_control.config import settings
-from openclaw_control.agents.controller import controller
+from openclaw_control.agents.main_agent import main_agent
 from openclaw_control.agents.analysis_agent import analysis_agent
 from openclaw_control.agents.router import route_message
 
