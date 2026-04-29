@@ -14,7 +14,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from dotenv import load_dotenv
 from openai import OpenAI
+
+load_dotenv("/etc/openclaw-control.env", override=True)
+load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
