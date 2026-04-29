@@ -34,6 +34,10 @@ from pathlib import Path
 
 import bcrypt
 import jwt
+from dotenv import load_dotenv
+
+load_dotenv("/etc/openclaw-control.env", override=True)
+load_dotenv()
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 

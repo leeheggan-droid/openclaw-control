@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeo
 
 from agents import Agent, Runner, function_tool
 
+from openclaw_control.tools.env_tools import env_diagnostics
 from openclaw_control.tools.web_search import web_search
 
 
@@ -264,7 +265,7 @@ main_agent = Agent(
         "═══════════════════════════════════\n"
         "YOUR TOOLS\n"
         "═══════════════════════════════════\n"
-        "You have six tools. Use them proactively — never ask the operator to do what a tool can do:\n"
+        "You have eight tools. Use them proactively — never ask the operator to do what a tool can do:\n"
         "\n"
         "1. run_vibe_report(report_id) — fetch live VPS system data via SSH directly\n"
         "   Use for: container health, last trades, P&L snapshots, halt status, git HEAD\n"
@@ -304,6 +305,11 @@ main_agent = Agent(
         "   Use for: 'who has access?', 'list users', 'show me the user list', 'what emails are registered?'\n"
         "   Returns emails and registration dates — no passwords are ever returned.\n"
         "   Example: list_registered_users()\n"
+        "\n"
+        "8. env_diagnostics() — check which environment variables are currently SET in this process\n"
+        "   Use for: env/key diagnostics, self-test, 'which API keys are configured?', 'is X set?'\n"
+        "   Reads os.environ at call time — always accurate, never guessed.\n"
+        "   Example: env_diagnostics()\n"
         "\n"
         "═══════════════════════════════════\n"
         "RULES\n"
@@ -347,5 +353,5 @@ main_agent = Agent(
         "that applies to the VPS (openclaw-crypto, alpaca_orb_bite_bot if on same host).\n"
         "openclaw-control is on the operator's local machine — they must run git pull locally.\n"
     ),
-    tools=[run_vibe_report, ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history, list_registered_users],
+    tools=[run_vibe_report, ask_pnl, ask_quant, web_search, get_trade_history, get_pnl_history, list_registered_users, env_diagnostics],
 )
