@@ -7,7 +7,13 @@ __pycache__/
 dist/
 build/
 
-# Environment
+# Virtual environments — never commit; recreate with: python3 -m venv .venv && pip install -r requirements.txt
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / secrets — copy config.env.example to .env and fill in secrets locally
 .env
 .env.*
 *.env
@@ -17,6 +23,18 @@ build/
 *.db
 .openclaw_memory.sqlite
 agents.db
+data/
+
+# Docker local overrides — keep custom compose tweaks out of the repo
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Coverage / testing artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Editor / OS
 .DS_Store

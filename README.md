@@ -384,6 +384,17 @@ Registrar / current nameservers: `byte.dns-parking.com`, `pixel.dns-parking.com`
 
 ---
 
+## Contributing / keeping your environment clean
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for:
+
+- How to use `git status`, `git stash`, and `git clean` before pulling
+- Recreating the `.venv` Python environment after a clean or fresh clone
+- Preserving local `.env` secrets and Docker overrides between pulls
+- Fixing file-permission errors on shared VPS hosts
+
+---
+
 ## Safety checklist
 
 - [ ] No secrets or credentials added to source code
