@@ -65,8 +65,8 @@ PROVIDERS: dict[str, dict] = {
         "name": "OpenAI",
         "base_url": None,
         "env_key": "OPENAI_API_KEY",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "default_model": "gpt-4o-mini",
+        "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"],
+        "default_model": "gpt-5.4-mini",
         "client_type": "openai",
     },
     "gemini": {
@@ -82,11 +82,11 @@ PROVIDERS: dict[str, dict] = {
         "base_url": None,
         "env_key": "ANTHROPIC_API_KEY",
         "models": [
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-haiku-20241022",
-            "claude-3-opus-20240229",
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
         ],
-        "default_model": "claude-3-5-haiku-20241022",
+        "default_model": "claude-haiku-4-5",
         "client_type": "anthropic",
     },
     "groq": {
@@ -99,14 +99,6 @@ PROVIDERS: dict[str, dict] = {
             "mixtral-8x7b-32768",
         ],
         "default_model": "llama-3.3-70b-versatile",
-        "client_type": "openai",
-    },
-    "cerebras": {
-        "name": "Cerebras",
-        "base_url": "https://api.cerebras.ai/v1",
-        "env_key": "CEREBRAS_API_KEY",
-        "models": ["llama3.1-70b", "llama3.1-8b"],
-        "default_model": "llama3.1-70b",
         "client_type": "openai",
     },
 }

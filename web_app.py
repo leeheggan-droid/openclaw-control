@@ -43,8 +43,10 @@ from openclaw_control.trade_log import now_iso as _trade_log_now_iso
 from openclaw_control.tools.exchange_tools import (
     fetch_kraken_open_positions as _fetch_kraken_positions,
     fetch_kraken_trade_balance as _fetch_kraken_balance,
+    fetch_kraken_trades as _fetch_kraken_trades,
     fetch_alpaca_open_positions as _fetch_alpaca_positions,
     fetch_alpaca_account as _fetch_alpaca_account,
+    fetch_alpaca_trades as _fetch_alpaca_trades,
 )
 
 
@@ -1667,11 +1669,15 @@ def index(openclaw_session: str | None = Cookie(default=None)):
           <div class="analyticsSectionTitle" style="margin-top:10px;">🐙 Kraken — Live Positions &amp; Balance</div>
           <div class="statsRow" id="krakenBalanceStats" style="margin-bottom:6px;"></div>
           <div class="tradesTableWrap" id="krakenPositionsTable"></div>
+          <div class="analyticsSectionTitle" style="margin-top:10px;font-size:11px;">Recent Trade History</div>
+          <div class="tradesTableWrap" id="krakenTradesTable"></div>
         </div>
         <div id="alpacaLiveWrap" style="display:none">
           <div class="analyticsSectionTitle" style="margin-top:10px;">🦙 Alpaca — Live Positions &amp; Account</div>
           <div class="statsRow" id="alpacaAccountStats" style="margin-bottom:6px;"></div>
           <div class="tradesTableWrap" id="alpacaPositionsTable"></div>
+          <div class="analyticsSectionTitle" style="margin-top:10px;font-size:11px;">Recent Trade History</div>
+          <div class="tradesTableWrap" id="alpacaTradesTable"></div>
         </div>
         <div class="analyticsBody" id="analyticsBody">
           <!-- KPI stat cards (populated by JS) -->
@@ -1825,6 +1831,20 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
     </section>
+  </div>
+
+  <!-- Team review pre-assessment modal -->
+  <div id="teamReviewModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:300;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:#111827;border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:26px 24px;max-width:480px;width:100%;">
+      <div style="font-size:1rem;font-weight:700;margin-bottom:6px;color:var(--text);" id="trModalTitle">Team Assessment</div>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:14px;">The team (P&amp;L, Quant, COO) will analyse your current workspace context. Optionally add a specific focus or question below.</div>
+      <label style="font-size:.82rem;color:var(--muted);display:block;margin-bottom:5px;">Additional context <span style="opacity:.6">(optional)</span></label>
+      <textarea id="trModalContext" rows="4" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:9px 11px;color:var(--text);font-size:.88rem;font-family:inherit;resize:vertical;" placeholder="e.g. Focus on the crypto bot's win rate, or ask a specific question…"></textarea>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;flex-wrap:wrap;">
+        <button id="trModalCancelBtn" style="padding:8px 18px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--text);font-size:.88rem;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button id="trModalStartBtn" style="padding:8px 18px;border-radius:8px;border:none;background:var(--accent);color:#0b0f14;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">▶ Start Review</button>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -2877,7 +2897,8 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   }
 
   // reviewPeriod: optional string (e.g. "2-year"). Pass "" for no period-specific review.
-  async function runTeamReview(mode, reviewPeriod) {
+  // extraContext: optional string from the pre-assessment modal.
+  async function runTeamReview(mode, reviewPeriod, extraContext) {
     if (activeTeamRunId) return; // already running
 
     teamRunCancelled = false;
@@ -2893,18 +2914,14 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       .filter(h => h.role === "user" || h.role === "agent")
       .map(h => ({role: h.role, text: (h.text || "").slice(0, 2000)}));
 
-    // Determine prompt: typed text in input > last user message in history > ask user
+    // Determine prompt: typed text in input > extra context from modal > last user message in history
     let userPrompt = inputEl.value.trim();
-    if (!userPrompt) {
-      const lastUserMsg = convHistory.slice().reverse().find(h => h.role === "user");
-      if (!lastUserMsg) {
-        // No conversation context at all — ask the user for a brief objective
-        const input = window.prompt("Please describe what you want reviewed:");
-        if (!input || !input.trim()) return;
-        userPrompt = input.trim();
-      }
-      // Else: leave userPrompt empty; backend will extract from conversation history
+    if (!userPrompt && extraContext) {
+      userPrompt = extraContext;
+    } else if (userPrompt && extraContext) {
+      userPrompt = userPrompt + "\n\nAdditional context:\n" + extraContext;
     }
+    // Else: leave userPrompt empty; backend will extract from conversation history
 
     // Resolve @filename references (e.g. @system_logs.txt) by opening a file
     // picker for each token and substituting the file's text content inline.
@@ -2986,9 +3003,52 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     setTeamRunning(false);
   }
 
-  quickReviewBtn.onclick    = () => runTeamReview("quick", "");
-  detailedReviewBtn.onclick = () => runTeamReview("detailed", "");
-  yearlyReviewBtn.onclick   = () => runTeamReview("detailed", "2-year");
+  // ── Team review pre-assessment modal ──────────────────────────────────────
+  const teamReviewModal   = document.getElementById("teamReviewModal");
+  const trModalTitle      = document.getElementById("trModalTitle");
+  const trModalContext    = document.getElementById("trModalContext");
+  const trModalCancelBtn  = document.getElementById("trModalCancelBtn");
+  const trModalStartBtn   = document.getElementById("trModalStartBtn");
+  let _pendingTeamMode    = null;
+  let _pendingTeamPeriod  = null;
+
+  const _reviewTitles = {
+    "quick":    "⚡ Quick Team Review",
+    "detailed": "🔍 Detailed Team Review",
+    "yearly":   "📅 2-Year Periodic Review",
+  };
+
+  function openTeamReviewModal(mode, period) {
+    if (activeTeamRunId) return; // already running
+    _pendingTeamMode   = mode;
+    _pendingTeamPeriod = period;
+    const key = (period === "2-year") ? "yearly" : mode;
+    trModalTitle.textContent = _reviewTitles[key] || "Team Assessment";
+    trModalContext.value = "";
+    teamReviewModal.style.display = "flex";
+    trModalContext.focus();
+  }
+
+  function closeTeamReviewModal() {
+    teamReviewModal.style.display = "none";
+    _pendingTeamMode  = null;
+    _pendingTeamPeriod = null;
+  }
+
+  trModalCancelBtn.onclick = closeTeamReviewModal;
+  teamReviewModal.addEventListener("click", e => { if (e.target === teamReviewModal) closeTeamReviewModal(); });
+
+  trModalStartBtn.onclick = async () => {
+    const extra  = trModalContext.value.trim();
+    const mode   = _pendingTeamMode;
+    const period = _pendingTeamPeriod;
+    closeTeamReviewModal();
+    await runTeamReview(mode, period, extra);
+  };
+
+  quickReviewBtn.onclick    = () => openTeamReviewModal("quick", "");
+  detailedReviewBtn.onclick = () => openTeamReviewModal("detailed", "");
+  yearlyReviewBtn.onclick   = () => openTeamReviewModal("detailed", "2-year");
   cancelReviewBtn.onclick   = cancelTeamReview;
 
   // ── Vibe execution gateway ────────────────────────────────────────────────
@@ -3622,6 +3682,33 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   const krakenLiveWrapEl      = document.getElementById("krakenLiveWrap");
   const krakenBalanceStatsEl  = document.getElementById("krakenBalanceStats");
   const krakenPositionsTableEl= document.getElementById("krakenPositionsTable");
+  const krakenTradesTableEl   = document.getElementById("krakenTradesTable");
+
+  function _renderTradesTable(trades, columns) {
+    if (!trades || trades.length === 0) {
+      return "<div class='liveExchangeEmpty'>No recent trades found.</div>";
+    }
+    const table = document.createElement("table");
+    table.className = "tradesTable";
+    const headers = columns.map(c => "<th>" + c.label + "</th>").join("");
+    table.innerHTML = "<thead><tr>" + headers + "</tr></thead>";
+    const tbody = document.createElement("tbody");
+    trades.forEach(t => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = columns.map(c => {
+        const raw = t[c.key];
+        let cell = raw != null ? String(raw) : "—";
+        if (c.format) cell = c.format(raw, t);
+        const cls = c.cls ? c.cls(raw, t) : "";
+        return "<td" + (cls ? " class='" + cls + "'" : "") + ">" + escapeHtml(cell) + "</td>";
+      }).join("");
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const wrap = document.createElement("div");
+    wrap.appendChild(table);
+    return wrap.innerHTML;
+  }
 
   krakenPullBtnEl.onclick = async () => {
     krakenPullBtnEl.disabled = true;
@@ -3689,6 +3776,38 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         krakenPositionsTableEl.innerHTML = "";
         krakenPositionsTableEl.appendChild(table);
       }
+
+      // ── Kraken recent trade history ────────────────────────────────────────
+      if (data.trades_error) {
+        krakenTradesTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.trades_error) + "</div>";
+      } else if (!data.trades || data.trades.length === 0) {
+        krakenTradesTableEl.innerHTML = "<div class='liveExchangeEmpty'>No recent trades found.</div>";
+      } else {
+        const tbl = document.createElement("table");
+        tbl.className = "tradesTable";
+        tbl.innerHTML =
+          "<thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Size</th>" +
+          "<th>Fill Price</th><th>Fee</th><th>Trade ID</th></tr></thead>";
+        const tb = document.createElement("tbody");
+        data.trades.forEach(t => {
+          const sc = (t.side || "").toLowerCase() === "buy" ? "buy" : "sell";
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + escapeHtml(t.ts || "") + "</td>" +
+            "<td>" + escapeHtml(t.symbol || "") + "</td>" +
+            "<td><span class='tradeSide " + sc + "'>" + escapeHtml(t.side || "") + "</span></td>" +
+            "<td>" + escapeHtml(t.size != null ? String(t.size) : "—") + "</td>" +
+            "<td>" + escapeHtml(t.fill_price != null ? Number(t.fill_price).toFixed(4) : "—") + "</td>" +
+            "<td>" + escapeHtml(t.fee != null ? String(t.fee) : "—") + "</td>" +
+            "<td style='max-width:120px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(t.trade_id || "") + "</td>";
+          tb.appendChild(tr);
+        });
+        tbl.appendChild(tb);
+        krakenTradesTableEl.innerHTML = "";
+        krakenTradesTableEl.appendChild(tbl);
+      }
+
       analyticsStatus.textContent = "Kraken updated " + new Date().toLocaleTimeString();
     } catch(e) {
       krakenLiveWrapEl.style.display = "";
@@ -3705,6 +3824,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   const alpacaLiveWrapEl       = document.getElementById("alpacaLiveWrap");
   const alpacaAccountStatsEl   = document.getElementById("alpacaAccountStats");
   const alpacaPositionsTableEl = document.getElementById("alpacaPositionsTable");
+  const alpacaTradesTableEl    = document.getElementById("alpacaTradesTable");
 
   alpacaPullBtnEl.onclick = async () => {
     alpacaPullBtnEl.disabled = true;
@@ -3752,12 +3872,13 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         table.className = "tradesTable";
         table.innerHTML =
           "<thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry Price</th>" +
-          "<th>Current Price</th><th>Market Value</th><th>Unrealised P&L</th><th>Unrealised %</th><th>Today Change</th></tr></thead>";
+          "<th>Current Price</th><th>Cost Basis</th><th>Market Value</th><th>Unrealised P&L</th><th>Unrealised %</th><th>Realised P&L</th><th>Today Change</th></tr></thead>";
         const tbody = document.createElement("tbody");
         data.positions.forEach(p => {
           const sideClass = (p.side || "").toLowerCase() === "long" ? "buy" : "sell";
           const unrPnl = p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "+" : "") + Number(p.unrealised_pnl).toFixed(2) : "—";
           const unrPct = p.unrealised_pnl_pct != null ? (p.unrealised_pnl_pct * 100).toFixed(2) + "%" : "—";
+          const realPnl = p.realised_pnl != null ? (p.realised_pnl >= 0 ? "+" : "") + Number(p.realised_pnl).toFixed(2) : "—";
           const chg = p.change_today != null ? (p.change_today >= 0 ? "+" : "") + (p.change_today * 100).toFixed(2) + "%" : "—";
           const tr = document.createElement("tr");
           tr.innerHTML =
@@ -3766,9 +3887,11 @@ def index(openclaw_session: str | None = Cookie(default=None)):
             "<td>" + escapeHtml(String(p.size != null ? p.size : "")) + "</td>" +
             "<td>" + escapeHtml(p.entry_price != null ? Number(p.entry_price).toFixed(4) : "—") + "</td>" +
             "<td>" + escapeHtml(p.current_price != null ? Number(p.current_price).toFixed(4) : "—") + "</td>" +
+            "<td>" + escapeHtml(p.cost_basis != null ? Number(p.cost_basis).toFixed(2) : "—") + "</td>" +
             "<td>" + escapeHtml(p.market_value != null ? Number(p.market_value).toFixed(2) : "—") + "</td>" +
             "<td class='" + (p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(unrPnl) + "</td>" +
             "<td class='" + (p.unrealised_pnl_pct != null ? (p.unrealised_pnl_pct >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(unrPct) + "</td>" +
+            "<td class='" + (p.realised_pnl != null ? (p.realised_pnl >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(realPnl) + "</td>" +
             "<td class='" + (p.change_today != null ? (p.change_today >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(chg) + "</td>";
           tbody.appendChild(tr);
         });
@@ -3776,6 +3899,37 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         alpacaPositionsTableEl.innerHTML = "";
         alpacaPositionsTableEl.appendChild(table);
       }
+
+      // ── Alpaca recent trade history ────────────────────────────────────────
+      if (data.trades_error) {
+        alpacaTradesTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.trades_error) + "</div>";
+      } else if (!data.trades || data.trades.length === 0) {
+        alpacaTradesTableEl.innerHTML = "<div class='liveExchangeEmpty'>No recent trades found.</div>";
+      } else {
+        const tbl = document.createElement("table");
+        tbl.className = "tradesTable";
+        tbl.innerHTML =
+          "<thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th>" +
+          "<th>Fill Price</th><th>Trade ID</th></tr></thead>";
+        const tb = document.createElement("tbody");
+        data.trades.forEach(t => {
+          const sc = (t.side || "").toLowerCase() === "buy" ? "buy" : "sell";
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + escapeHtml(t.ts || "") + "</td>" +
+            "<td>" + escapeHtml(t.symbol || "") + "</td>" +
+            "<td><span class='tradeSide " + sc + "'>" + escapeHtml(t.side || "") + "</span></td>" +
+            "<td>" + escapeHtml(t.size != null ? String(t.size) : "—") + "</td>" +
+            "<td>" + escapeHtml(t.fill_price != null ? Number(t.fill_price).toFixed(4) : "—") + "</td>" +
+            "<td style='max-width:140px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(t.trade_id || "") + "</td>";
+          tb.appendChild(tr);
+        });
+        tbl.appendChild(tb);
+        alpacaTradesTableEl.innerHTML = "";
+        alpacaTradesTableEl.appendChild(tbl);
+      }
+
       analyticsStatus.textContent = "Alpaca updated " + new Date().toLocaleTimeString();
     } catch(e) {
       alpacaLiveWrapEl.style.display = "";
@@ -4259,12 +4413,13 @@ def trades_tag(row_id: int, req: TradeTagRequest):
 
 @app.get("/exchange/kraken/live")
 def exchange_kraken_live():
-    """Fetch live Kraken open positions and trade balance via the Kraken REST API.
+    """Fetch live Kraken open positions, trade balance, and recent trade history via the Kraken REST API.
 
     Requires KRAKEN_API_KEY and KRAKEN_SECRET_KEY environment variables.
     """
     positions_raw = _fetch_kraken_positions()
     balance_raw = _fetch_kraken_balance()
+    trades_raw = _fetch_kraken_trades(limit=20)
 
     # Decouple from any exception-tainted strings before building the response.
     if isinstance(positions_raw, list):
@@ -4283,23 +4438,34 @@ def exchange_kraken_live():
         balance_out = None
         balance_err = _safe_error_msg(balance_raw)
 
+    if isinstance(trades_raw, list):
+        trades_out: list = trades_raw
+        trades_err: str | None = None
+    else:
+        _logger.warning("Kraken trades fetch error: %s", trades_raw)
+        trades_out = []
+        trades_err = _safe_error_msg(trades_raw)
+
     return {
         "positions": positions_out,
         "positions_error": positions_err,
         "balance": balance_out,
         "balance_error": balance_err,
+        "trades": trades_out,
+        "trades_error": trades_err,
         "source": "kraken",
     }
 
 
 @app.get("/exchange/alpaca/live")
 def exchange_alpaca_live():
-    """Fetch live Alpaca open positions and account summary via the Alpaca REST API.
+    """Fetch live Alpaca open positions, account summary, and recent trade history via the Alpaca REST API.
 
     Requires ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.
     """
     positions_raw = _fetch_alpaca_positions()
     account_raw = _fetch_alpaca_account()
+    trades_raw_a = _fetch_alpaca_trades(limit=20)
 
     # Decouple from any exception-tainted strings before building the response.
     if isinstance(positions_raw, list):
@@ -4318,11 +4484,21 @@ def exchange_alpaca_live():
         account_out = None
         account_err = _safe_error_msg(account_raw)
 
+    if isinstance(trades_raw_a, list):
+        trades_out_a: list = trades_raw_a
+        trades_err_a: str | None = None
+    else:
+        _logger.warning("Alpaca trades fetch error: %s", trades_raw_a)
+        trades_out_a = []
+        trades_err_a = _safe_error_msg(trades_raw_a)
+
     return {
         "positions": positions_out_a,
         "positions_error": positions_err_a,
         "account": account_out,
         "account_error": account_err,
+        "trades": trades_out_a,
+        "trades_error": trades_err_a,
         "source": "alpaca",
     }
 
@@ -4829,9 +5005,6 @@ _CHAT_WEB_HTML = """<!doctype html>
       <div class="topbar-right">
         <select class="provider-sel" id="providerSel" onchange="onProviderChange()" title="LLM provider"></select>
         <select class="model-sel" id="modelSel" title="Model"></select>
-        <button class="btn-search" id="searchToggle" onclick="toggleWebSearch()" title="Toggle web search">
-          🔍 Web search
-        </button>
         <button class="btn-sm danger" onclick="clearSession()">Clear</button>
       </div>
     </div>
@@ -4885,7 +5058,6 @@ document.getElementById("userEmailSidebar").textContent = EMAIL;
 
 // ── State ──────────────────────────────────────────────────────────────────
 let currentSessionId = "";
-let webSearchEnabled = false;
 let providers = {};   // { openai: { name, models, default_model }, ... }
 let sessions = [];    // [{ id, title, provider, model, updated_at }, ...]
 
@@ -4897,7 +5069,6 @@ const providerSel = document.getElementById("providerSel");
 const modelSel    = document.getElementById("modelSel");
 const sessionLabel = document.getElementById("sessionLabel");
 const sessionsList = document.getElementById("sessionsList");
-const searchToggle = document.getElementById("searchToggle");
 
 // ── Markdown renderer ─────────────────────────────────────────────────────
 function renderMarkdown(text) {
@@ -5144,7 +5315,7 @@ async function send() {
         session_id: currentSessionId,
         provider: providerSel.value || "openai",
         model: modelSel.value || "",
-        web_search: webSearchEnabled,
+        web_search: true,
       }),
     });
     if (res.status === 401) { window.location.href = "/login"; return; }
@@ -5168,13 +5339,7 @@ async function send() {
   }
 }
 
-// ── Controls ───────────────────────────────────────────────────────────────
-function toggleWebSearch() {
-  webSearchEnabled = !webSearchEnabled;
-  searchToggle.classList.toggle("active", webSearchEnabled);
-}
-
-async function clearSession() {
+// ── Controls ───────────────────────────────────────────────────────────────async function clearSession() {
   if (!currentSessionId) return;
   if (!confirm("Clear all messages in this conversation? The session will remain.")) return;
   try {
