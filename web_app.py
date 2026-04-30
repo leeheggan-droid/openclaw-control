@@ -38,6 +38,12 @@ from openclaw_control.service import (
 )
 from openclaw_control import trade_log as _trade_log
 from openclaw_control.trade_log import now_iso as _trade_log_now_iso
+from openclaw_control.tools.exchange_tools import (
+    fetch_kraken_open_positions as _fetch_kraken_positions,
+    fetch_kraken_trade_balance as _fetch_kraken_balance,
+    fetch_alpaca_open_positions as _fetch_alpaca_positions,
+    fetch_alpaca_account as _fetch_alpaca_account,
+)
 
 
 @asynccontextmanager
@@ -118,6 +124,25 @@ class TradeLogRequest(BaseModel):
     fill_price: float
     trade_id: str = ""
     source: str = "api"
+    # Extended unified schema fields
+    exchange: str = ""
+    open_ts: str = ""
+    close_ts: str = ""
+    entry_price: float | None = None
+    exit_price: float | None = None
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    fee: float | None = None
+    tag: str = ""
+    signal: str = ""
+    strategy: str = ""
+    config_version: str = ""
+    annotation: str = ""
+
+
+class TradeTagRequest(BaseModel):
+    tag: str              # 'good' | 'bad' | 'neutral' | ''
+    annotation: str = ""  # optional free-text reason
 
 
 class PnlLogRequest(BaseModel):
@@ -1467,6 +1492,23 @@ def index():
     .tradesTable tr:hover td{background:rgba(255,255,255,.03);}
     .tradeSide.buy {color:#86efac;}
     .tradeSide.sell{color:#fca5a5;}
+    .tradeTag.good   {color:#86efac;font-weight:700;}
+    .tradeTag.bad    {color:#fca5a5;font-weight:700;}
+    .tradeTag.neutral{color:#fbbf24;font-weight:700;}
+
+    /* Live exchange panels */
+    #krakenLiveWrap, #alpacaLiveWrap {
+      background:rgba(0,0,0,.18);
+      border:1px solid var(--border);
+      border-radius:10px;
+      padding:10px 12px;
+      margin-bottom:10px;
+    }
+    .liveExchangeEmpty{
+      font-size:12px;
+      color:var(--muted);
+      padding:8px 0;
+    }
   </style>
 </head>
 
@@ -1587,7 +1629,20 @@ def index():
         <div class="analyticsToolbar">
           <button class="vibeBtn vibePrimaryBtn" id="analyticsLoadBtn">📈 Load Charts &amp; Table</button>
           <button class="vibeBtn vibeSecondaryBtn" id="analyticsFetchBtn">📡 SSH Probe</button>
+          <button class="vibeBtn vibeSecondaryBtn" id="krakenPullBtn">🐙 Pull Kraken</button>
+          <button class="vibeBtn vibeSecondaryBtn" id="alpacaPullBtn">🦙 Pull Alpaca</button>
           <span id="analyticsStatus" style="font-size:12px;color:var(--muted);"></span>
+        </div>
+        <!-- Live exchange panels (populated by JS) -->
+        <div id="krakenLiveWrap" style="display:none">
+          <div class="analyticsSectionTitle" style="margin-top:10px;">🐙 Kraken — Live Positions &amp; Balance</div>
+          <div class="statsRow" id="krakenBalanceStats" style="margin-bottom:6px;"></div>
+          <div class="tradesTableWrap" id="krakenPositionsTable"></div>
+        </div>
+        <div id="alpacaLiveWrap" style="display:none">
+          <div class="analyticsSectionTitle" style="margin-top:10px;">🦙 Alpaca — Live Positions &amp; Account</div>
+          <div class="statsRow" id="alpacaAccountStats" style="margin-bottom:6px;"></div>
+          <div class="tradesTableWrap" id="alpacaPositionsTable"></div>
         </div>
         <div class="analyticsBody" id="analyticsBody">
           <!-- KPI stat cards (populated by JS) -->
@@ -1609,7 +1664,7 @@ def index():
           </div>
           <!-- SSH raw sections injected dynamically -->
           <div class="analyticsEmpty" id="analyticsEmpty">
-            Click <strong>Load Charts &amp; Table</strong> for visual analytics from the local trade log, or <strong>SSH Probe</strong> for raw VPS data.
+            Click <strong>Load Charts &amp; Table</strong> for visual analytics from the local trade log, <strong>SSH Probe</strong> for raw VPS data, or <strong>Pull Kraken / Pull Alpaca</strong> to fetch live positions &amp; P&amp;L from the exchange APIs.
           </div>
         </div>
       </div>
@@ -3486,13 +3541,19 @@ def index():
         table.innerHTML =
           "<thead><tr>" +
           "<th>#</th><th>Timestamp</th><th>Symbol</th><th>Side</th>" +
-          "<th>Size</th><th>Fill Price</th><th>Trade ID</th><th>Source</th>" +
+          "<th>Size</th><th>Fill Price</th><th>Fee</th><th>Net P&L</th>" +
+          "<th>Exchange</th><th>Tag</th><th>Strategy</th><th>Trade ID</th><th>Source</th>" +
           "</tr></thead>";
         const tbody = document.createElement("tbody");
         // Show newest first (up to 100 rows); trades is already chronological so slice the tail
         trades.slice(-100).reverse().forEach(t => {
           const tr = document.createElement("tr");
           const sideClass = (t.side || "").toLowerCase() === "buy" ? "buy" : "sell";
+          const tagVal = (t.tag || "").toLowerCase();
+          const tagClass = tagVal === "good" ? "good" : tagVal === "bad" ? "bad" : tagVal === "neutral" ? "neutral" : "";
+          const tagLabel = tagClass ? tagVal : "—";
+          const netPnlVal = t.net_pnl != null ? (t.net_pnl >= 0 ? "+" : "") + Number(t.net_pnl).toFixed(4) : "—";
+          const netPnlCls = t.net_pnl != null ? (t.net_pnl >= 0 ? "pos" : "neg") : "";
           tr.innerHTML =
             "<td>" + escapeHtml(String(t.id != null ? t.id : "")) + "</td>" +
             "<td>" + escapeHtml((t.ts || "").replace("T", " ").slice(0, 19)) + "</td>" +
@@ -3500,6 +3561,11 @@ def index():
             "<td><span class='tradeSide " + sideClass + "'>" + escapeHtml(t.side || "") + "</span></td>" +
             "<td>" + escapeHtml(String(t.size != null ? t.size : "")) + "</td>" +
             "<td>" + escapeHtml(String(t.fill_price != null ? t.fill_price : "")) + "</td>" +
+            "<td>" + escapeHtml(t.fee != null ? String(t.fee) : "—") + "</td>" +
+            "<td class='" + netPnlCls + "'>" + escapeHtml(netPnlVal) + "</td>" +
+            "<td>" + escapeHtml(t.exchange || "—") + "</td>" +
+            "<td><span class='tradeTag " + tagClass + "'>" + escapeHtml(tagLabel) + "</span></td>" +
+            "<td>" + escapeHtml(t.strategy || "—") + "</td>" +
             "<td style='max-width:120px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(t.trade_id || "") + "</td>" +
             "<td>" + escapeHtml(t.source || "") + "</td>";
           tbody.appendChild(tr);
@@ -3522,7 +3588,175 @@ def index():
     }
   };
 
-  // ── SSH Probe (raw per-trade analytics from VPS) ──────────────────────────
+  // ── Kraken live pull ───────────────────────────────────────────────────────
+  const krakenPullBtnEl       = document.getElementById("krakenPullBtn");
+  const krakenLiveWrapEl      = document.getElementById("krakenLiveWrap");
+  const krakenBalanceStatsEl  = document.getElementById("krakenBalanceStats");
+  const krakenPositionsTableEl= document.getElementById("krakenPositionsTable");
+
+  krakenPullBtnEl.onclick = async () => {
+    krakenPullBtnEl.disabled = true;
+    analyticsStatus.textContent = "Fetching Kraken…";
+    krakenLiveWrapEl.style.display = "none";
+    try {
+      const res = await fetch(API_BASE + "/exchange/kraken/live");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        analyticsStatus.textContent = "Kraken error: HTTP " + res.status;
+        krakenLiveWrapEl.style.display = "";
+        krakenPositionsTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(err.detail || "Request failed") + "</div>";
+        return;
+      }
+      const data = await res.json();
+      krakenLiveWrapEl.style.display = "";
+      krakenBalanceStatsEl.innerHTML = "";
+
+      if (data.balance_error) {
+        krakenBalanceStatsEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.balance_error) + "</div>";
+      } else if (data.balance) {
+        const b = data.balance;
+        [
+          _statCard("Equity", b.equity != null ? Number(b.equity).toFixed(2) : "—",
+            b.equity != null && b.equity >= 0 ? "pos" : "neg"),
+          _statCard("Unrealised P&L", b.unrealised_pnl != null ? (b.unrealised_pnl >= 0 ? "+" : "") + Number(b.unrealised_pnl).toFixed(4) : "—",
+            b.unrealised_pnl != null ? (b.unrealised_pnl >= 0 ? "pos" : "neg") : ""),
+          _statCard("Free Margin", b.free_margin != null ? Number(b.free_margin).toFixed(4) : "—", ""),
+          _statCard("Margin Level", b.margin_level != null ? Number(b.margin_level).toFixed(2) + "%" : "—", ""),
+        ].forEach(c => krakenBalanceStatsEl.appendChild(c));
+      }
+
+      if (data.positions_error) {
+        krakenPositionsTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.positions_error) + "</div>";
+      } else if (!data.positions || data.positions.length === 0) {
+        krakenPositionsTableEl.innerHTML = "<div class='liveExchangeEmpty'>No open positions.</div>";
+      } else {
+        const table = document.createElement("table");
+        table.className = "tradesTable";
+        table.innerHTML =
+          "<thead><tr><th>Position ID</th><th>Symbol</th><th>Side</th><th>Size</th>" +
+          "<th>Entry Price</th><th>Fee</th><th>Net P&L</th><th>Unrealised P&L</th><th>Status</th></tr></thead>";
+        const tbody = document.createElement("tbody");
+        data.positions.forEach(p => {
+          const sideClass = (p.side || "").toLowerCase() === "buy" ? "buy" : "sell";
+          const unrPnl = p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "+" : "") + Number(p.unrealised_pnl).toFixed(4) : "—";
+          const netPnl = p.net_pnl != null ? (p.net_pnl >= 0 ? "+" : "") + Number(p.net_pnl).toFixed(4) : "—";
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td style='max-width:100px;overflow:hidden;text-overflow:ellipsis'>" + escapeHtml(p.position_id || "") + "</td>" +
+            "<td>" + escapeHtml(p.symbol || "") + "</td>" +
+            "<td><span class='tradeSide " + sideClass + "'>" + escapeHtml(p.side || "") + "</span></td>" +
+            "<td>" + escapeHtml(String(p.size != null ? p.size : "")) + "</td>" +
+            "<td>" + escapeHtml(p.entry_price != null ? Number(p.entry_price).toFixed(4) : "—") + "</td>" +
+            "<td>" + escapeHtml(p.fee != null ? String(p.fee) : "—") + "</td>" +
+            "<td class='" + (p.net_pnl != null ? (p.net_pnl >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(netPnl) + "</td>" +
+            "<td class='" + (p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(unrPnl) + "</td>" +
+            "<td>" + escapeHtml(p.status || "") + "</td>";
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        krakenPositionsTableEl.innerHTML = "";
+        krakenPositionsTableEl.appendChild(table);
+      }
+      analyticsStatus.textContent = "Kraken updated " + new Date().toLocaleTimeString();
+    } catch(e) {
+      krakenLiveWrapEl.style.display = "";
+      krakenPositionsTableEl.innerHTML =
+        "<div class='liveExchangeEmpty'>" + escapeHtml(e.message || String(e)) + "</div>";
+      analyticsStatus.textContent = "Error";
+    } finally {
+      krakenPullBtnEl.disabled = false;
+    }
+  };
+
+  // ── Alpaca live pull ───────────────────────────────────────────────────────
+  const alpacaPullBtnEl        = document.getElementById("alpacaPullBtn");
+  const alpacaLiveWrapEl       = document.getElementById("alpacaLiveWrap");
+  const alpacaAccountStatsEl   = document.getElementById("alpacaAccountStats");
+  const alpacaPositionsTableEl = document.getElementById("alpacaPositionsTable");
+
+  alpacaPullBtnEl.onclick = async () => {
+    alpacaPullBtnEl.disabled = true;
+    analyticsStatus.textContent = "Fetching Alpaca…";
+    alpacaLiveWrapEl.style.display = "none";
+    try {
+      const res = await fetch(API_BASE + "/exchange/alpaca/live");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        analyticsStatus.textContent = "Alpaca error: HTTP " + res.status;
+        alpacaLiveWrapEl.style.display = "";
+        alpacaPositionsTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(err.detail || "Request failed") + "</div>";
+        return;
+      }
+      const data = await res.json();
+      alpacaLiveWrapEl.style.display = "";
+      alpacaAccountStatsEl.innerHTML = "";
+
+      if (data.account_error) {
+        alpacaAccountStatsEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.account_error) + "</div>";
+      } else if (data.account) {
+        const a = data.account;
+        [
+          _statCard("Equity", a.equity != null ? Number(a.equity).toFixed(2) : "—",
+            a.equity != null && a.equity >= 0 ? "pos" : "neg"),
+          _statCard("Portfolio Value", a.portfolio_value != null ? Number(a.portfolio_value).toFixed(2) : "—", ""),
+          _statCard("Unrealised P&L", a.unrealised_pnl != null ? (a.unrealised_pnl >= 0 ? "+" : "") + Number(a.unrealised_pnl).toFixed(2) : "—",
+            a.unrealised_pnl != null ? (a.unrealised_pnl >= 0 ? "pos" : "neg") : ""),
+          _statCard("Realised P&L", a.realised_pnl != null ? (a.realised_pnl >= 0 ? "+" : "") + Number(a.realised_pnl).toFixed(2) : "—",
+            a.realised_pnl != null ? (a.realised_pnl >= 0 ? "pos" : "neg") : ""),
+          _statCard("Cash", a.cash != null ? Number(a.cash).toFixed(2) : "—", ""),
+          _statCard("Buying Power", a.buying_power != null ? Number(a.buying_power).toFixed(2) : "—", ""),
+        ].forEach(c => alpacaAccountStatsEl.appendChild(c));
+      }
+
+      if (data.positions_error) {
+        alpacaPositionsTableEl.innerHTML =
+          "<div class='liveExchangeEmpty'>" + escapeHtml(data.positions_error) + "</div>";
+      } else if (!data.positions || data.positions.length === 0) {
+        alpacaPositionsTableEl.innerHTML = "<div class='liveExchangeEmpty'>No open positions.</div>";
+      } else {
+        const table = document.createElement("table");
+        table.className = "tradesTable";
+        table.innerHTML =
+          "<thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry Price</th>" +
+          "<th>Current Price</th><th>Market Value</th><th>Unrealised P&L</th><th>Unrealised %</th><th>Today Change</th></tr></thead>";
+        const tbody = document.createElement("tbody");
+        data.positions.forEach(p => {
+          const sideClass = (p.side || "").toLowerCase() === "long" ? "buy" : "sell";
+          const unrPnl = p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "+" : "") + Number(p.unrealised_pnl).toFixed(2) : "—";
+          const unrPct = p.unrealised_pnl_pct != null ? (p.unrealised_pnl_pct * 100).toFixed(2) + "%" : "—";
+          const chg = p.change_today != null ? (p.change_today >= 0 ? "+" : "") + (p.change_today * 100).toFixed(2) + "%" : "—";
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + escapeHtml(p.symbol || "") + "</td>" +
+            "<td><span class='tradeSide " + sideClass + "'>" + escapeHtml(p.side || "") + "</span></td>" +
+            "<td>" + escapeHtml(String(p.size != null ? p.size : "")) + "</td>" +
+            "<td>" + escapeHtml(p.entry_price != null ? Number(p.entry_price).toFixed(4) : "—") + "</td>" +
+            "<td>" + escapeHtml(p.current_price != null ? Number(p.current_price).toFixed(4) : "—") + "</td>" +
+            "<td>" + escapeHtml(p.market_value != null ? Number(p.market_value).toFixed(2) : "—") + "</td>" +
+            "<td class='" + (p.unrealised_pnl != null ? (p.unrealised_pnl >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(unrPnl) + "</td>" +
+            "<td class='" + (p.unrealised_pnl_pct != null ? (p.unrealised_pnl_pct >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(unrPct) + "</td>" +
+            "<td class='" + (p.change_today != null ? (p.change_today >= 0 ? "pos" : "neg") : "") + "'>" + escapeHtml(chg) + "</td>";
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        alpacaPositionsTableEl.innerHTML = "";
+        alpacaPositionsTableEl.appendChild(table);
+      }
+      analyticsStatus.textContent = "Alpaca updated " + new Date().toLocaleTimeString();
+    } catch(e) {
+      alpacaLiveWrapEl.style.display = "";
+      alpacaPositionsTableEl.innerHTML =
+        "<div class='liveExchangeEmpty'>" + escapeHtml(e.message || String(e)) + "</div>";
+      analyticsStatus.textContent = "Error";
+    } finally {
+      alpacaPullBtnEl.disabled = false;
+    }
+  };
   analyticsFetchBtn.onclick = async () => {
     analyticsFetchBtn.disabled = true;
     analyticsStatus.textContent = "Fetching…";
@@ -3898,6 +4132,19 @@ def trades_log(req: TradeLogRequest):
         fill_price=req.fill_price,
         trade_id=req.trade_id,
         source=req.source,
+        exchange=req.exchange,
+        open_ts=req.open_ts,
+        close_ts=req.close_ts,
+        entry_price=req.entry_price,
+        exit_price=req.exit_price,
+        gross_pnl=req.gross_pnl,
+        net_pnl=req.net_pnl,
+        fee=req.fee,
+        tag=req.tag,
+        signal=req.signal,
+        strategy=req.strategy,
+        config_version=req.config_version,
+        annotation=req.annotation,
     )
     return {"id": row_id, "ts": ts, "status": "logged"}
 
@@ -3953,6 +4200,66 @@ def trades_health():
     OPENCLAW_TRADE_INACTIVITY_HOURS env var).
     """
     return _trade_log.get_inactivity_status()
+
+
+# ── Trade tagging endpoint ─────────────────────────────────────────────────────
+
+_VALID_TAGS = frozenset({"good", "bad", "neutral", ""})
+
+
+@app.patch("/trades/{row_id}/tag")
+def trades_tag(row_id: int, req: TradeTagRequest):
+    """Update the tag and optional annotation for a trade execution row.
+
+    ``tag`` must be one of: 'good', 'bad', 'neutral', or '' (clears tag).
+    """
+    tag = (req.tag or "").strip().lower()
+    if tag not in _VALID_TAGS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid tag '{tag}'. Valid values: good, bad, neutral, or empty string.",
+        )
+    updated = _trade_log.update_trade_tag(row_id=row_id, tag=tag, annotation=req.annotation)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Trade row id={row_id} not found.")
+    return {"id": row_id, "tag": tag, "annotation": req.annotation, "status": "updated"}
+
+
+# ── Live exchange data endpoints ───────────────────────────────────────────────
+
+
+@app.get("/exchange/kraken/live")
+def exchange_kraken_live():
+    """Fetch live Kraken open positions and trade balance via the Kraken REST API.
+
+    Requires KRAKEN_API_KEY and KRAKEN_SECRET_KEY environment variables.
+    """
+    positions = _fetch_kraken_positions()
+    balance = _fetch_kraken_balance()
+    return {
+        "positions": positions if isinstance(positions, list) else [],
+        "positions_error": positions if isinstance(positions, str) else None,
+        "balance": balance if isinstance(balance, dict) else None,
+        "balance_error": balance if isinstance(balance, str) else None,
+        "source": "kraken",
+    }
+
+
+@app.get("/exchange/alpaca/live")
+def exchange_alpaca_live():
+    """Fetch live Alpaca open positions and account summary via the Alpaca REST API.
+
+    Requires ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.
+    """
+    positions = _fetch_alpaca_positions()
+    account = _fetch_alpaca_account()
+    return {
+        "positions": positions if isinstance(positions, list) else [],
+        "positions_error": positions if isinstance(positions, str) else None,
+        "account": account if isinstance(account, dict) else None,
+        "account_error": account if isinstance(account, str) else None,
+        "source": "alpaca",
+    }
 
 
 # ── Cheap Chat endpoint ───────────────────────────────────────────────────────

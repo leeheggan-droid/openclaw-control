@@ -11,14 +11,28 @@ A background scheduler thread:
 Schema
 ------
   trade_executions(
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts         TEXT NOT NULL,      -- ISO-8601 UTC
-      symbol     TEXT NOT NULL,
-      side       TEXT NOT NULL,      -- 'buy' | 'sell'
-      size       REAL NOT NULL,
-      fill_price REAL NOT NULL,
-      trade_id   TEXT NOT NULL DEFAULT '',
-      source     TEXT NOT NULL DEFAULT ''  -- e.g. 'api', 'ssh_probe'
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts             TEXT NOT NULL,      -- ISO-8601 UTC (fill/log time)
+      symbol         TEXT NOT NULL,
+      side           TEXT NOT NULL,      -- 'buy' | 'sell'
+      size           REAL NOT NULL,
+      fill_price     REAL NOT NULL,
+      trade_id       TEXT NOT NULL DEFAULT '',
+      source         TEXT NOT NULL DEFAULT '',  -- e.g. 'api', 'ssh_probe'
+      -- Extended unified schema fields:
+      exchange       TEXT NOT NULL DEFAULT '',  -- 'kraken' | 'alpaca' | ''
+      open_ts        TEXT NOT NULL DEFAULT '',  -- ISO-8601 UTC position open time
+      close_ts       TEXT NOT NULL DEFAULT '',  -- ISO-8601 UTC position close time
+      entry_price    REAL,                      -- price at position open
+      exit_price     REAL,                      -- price at position close
+      gross_pnl      REAL,                      -- P&L before fees
+      net_pnl        REAL,                      -- P&L after fees
+      fee            REAL,                      -- fee paid
+      tag            TEXT NOT NULL DEFAULT '',  -- classification: good | bad | neutral
+      signal         TEXT NOT NULL DEFAULT '',  -- signal/trigger name
+      strategy       TEXT NOT NULL DEFAULT '',  -- strategy name
+      config_version TEXT NOT NULL DEFAULT '',  -- config version snapshot ref
+      annotation     TEXT NOT NULL DEFAULT ''   -- free-text reason/annotation
   )
 
   pnl_snapshots(
@@ -35,7 +49,11 @@ Schema
 
 Public API
 ----------
-  log_trade(ts, symbol, side, size, fill_price, trade_id, source) -> int
+  log_trade(ts, symbol, side, size, fill_price, trade_id, source,
+            exchange, open_ts, close_ts, entry_price, exit_price,
+            gross_pnl, net_pnl, fee, tag, signal, strategy,
+            config_version, annotation) -> int
+  update_trade_tag(row_id, tag, annotation) -> bool
   log_pnl_snapshot(ts, total_pnl, equity, drawdown,
                    realised_pnl, unrealised_pnl, sharpe_ratio, source) -> int
   get_recent_trades(limit)   -> list[dict]
@@ -100,14 +118,27 @@ def _connect() -> sqlite3.Connection:
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS trade_executions (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts         TEXT NOT NULL,
-            symbol     TEXT NOT NULL,
-            side       TEXT NOT NULL,
-            size       REAL NOT NULL,
-            fill_price REAL NOT NULL,
-            trade_id   TEXT NOT NULL DEFAULT '',
-            source     TEXT NOT NULL DEFAULT ''
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts             TEXT NOT NULL,
+            symbol         TEXT NOT NULL,
+            side           TEXT NOT NULL,
+            size           REAL NOT NULL,
+            fill_price     REAL NOT NULL,
+            trade_id       TEXT NOT NULL DEFAULT '',
+            source         TEXT NOT NULL DEFAULT '',
+            exchange       TEXT NOT NULL DEFAULT '',
+            open_ts        TEXT NOT NULL DEFAULT '',
+            close_ts       TEXT NOT NULL DEFAULT '',
+            entry_price    REAL,
+            exit_price     REAL,
+            gross_pnl      REAL,
+            net_pnl        REAL,
+            fee            REAL,
+            tag            TEXT NOT NULL DEFAULT '',
+            signal         TEXT NOT NULL DEFAULT '',
+            strategy       TEXT NOT NULL DEFAULT '',
+            config_version TEXT NOT NULL DEFAULT '',
+            annotation     TEXT NOT NULL DEFAULT ''
         );
 
         CREATE INDEX IF NOT EXISTS idx_trade_ts
@@ -128,6 +159,40 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_pnl_ts
             ON pnl_snapshots(ts DESC);
     """)
+    conn.commit()
+    # Migrate existing tables: add new columns if they don't exist yet.
+    _migrate_schema(conn)
+
+
+# Columns added in the unified schema extension.
+_TRADE_EXECUTIONS_MIGRATIONS: list[tuple[str, str]] = [
+    ("exchange",       "TEXT NOT NULL DEFAULT ''"),
+    ("open_ts",        "TEXT NOT NULL DEFAULT ''"),
+    ("close_ts",       "TEXT NOT NULL DEFAULT ''"),
+    ("entry_price",    "REAL"),
+    ("exit_price",     "REAL"),
+    ("gross_pnl",      "REAL"),
+    ("net_pnl",        "REAL"),
+    ("fee",            "REAL"),
+    ("tag",            "TEXT NOT NULL DEFAULT ''"),
+    ("signal",         "TEXT NOT NULL DEFAULT ''"),
+    ("strategy",       "TEXT NOT NULL DEFAULT ''"),
+    ("config_version", "TEXT NOT NULL DEFAULT ''"),
+    ("annotation",     "TEXT NOT NULL DEFAULT ''"),
+]
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add any missing columns to an existing trade_executions table."""
+    existing = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(trade_executions)").fetchall()
+    }
+    for col_name, col_def in _TRADE_EXECUTIONS_MIGRATIONS:
+        if col_name not in existing:
+            conn.execute(
+                f"ALTER TABLE trade_executions ADD COLUMN {col_name} {col_def}"
+            )
     conn.commit()
 
 
@@ -150,18 +215,58 @@ def log_trade(
     fill_price: float,
     trade_id: str = "",
     source: str = "api",
+    exchange: str = "",
+    open_ts: str = "",
+    close_ts: str = "",
+    entry_price: float | None = None,
+    exit_price: float | None = None,
+    gross_pnl: float | None = None,
+    net_pnl: float | None = None,
+    fee: float | None = None,
+    tag: str = "",
+    signal: str = "",
+    strategy: str = "",
+    config_version: str = "",
+    annotation: str = "",
 ) -> int:
     """Insert a trade execution record and return the new row id."""
     with _LOCK:
         cur = _conn.execute(
             """
-            INSERT INTO trade_executions (ts, symbol, side, size, fill_price, trade_id, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trade_executions
+                (ts, symbol, side, size, fill_price, trade_id, source,
+                 exchange, open_ts, close_ts, entry_price, exit_price,
+                 gross_pnl, net_pnl, fee, tag, signal, strategy,
+                 config_version, annotation)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ts, symbol, side, float(size), float(fill_price), trade_id or "", source or "api"),
+            (
+                ts, symbol, side, float(size), float(fill_price),
+                trade_id or "", source or "api",
+                exchange or "", open_ts or "", close_ts or "",
+                entry_price, exit_price,
+                gross_pnl, net_pnl, fee,
+                tag or "", signal or "", strategy or "",
+                config_version or "", annotation or "",
+            ),
         )
         _conn.commit()
         return cur.lastrowid or 0
+
+
+def update_trade_tag(row_id: int, tag: str, annotation: str = "") -> bool:
+    """Update the tag and optional annotation for a trade execution row.
+
+    Returns True if a row was updated, False if the row_id was not found.
+    ``tag`` should be one of: 'good', 'bad', 'neutral', or '' (cleared).
+    """
+    with _LOCK:
+        cur = _conn.execute(
+            "UPDATE trade_executions SET tag = ?, annotation = ? WHERE id = ?",
+            (tag or "", annotation or "", row_id),
+        )
+        _conn.commit()
+        return cur.rowcount > 0
 
 
 def log_pnl_snapshot(
@@ -197,7 +302,9 @@ def get_recent_trades(limit: int = 50) -> list[dict[str, Any]]:
     """Return the most recent *limit* trade executions, newest first."""
     with _LOCK:
         rows = _conn.execute(
-            "SELECT id, ts, symbol, side, size, fill_price, trade_id, source "
+            "SELECT id, ts, symbol, side, size, fill_price, trade_id, source, "
+            "exchange, open_ts, close_ts, entry_price, exit_price, "
+            "gross_pnl, net_pnl, fee, tag, signal, strategy, config_version, annotation "
             "FROM trade_executions ORDER BY id DESC LIMIT ?",
             (max(1, limit),),
         ).fetchall()
