@@ -277,10 +277,19 @@ def _save_messages(session_id: str, user_id: str, user_msg: str, reply: str) -> 
 
 
 def _brave_search(query: str, count: int = 5) -> str:
-    """Return top Brave Search results as a plain-text block, or an error string."""
+    """Return top Brave Search results as a plain-text block, or an error string.
+
+    Returns an empty string only when there are genuinely no results.
+    Returns a bracketed error string when the key is missing or the request fails,
+    so callers can include the error as context for the LLM rather than silently
+    dropping the web-search request.
+    """
     api_key = os.environ.get("BRAVE_API_KEY", "")
     if not api_key:
-        return ""
+        return (
+            "[Web search unavailable: BRAVE_API_KEY is not configured. "
+            "Add it to /etc/openclaw-control.env to enable web search.]"
+        )
     query = query.strip()
     if not query:
         return ""
@@ -298,8 +307,15 @@ def _brave_search(query: str, count: int = 5) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
-        return ""
+    except _requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        return (
+            f"[Web search failed: HTTP {status} — check your Brave API key and quota.]"
+        )
+    except _requests.RequestException as exc:
+        return f"[Web search failed: {type(exc).__name__} — check network connectivity.]"
+    except (KeyError, ValueError):
+        return "[Web search failed: unexpected response format from Brave API.]"
 
     results = (data.get("web") or {}).get("results") or []
     if not results:
