@@ -2919,7 +2919,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     if (!userPrompt && extraContext) {
       userPrompt = extraContext;
     } else if (userPrompt && extraContext) {
-      userPrompt = userPrompt + "\n\nAdditional context:\n" + extraContext;
+      userPrompt = userPrompt + "\\n\\nAdditional context:\\n" + extraContext;
     }
     // Else: leave userPrompt empty; backend will extract from conversation history
 
