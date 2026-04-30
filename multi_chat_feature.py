@@ -52,7 +52,7 @@ _ANTHROPIC_VERSION = "2023-06-01"
 _SEARCH_TIMEOUT = 10
 _CHAT_TIMEOUT = 60
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 # ── Provider registry ──────────────────────────────────────────────────────────
 
