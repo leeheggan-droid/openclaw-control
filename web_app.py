@@ -4493,6 +4493,19 @@ def delete_chat_session(
     return {"ok": True}
 
 
+@app.post("/chat/sessions/{session_id}/clear")
+def clear_chat_session(
+    session_id: str,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Clear all messages in a session without deleting the session."""
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _multi_chat.clear_session(session_id, caller)
+    return {"ok": True}
+
+
 @app.post("/chat")
 def openai_chat(
     req: ChatRequest,
@@ -4888,13 +4901,13 @@ const searchToggle = document.getElementById("searchToggle");
 
 // ── Markdown renderer ─────────────────────────────────────────────────────
 function renderMarkdown(text) {
-  // Escape HTML in the raw text first, then selectively un-escape for markdown elements
+  // Escape HTML in the raw text first so user content can never inject markup
   let s = text
     .replace(/&/g,"&amp;")
     .replace(/</g,"&lt;")
     .replace(/>/g,"&gt;");
 
-  // Fenced code blocks (``` ... ```)
+  // Fenced code blocks (``` ... ```) — content already HTML-escaped, safe to wrap
   s = s.replace(/```([\\w]*?)\\n([\\s\\S]*?)```/g, (_,lang,code) =>
     `<pre><code>${code}</code></pre>`);
   s = s.replace(/```([\\s\\S]*?)```/g, (_,code) => `<pre><code>${code}</code></pre>`);
@@ -4916,21 +4929,26 @@ function renderMarkdown(text) {
   // Horizontal rule
   s = s.replace(/^---+$/gm, "<hr/>");
 
-  // Unordered lists
+  // Unordered lists — group consecutive <li> runs into <ul> blocks
   s = s.replace(/^[ \\t]*[-*+] (.+)$/gm, "<li>$1</li>");
-  s = s.replace(/(<li>.*<\\/li>)/s, m => "<ul>" + m + "</ul>");
+  s = s.replace(/(<li>[\\s\\S]*?<\\/li>)(\\n<li>[\\s\\S]*?<\\/li>)*/g,
+    m => "<ul>" + m + "</ul>");
 
-  // Ordered lists
-  s = s.replace(/^[ \\t]*\\d+\\. (.+)$/gm, "<li>$1</li>");
+  // Ordered lists — convert then wrap consecutive runs in <ol>
+  s = s.replace(/^[ \\t]*\\d+\\. (.+)$/gm, "<lio>$1</lio>");
+  s = s.replace(/(<lio>[\\s\\S]*?<\\/lio>)(\\n<lio>[\\s\\S]*?<\\/lio>)*/g,
+    m => "<ol>" + m.replace(/<\\/?lio>/g, m2 => m2.replace("lio","li")) + "</ol>");
 
-  // Links
-  s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Links — only allow http/https URLs to prevent javascript: XSS
+  s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, (_, linkText, url) => {
+    const safeUrl = /^https?:\\/\\//i.test(url) ? url : "#";
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+  });
 
   // Line breaks (not inside pre blocks)
   s = s.replace(/\\n/g, "<br/>");
 
-  // Clean up double br inside block elements
+  // Clean up extra br after block elements
   s = s.replace(/(<\\/(?:h[123]|hr|pre|ul|ol)>)<br\\/>/g, "$1");
   s = s.replace(/<br\\/>(\\s*)(<(?:h[123]|pre|ul|ol)>)/g, "$2");
 
@@ -5106,7 +5124,11 @@ function addBubble(role, text) {
 
 async function send() {
   const text = inputEl.value.trim();
-  if (!text || !currentSessionId) return;
+  if (!text) return;
+  if (!currentSessionId) {
+    addBubble("assistant", "⚠️ No active session — click **+ New** to start a conversation.");
+    return;
+  }
   inputEl.value = "";
   inputEl.style.height = "auto";
   sendBtn.disabled = true;
@@ -5154,9 +5176,14 @@ function toggleWebSearch() {
 
 async function clearSession() {
   if (!currentSessionId) return;
-  if (!confirm("Clear messages in this conversation?")) return;
-  // Delete and recreate the session with same title slot
-  await deleteSession(currentSessionId);
+  if (!confirm("Clear all messages in this conversation? The session will remain.")) return;
+  try {
+    await fetch(`/chat/sessions/${currentSessionId}/clear`, {method:"POST"});
+  } catch(e) {}
+  // Remove message bubbles from view
+  Array.from(messagesEl.querySelectorAll(".bubble")).forEach(b => b.remove());
+  messagesEl.appendChild(typingEl);
+  addBubble("assistant", "Conversation cleared. How can I help you?");
 }
 
 function toggleSidebar() {

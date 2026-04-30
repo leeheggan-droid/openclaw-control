@@ -451,9 +451,13 @@ def chat(
 def clear_session(session_id: str, user_id: str) -> None:
     """Delete all messages in *session_id* (but keep the session record)."""
     with _lock:
-        _db().execute(
-            "DELETE FROM chat_messages WHERE session_id = ? AND "
-            "(SELECT user_id FROM chat_sessions WHERE id = ?) = ?",
-            (session_id, session_id, user_id),
-        )
-        _db().commit()
+        # Verify ownership before deleting
+        row = _db().execute(
+            "SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        ).fetchone()
+        if row:
+            _db().execute(
+                "DELETE FROM chat_messages WHERE session_id = ?", (session_id,)
+            )
+            _db().commit()
