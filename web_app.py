@@ -236,8 +236,12 @@ def ops_report(report_id: str):
 _READONLY_CMD_MAX_LEN = 512
 
 
-class ReadonlySshRequest(BaseModel):
+class SshCommandRequest(BaseModel):
     cmd: str
+
+
+# Alias kept for the read-only endpoint that predates this rename.
+ReadonlySshRequest = SshCommandRequest
 
 
 @app.post("/ops/ssh-readonly-run")
@@ -270,35 +274,46 @@ def ops_ssh_readonly_run(req: ReadonlySshRequest):
     return result
 
 
-# Commands permitted through the VIBE-lane probe endpoint.
-# Only safe, non-mutating identity/diagnostic commands are listed here.
-_VIBE_PROBE_ALLOWLIST = frozenset({"whoami", "id", "uptime"})
+# Exact commands permitted through the VIBE-lane probe endpoint.
+# Using an exact-match set eliminates shell-injection risk entirely —
+# every permitted string is a hardcoded, known-safe value.
+_VIBE_PROBE_COMMANDS = frozenset({
+    "whoami",
+    "uptime",
+    "docker ps",
+    "docker compose ps",
+    "ls -la",
+    "docker logs --tail=200 openclaw-orchestrator",
+    (
+        "timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null"
+        " || docker logs --tail=200 openclaw-orchestrator"
+    ),
+})
 
 
 @app.post("/ops/ssh-vibe-probe")
-def ops_ssh_vibe_probe(req: ReadonlySshRequest):
+def ops_ssh_vibe_probe(req: SshCommandRequest):
     """Run a single safe diagnostic command on the VIBE execution host.
 
-    This endpoint exists so that identity/probe commands (e.g. ``whoami``)
+    This endpoint exists so that probe commands (e.g. ``whoami``, ``docker ps``)
     can be verified against the VIBE SSH lane rather than the READONLY lane.
-    Only commands whose first token appears in ``_VIBE_PROBE_ALLOWLIST`` are
-    accepted; all others are rejected with 422.
+    Only commands that appear verbatim in ``_VIBE_PROBE_COMMANDS`` are accepted;
+    all others are rejected with 422.
     """
     cmd = (req.cmd or "").strip()
     if not cmd:
         raise HTTPException(status_code=422, detail="cmd must not be empty")
-    first_token = cmd.split()[0]
-    if first_token not in _VIBE_PROBE_ALLOWLIST:
+    if cmd not in _VIBE_PROBE_COMMANDS:
         raise HTTPException(
             status_code=422,
-            detail=f"command '{first_token}' is not in the vibe-probe allowlist",
+            detail="command is not in the vibe-probe allowlist",
         )
     if not settings.ssh_host:
         raise HTTPException(
             status_code=503,
             detail="OPENCLAW_SSH_HOST is not configured — vibe SSH features are disabled.",
         )
-    result = run_ssh(cmd, timeout=10)
+    result = run_ssh(cmd, timeout=60)
     return result
 
 
@@ -1715,13 +1730,13 @@ def index():
       </div>
 
       <div class="termControls">
-        <button class="pill" onclick="runReadonlyQuick('uptime')">uptime</button>
+        <button class="pill" onclick="runVibeProbeQuick('uptime')">uptime</button>
         <button class="pill" onclick="runVibeProbeQuick('whoami')">whoami</button>
-        <button class="pill" onclick="runReadonlyQuick('docker ps')">docker ps</button>
-        <button class="pill" onclick="runReadonlyQuick('docker compose ps')">docker compose ps</button>
-        <button class="pill" onclick="runReadonlyQuick('ls -la')">ls -la</button>
-        <button class="pill" onclick="runReadonlyQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
-        <button class="pill" onclick="runReadonlyQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker ps')">docker ps</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker compose ps')">docker compose ps</button>
+        <button class="pill" onclick="runVibeProbeQuick('ls -la')">ls -la</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
+        <button class="pill" onclick="runVibeProbeQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
         <button class="pill" onclick="confirmDockerRefresh()">docker refresh</button>
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
