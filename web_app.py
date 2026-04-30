@@ -2678,7 +2678,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
    * Example: "Review this: @system_logs.txt" → "Review this: [FILE:system_logs.txt]\n<content>"
    */
   async function resolveAtRefs(text) {
-    const atPattern = /@([A-Za-z0-9_.\-]+)/g;
+    const atPattern = /@([A-Za-z0-9_.\\-]+)/g;
     let result = text;
     let match;
     // Collect unique tokens first so we show one picker per unique @ref
@@ -2744,7 +2744,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       content.className = "feedContent" + (ev.type === "action" ? " feedAction" : "");
       if (ev.type === "action") {
         // Render URLs in action events as clickable hyperlinks
-        const urlRe = /https?:\/\/[^\s<>"]+?(?=[.,;:!?)\]]*(?:\s|$))/g;
+        const urlRe = /https?:\\/\\/[^\\s<>"]+?(?=[.,;:!?)\\]]*(?:\\s|$))/g;
         let lastIdx = 0, m;
         while ((m = urlRe.exec(ev.content)) !== null) {
           if (m.index > lastIdx) {
