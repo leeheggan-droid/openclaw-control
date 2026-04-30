@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import auth_feature as _auth
 import chat_feature as _chat
+import multi_chat_feature as _multi_chat
 
 from cheap_chat_feature import cheap_chat as _cheap_chat
 from openclaw_control.config import settings
@@ -4368,12 +4369,21 @@ class ChangePasswordRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    user_id: str = ""   # optional; defaults to the authenticated email
+    user_id: str = ""        # optional; defaults to the authenticated email
     message: str
+    session_id: str = ""     # multi-session support; empty = legacy mode
+    provider: str = "openai" # which LLM provider to use
+    model: str = ""          # override provider's default model
+    web_search: bool = False  # prepend Brave Search results to message
 
 
 class ClearHistoryRequest(BaseModel):
     user_id: str = ""
+
+
+class CreateSessionRequest(BaseModel):
+    provider: str = "openai"
+    model: str = ""
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -4438,12 +4448,70 @@ def admin_users(openclaw_session: str | None = Cookie(default=None)):
     return {"users": _auth.list_users()}
 
 
+@app.get("/chat/providers")
+def chat_providers(openclaw_session: str | None = Cookie(default=None)):
+    """Return available LLM providers and their models."""
+    if not _current_user(openclaw_session):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"providers": _multi_chat.list_providers()}
+
+
+@app.get("/chat/sessions")
+def chat_sessions(openclaw_session: str | None = Cookie(default=None)):
+    """Return all chat sessions for the current user."""
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"sessions": _multi_chat.get_sessions(caller)}
+
+
+@app.post("/chat/sessions")
+def create_chat_session(
+    req: CreateSessionRequest,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Create a new chat session."""
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    session = _multi_chat.create_session(caller, provider=req.provider, model=req.model)
+    return session
+
+
+@app.delete("/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: str,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Delete a chat session and all its messages."""
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    ok = _multi_chat.delete_session(session_id, caller)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True}
+
+
+@app.post("/chat/sessions/{session_id}/clear")
+def clear_chat_session(
+    session_id: str,
+    openclaw_session: str | None = Cookie(default=None),
+):
+    """Clear all messages in a session without deleting the session."""
+    caller = _current_user(openclaw_session)
+    if not caller:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _multi_chat.clear_session(session_id, caller)
+    return {"ok": True}
+
+
 @app.post("/chat")
 def openai_chat(
     req: ChatRequest,
     openclaw_session: str | None = Cookie(default=None),
 ):
-    """Send a message to the OpenAI LLM and return the reply with memory."""
+    """Send a message to the selected LLM and return the reply with memory."""
     caller = _current_user(openclaw_session)
     # Allow bot calls with an explicit user_id even without a session cookie.
     user_id = req.user_id.strip() if req.user_id.strip() else caller
@@ -4452,9 +4520,21 @@ def openai_chat(
     if not req.message.strip():
         raise HTTPException(status_code=422, detail="message must not be empty")
     try:
-        reply = _chat.chat(user_id, req.message)
+        if req.session_id.strip():
+            # Multi-session path — use multi_chat_feature
+            reply = _multi_chat.chat(
+                user_id=user_id,
+                message=req.message,
+                session_id=req.session_id.strip(),
+                provider=req.provider or "openai",
+                model=req.model or "",
+                web_search=req.web_search,
+            )
+        else:
+            # Legacy path (Telegram bot, old clients) — use chat_feature
+            reply = _chat.chat(user_id, req.message)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"OpenAI error: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
     return {"reply": reply, "user_id": user_id}
 
 
@@ -4575,54 +4655,120 @@ _CHAT_WEB_HTML = """<!doctype html>
   <title>OpenClaw — Chat</title>
   <style>
     :root{
-      --bg:#0b0f14;--panel:#0f1621;--panel2:#0c121b;
+      --bg:#0b0f14;--panel:#0f1621;--panel2:#0c121b;--sidebar:#0d1420;
       --border:rgba(255,255,255,.08);--text:#e6eefc;
-      --muted:rgba(230,238,252,.55);--accent:#22c55e;--accent2:#16a34a;
-      --bubbleUser:#1d2a3a;--bubbleAgent:#101b27;
+      --muted:rgba(230,238,252,.50);--accent:#22c55e;--accent2:#16a34a;
+      --bubbleUser:#1d2a3a;--bubbleAgent:#101b27;--danger:#f87171;
       --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
       --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Courier New",monospace;
+      --sidebar-w:260px;
     }
     *{box-sizing:border-box;margin:0;padding:0;}
-    html,body{height:100%;font-family:var(--sans);background:radial-gradient(1200px 600px at 30% 0%,rgba(34,197,94,.10),transparent 55%),radial-gradient(900px 600px at 85% 20%,rgba(59,130,246,.08),transparent 55%),var(--bg);color:var(--text);overflow:hidden;}
-    /* Layout */
-    .shell{height:100vh;display:flex;flex-direction:column;}
-    header{padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.02);flex-shrink:0;}
-    .header-left{display:flex;align-items:center;gap:10px;}
-    .logo-mark{width:28px;height:28px;background:rgba(34,197,94,.15);border-radius:7px;display:flex;align-items:center;justify-content:center;}
-    .app-name{font-weight:700;font-size:1rem;}
-    .user-info{font-size:.82rem;color:var(--muted);}
-    .header-right{display:flex;align-items:center;gap:8px;}
-    .btn-sm{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;color:var(--muted);font-size:.8rem;padding:5px 12px;cursor:pointer;transition:all .15s;}
+    html,body{height:100%;font-family:var(--sans);
+      background:radial-gradient(1200px 600px at 30% 0%,rgba(34,197,94,.08),transparent 55%),
+                 radial-gradient(900px 600px at 85% 20%,rgba(59,130,246,.06),transparent 55%),
+                 var(--bg);
+      color:var(--text);overflow:hidden;}
+
+    /* ── Shell layout ── */
+    .shell{height:100vh;display:flex;}
+
+    /* ── Sidebar ── */
+    .sidebar{width:var(--sidebar-w);background:var(--sidebar);border-right:1px solid var(--border);
+      display:flex;flex-direction:column;flex-shrink:0;transition:transform .2s;}
+    .sidebar-header{padding:14px 12px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;}
+    .logo-mark{width:26px;height:26px;background:rgba(34,197,94,.15);border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .app-name{font-weight:700;font-size:.95rem;flex:1;}
+    .btn-new{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3);border-radius:8px;
+      color:var(--accent);font-size:.8rem;font-weight:600;padding:5px 10px;cursor:pointer;
+      white-space:nowrap;transition:all .15s;}
+    .btn-new:hover{background:rgba(34,197,94,.25);}
+    .sessions-list{flex:1;overflow-y:auto;padding:6px;}
+    .sessions-list::-webkit-scrollbar{width:3px;}
+    .sessions-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);}
+    .session-item{display:flex;align-items:center;gap:6px;padding:8px 10px;border-radius:10px;
+      cursor:pointer;transition:background .15s;group-hover:block;}
+    .session-item:hover{background:rgba(255,255,255,.06);}
+    .session-item.active{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.2);}
+    .session-title{flex:1;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .session-del{opacity:0;flex-shrink:0;background:none;border:none;color:var(--danger);
+      font-size:.9rem;cursor:pointer;padding:2px 4px;border-radius:4px;transition:opacity .15s;}
+    .session-item:hover .session-del{opacity:1;}
+    .sidebar-footer{padding:10px 12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;}
+    .sidebar-footer .user-email{font-size:.78rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+    /* ── Main area ── */
+    .main{flex:1;display:flex;flex-direction:column;min-width:0;}
+
+    /* ── Top bar ── */
+    .topbar{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;
+      gap:8px;background:rgba(255,255,255,.02);flex-shrink:0;flex-wrap:wrap;}
+    .topbar-left{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
+    .hamburger{display:none;background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;}
+    .session-label{font-size:.88rem;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;}
+    .topbar-right{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+    select.provider-sel,select.model-sel{background:rgba(255,255,255,.06);border:1px solid var(--border);
+      border-radius:8px;color:var(--text);font-size:.8rem;padding:5px 8px;cursor:pointer;outline:none;
+      transition:border .15s;}
+    select.provider-sel:focus,select.model-sel:focus{border-color:var(--accent);}
+    select.provider-sel option,select.model-sel option{background:#1a2130;color:var(--text);}
+    .btn-sm{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;
+      color:var(--muted);font-size:.8rem;padding:5px 10px;cursor:pointer;transition:all .15s;white-space:nowrap;}
     .btn-sm:hover{background:rgba(255,255,255,.10);color:var(--text);}
     .btn-sm.danger:hover{background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.4);color:#fca5a5;}
-    /* Chat */
+    .btn-search{background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:8px;
+      color:var(--muted);font-size:.8rem;padding:5px 10px;cursor:pointer;transition:all .15s;
+      display:flex;align-items:center;gap:4px;white-space:nowrap;}
+    .btn-search.active{background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.4);color:var(--accent);}
+    .btn-search:hover{background:rgba(255,255,255,.10);color:var(--text);}
+
+    /* ── Messages ── */
     .messages{flex:1;overflow-y:auto;padding:20px 16px;display:flex;flex-direction:column;gap:12px;}
     .messages::-webkit-scrollbar{width:4px;}
     .messages::-webkit-scrollbar-track{background:transparent;}
     .messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px;}
-    .bubble{max-width:75%;padding:12px 16px;border-radius:16px;font-size:.93rem;line-height:1.55;word-break:break-word;}
+    .bubble{max-width:78%;padding:12px 16px;border-radius:16px;font-size:.93rem;line-height:1.6;word-break:break-word;}
     .bubble.user{background:var(--bubbleUser);border:1px solid rgba(34,197,94,.15);align-self:flex-end;border-bottom-right-radius:4px;}
     .bubble.assistant{background:var(--bubbleAgent);border:1px solid var(--border);align-self:flex-start;border-bottom-left-radius:4px;}
-    .bubble .sender{font-size:.72rem;font-weight:600;margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;}
+    .bubble .sender{font-size:.72rem;font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:.6px;}
     .bubble.user .sender{color:var(--accent);}
     .bubble.assistant .sender{color:var(--muted);}
-    .bubble pre{background:rgba(0,0,0,.3);border-radius:8px;padding:10px 12px;margin-top:8px;overflow-x:auto;font-family:var(--mono);font-size:.82rem;}
-    /* Composer */
-    .composer{padding:12px 16px 16px;border-top:1px solid var(--border);background:rgba(255,255,255,.01);flex-shrink:0;}
-    .composer-row{display:flex;gap:8px;align-items:flex-end;}
-    textarea{flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:14px;padding:12px 14px;color:var(--text);font-size:.93rem;font-family:var(--sans);resize:none;outline:none;transition:border .15s;line-height:1.5;max-height:140px;}
-    textarea:focus{border-color:var(--accent);}
-    .send-btn{background:var(--accent);border:none;border-radius:12px;width:44px;height:44px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
-    .send-btn:hover{background:var(--accent2);}
-    .send-btn:disabled{background:rgba(34,197,94,.25);cursor:not-allowed;}
-    .send-btn svg{flex-shrink:0;}
-    .typing{display:none;align-self:flex-start;padding:10px 14px;background:var(--bubbleAgent);border:1px solid var(--border);border-radius:12px;border-bottom-left-radius:4px;}
-    .typing span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin:0 2px;animation:blink 1.2s infinite;}
+    /* Markdown styles inside bubbles */
+    .bubble h1,.bubble h2,.bubble h3{margin:.5em 0 .3em;font-size:1em;font-weight:700;}
+    .bubble p{margin:.3em 0;}
+    .bubble ul,.bubble ol{padding-left:1.4em;margin:.3em 0;}
+    .bubble li{margin:.15em 0;}
+    .bubble pre{background:rgba(0,0,0,.35);border-radius:8px;padding:10px 12px;margin:.5em 0;
+      overflow-x:auto;font-family:var(--mono);font-size:.82rem;}
+    .bubble code{background:rgba(0,0,0,.25);border-radius:4px;padding:1px 5px;font-family:var(--mono);font-size:.85em;}
+    .bubble pre code{background:none;padding:0;font-size:inherit;}
+    .bubble a{color:var(--accent);text-decoration:underline;}
+    .bubble strong{font-weight:700;}
+    .bubble em{font-style:italic;}
+    .bubble hr{border:none;border-top:1px solid var(--border);margin:.5em 0;}
+    .typing{display:none;align-self:flex-start;padding:10px 14px;background:var(--bubbleAgent);
+      border:1px solid var(--border);border-radius:12px;border-bottom-left-radius:4px;}
+    .typing span{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);
+      margin:0 2px;animation:blink 1.2s infinite;}
     .typing span:nth-child(2){animation-delay:.2s;}
     .typing span:nth-child(3){animation-delay:.4s;}
     @keyframes blink{0%,80%,100%{opacity:.2;}40%{opacity:1;}}
-    /* Change password modal */
-    .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;}
+
+    /* ── Composer ── */
+    .composer{padding:10px 14px 14px;border-top:1px solid var(--border);background:rgba(255,255,255,.01);flex-shrink:0;}
+    .composer-row{display:flex;gap:8px;align-items:flex-end;}
+    textarea{flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:14px;
+      padding:11px 14px;color:var(--text);font-size:.93rem;font-family:var(--sans);resize:none;outline:none;
+      transition:border .15s;line-height:1.5;max-height:160px;}
+    textarea:focus{border-color:var(--accent);}
+    .send-btn{background:var(--accent);border:none;border-radius:12px;width:42px;height:42px;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
+    .send-btn:hover{background:var(--accent2);}
+    .send-btn:disabled{background:rgba(34,197,94,.25);cursor:not-allowed;}
+    .send-btn svg{flex-shrink:0;}
+
+    /* ── Modal ── */
+    .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;align-items:center;justify-content:center;}
     .modal-bg.open{display:flex;}
     .modal{background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:28px;width:100%;max-width:360px;}
     .modal h2{font-size:1rem;font-weight:600;margin-bottom:16px;}
@@ -4635,45 +4781,81 @@ _CHAT_WEB_HTML = """<!doctype html>
     .modal-btns .cancel{background:rgba(255,255,255,.07);color:var(--text);}
     #pwErr{color:#f87171;font-size:.82rem;margin-top:10px;display:none;}
     #pwOk{color:var(--accent);font-size:.82rem;margin-top:10px;display:none;}
+
+    /* ── Responsive ── */
+    @media(max-width:700px){
+      .sidebar{position:fixed;inset:0 auto 0 0;z-index:50;transform:translateX(-100%);}
+      .sidebar.open{transform:translateX(0);}
+      .hamburger{display:block;}
+      .session-label{max-width:120px;}
+    }
   </style>
 </head>
 <body>
 <div class="shell">
-  <header>
-    <div class="header-left">
+
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-header">
       <div class="logo-mark">
-        <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+        <svg width="14" height="14" viewBox="0 0 32 32" fill="none">
           <path d="M8 22 L16 10 L24 22" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
           <circle cx="16" cy="10" r="3" fill="#22c55e"/>
         </svg>
       </div>
       <span class="app-name">OpenClaw AI</span>
+      <button class="btn-new" onclick="newSession()">+ New</button>
     </div>
-    <div class="header-right">
-      <span class="user-info" id="userEmail"></span>
+    <div class="sessions-list" id="sessionsList"></div>
+    <div class="sidebar-footer">
+      <div class="user-email" id="userEmailSidebar"></div>
       <button class="btn-sm" onclick="openPwModal()">Change password</button>
-      <button class="btn-sm danger" onclick="clearChat()">Clear history</button>
       <button class="btn-sm danger" onclick="logout()">Sign out</button>
     </div>
-  </header>
+  </nav>
 
-  <div class="messages" id="messages">
-    <div class="bubble assistant">
-      <div class="sender">Assistant</div>
-      Hello! I'm your OpenClaw AI assistant. How can I help you today?
+  <!-- Main -->
+  <div class="main">
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="hamburger" id="hamburger" onclick="toggleSidebar()" title="Toggle sidebar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <span class="session-label" id="sessionLabel">New chat</span>
+      </div>
+      <div class="topbar-right">
+        <select class="provider-sel" id="providerSel" onchange="onProviderChange()" title="LLM provider"></select>
+        <select class="model-sel" id="modelSel" title="Model"></select>
+        <button class="btn-search" id="searchToggle" onclick="toggleWebSearch()" title="Toggle web search">
+          🔍 Web search
+        </button>
+        <button class="btn-sm danger" onclick="clearSession()">Clear</button>
+      </div>
     </div>
-    <div class="typing" id="typing"><span></span><span></span><span></span></div>
-  </div>
 
-  <div class="composer">
-    <div class="composer-row">
-      <textarea id="input" rows="1" placeholder="Message OpenClaw AI…" autofocus></textarea>
-      <button class="send-btn" id="sendBtn" title="Send">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-          <path d="M22 2L11 13" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
+    <!-- Messages -->
+    <div class="messages" id="messages">
+      <div class="bubble assistant">
+        <div class="sender">Assistant</div>
+        Hello! I'm your OpenClaw AI assistant. Select a provider above and start chatting.
+      </div>
+      <div class="typing" id="typing"><span></span><span></span><span></span></div>
+    </div>
+
+    <!-- Composer -->
+    <div class="composer">
+      <div class="composer-row">
+        <textarea id="input" rows="1" placeholder="Message OpenClaw AI…" autofocus></textarea>
+        <button class="send-btn" id="sendBtn" title="Send">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <path d="M22 2L11 13" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="#0b0f14" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -4699,31 +4881,223 @@ _CHAT_WEB_HTML = """<!doctype html>
 
 <script>
 const EMAIL = __EMAIL__;
-document.getElementById("userEmail").textContent = EMAIL;
+document.getElementById("userEmailSidebar").textContent = EMAIL;
 
-const messagesEl = document.getElementById("messages");
-const inputEl    = document.getElementById("input");
-const sendBtn    = document.getElementById("sendBtn");
-const typingEl   = document.getElementById("typing");
+// ── State ──────────────────────────────────────────────────────────────────
+let currentSessionId = "";
+let webSearchEnabled = false;
+let providers = {};   // { openai: { name, models, default_model }, ... }
+let sessions = [];    // [{ id, title, provider, model, updated_at }, ...]
 
-// Auto-grow textarea
-inputEl.addEventListener("input", () => {
-  inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + "px";
-});
-inputEl.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-});
-sendBtn.addEventListener("click", send);
+const messagesEl  = document.getElementById("messages");
+const inputEl     = document.getElementById("input");
+const sendBtn     = document.getElementById("sendBtn");
+const typingEl    = document.getElementById("typing");
+const providerSel = document.getElementById("providerSel");
+const modelSel    = document.getElementById("modelSel");
+const sessionLabel = document.getElementById("sessionLabel");
+const sessionsList = document.getElementById("sessionsList");
+const searchToggle = document.getElementById("searchToggle");
 
-function scrollBottom() {
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+// ── Markdown renderer ─────────────────────────────────────────────────────
+function renderMarkdown(text) {
+  // Escape HTML in the raw text first so user content can never inject markup
+  let s = text
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;");
+
+  // Fenced code blocks (``` ... ```) — content already HTML-escaped, safe to wrap
+  s = s.replace(/```([\\w]*?)\\n([\\s\\S]*?)```/g, (_,lang,code) =>
+    `<pre><code>${code}</code></pre>`);
+  s = s.replace(/```([\\s\\S]*?)```/g, (_,code) => `<pre><code>${code}</code></pre>`);
+
+  // Inline code
+  s = s.replace(/`([^`\\n]+)`/g, "<code>$1</code>");
+
+  // Headers
+  s = s.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+  s = s.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+  s = s.replace(/^# (.+)$/gm, "<h1>$1</h1>");
+
+  // Bold / italic
+  s = s.replace(/\\*\\*\\*(.+?)\\*\\*\\*/g, "<strong><em>$1</em></strong>");
+  s = s.replace(/\\*\\*(.+?)\\*\\*/g, "<strong>$1</strong>");
+  s = s.replace(/\\*(.+?)\\*/g, "<em>$1</em>");
+  s = s.replace(/_([^_\\n]+)_/g, "<em>$1</em>");
+
+  // Horizontal rule
+  s = s.replace(/^---+$/gm, "<hr/>");
+
+  // Unordered lists — group consecutive <li> runs into <ul> blocks
+  s = s.replace(/^[ \\t]*[-*+] (.+)$/gm, "<li>$1</li>");
+  s = s.replace(/(<li>[\\s\\S]*?<\\/li>)(\\n<li>[\\s\\S]*?<\\/li>)*/g,
+    m => "<ul>" + m + "</ul>");
+
+  // Ordered lists — convert then wrap consecutive runs in <ol>
+  s = s.replace(/^[ \\t]*\\d+\\. (.+)$/gm, "<lio>$1</lio>");
+  s = s.replace(/(<lio>[\\s\\S]*?<\\/lio>)(\\n<lio>[\\s\\S]*?<\\/lio>)*/g,
+    m => "<ol>" + m.replace(/<\\/?lio>/g, m2 => m2.replace("lio","li")) + "</ol>");
+
+  // Links — only allow http/https URLs to prevent javascript: XSS
+  s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, (_, linkText, url) => {
+    const safeUrl = /^https?:\\/\\//i.test(url) ? url : "#";
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+  });
+
+  // Line breaks (not inside pre blocks)
+  s = s.replace(/\\n/g, "<br/>");
+
+  // Clean up extra br after block elements
+  s = s.replace(/(<\\/(?:h[123]|hr|pre|ul|ol)>)<br\\/>/g, "$1");
+  s = s.replace(/<br\\/>(\\s*)(<(?:h[123]|pre|ul|ol)>)/g, "$2");
+
+  return s;
 }
 
-function addBubble(role, text) {
-  // Move typing indicator to end
-  messagesEl.insertBefore(makeBubble(role, text), typingEl);
+// ── Provider / model selectors ─────────────────────────────────────────────
+async function loadProviders() {
+  try {
+    const res = await fetch("/chat/providers");
+    if (!res.ok) return;
+    const data = await res.json();
+    providers = data.providers || {};
+    providerSel.innerHTML = "";
+    for (const [id, info] of Object.entries(providers)) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = info.name;
+      providerSel.appendChild(opt);
+    }
+    populateModels(providerSel.value);
+  } catch(e) {}
+}
+
+function populateModels(providerId) {
+  const info = providers[providerId];
+  if (!info) return;
+  modelSel.innerHTML = "";
+  for (const m of info.models) {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    if (m === info.default_model) opt.selected = true;
+    modelSel.appendChild(opt);
+  }
+}
+
+function onProviderChange() {
+  populateModels(providerSel.value);
+}
+
+// ── Sessions ───────────────────────────────────────────────────────────────
+async function loadSessions() {
+  try {
+    const res = await fetch("/chat/sessions");
+    if (!res.ok) return;
+    const data = await res.json();
+    sessions = data.sessions || [];
+    renderSessionsList();
+    if (sessions.length === 0) {
+      await newSession();
+    } else if (!currentSessionId) {
+      await switchSession(sessions[0].id);
+    }
+  } catch(e) {}
+}
+
+function renderSessionsList() {
+  sessionsList.innerHTML = "";
+  for (const s of sessions) {
+    const item = document.createElement("div");
+    item.className = "session-item" + (s.id === currentSessionId ? " active" : "");
+    item.dataset.id = s.id;
+
+    const title = document.createElement("span");
+    title.className = "session-title";
+    title.textContent = s.title || "New chat";
+    title.title = s.title || "New chat";
+
+    const del = document.createElement("button");
+    del.className = "session-del";
+    del.textContent = "✕";
+    del.title = "Delete session";
+    del.addEventListener("click", e => { e.stopPropagation(); deleteSession(s.id); });
+
+    item.appendChild(title);
+    item.appendChild(del);
+    item.addEventListener("click", () => switchSession(s.id));
+    sessionsList.appendChild(item);
+  }
+}
+
+async function newSession() {
+  try {
+    const res = await fetch("/chat/sessions", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ provider: providerSel.value || "openai", model: modelSel.value || "" }),
+    });
+    if (!res.ok) return;
+    const session = await res.json();
+    sessions.unshift(session);
+    renderSessionsList();
+    await switchSession(session.id);
+  } catch(e) {}
+}
+
+async function switchSession(sessionId) {
+  currentSessionId = sessionId;
+  const s = sessions.find(x => x.id === sessionId);
+  sessionLabel.textContent = (s && s.title && s.title !== "New chat") ? s.title : "New chat";
+  // Update provider/model dropdowns to match session settings
+  if (s) {
+    if (s.provider && providerSel.querySelector(`option[value="${s.provider}"]`)) {
+      providerSel.value = s.provider;
+      populateModels(s.provider);
+    }
+    if (s.model && modelSel.querySelector(`option[value="${s.model}"]`)) {
+      modelSel.value = s.model;
+    }
+  }
+  renderSessionsList();
+  await loadSessionMessages(sessionId);
+}
+
+async function loadSessionMessages(sessionId) {
+  // Clear current messages (except typing indicator)
+  Array.from(messagesEl.querySelectorAll(".bubble")).forEach(b => b.remove());
+  messagesEl.appendChild(typingEl);
+  // Load history from server via a GET call to a new endpoint
+  // For now we rely on in-memory display — messages are shown as they arrive.
+  // A full history-load endpoint can be added later.
+  // Show welcome bubble
+  const welcome = makeBubble("assistant", "Hello! I'm your OpenClaw AI assistant. How can I help you?");
+  messagesEl.insertBefore(welcome, typingEl);
   scrollBottom();
+}
+
+async function deleteSession(sessionId) {
+  if (!confirm("Delete this conversation?")) return;
+  try {
+    const res = await fetch(`/chat/sessions/${sessionId}`, {method:"DELETE"});
+    if (!res.ok) return;
+    sessions = sessions.filter(s => s.id !== sessionId);
+    renderSessionsList();
+    if (currentSessionId === sessionId) {
+      currentSessionId = "";
+      if (sessions.length > 0) {
+        await switchSession(sessions[0].id);
+      } else {
+        await newSession();
+      }
+    }
+  } catch(e) {}
+}
+
+// ── Messaging ──────────────────────────────────────────────────────────────
+function scrollBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 function makeBubble(role, text) {
@@ -4733,24 +5107,28 @@ function makeBubble(role, text) {
   sender.className = "sender";
   sender.textContent = role === "user" ? "You" : "Assistant";
   div.appendChild(sender);
-  // Simple markdown: code blocks
   const content = document.createElement("div");
-  content.innerHTML = escapeAndFormat(text);
+  content.innerHTML = role === "assistant" ? renderMarkdown(text) : escapeHtml(text).replace(/\\n/g,"<br/>");
   div.appendChild(content);
   return div;
 }
 
-function escapeAndFormat(text) {
-  // Escape HTML then render ```code``` blocks
-  const escaped = text
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  return escaped.replace(/```([\\s\\S]*?)```/g, "<pre>$1</pre>")
-    .replace(/\\n/g, "<br/>");
+function escapeHtml(t) {
+  return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function addBubble(role, text) {
+  messagesEl.insertBefore(makeBubble(role, text), typingEl);
+  scrollBottom();
 }
 
 async function send() {
   const text = inputEl.value.trim();
   if (!text) return;
+  if (!currentSessionId) {
+    addBubble("assistant", "⚠️ No active session — click **+ New** to start a conversation.");
+    return;
+  }
   inputEl.value = "";
   inputEl.style.height = "auto";
   sendBtn.disabled = true;
@@ -4759,15 +5137,28 @@ async function send() {
   scrollBottom();
   try {
     const res = await fetch("/chat", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message: text}),
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        message: text,
+        session_id: currentSessionId,
+        provider: providerSel.value || "openai",
+        model: modelSel.value || "",
+        web_search: webSearchEnabled,
+      }),
     });
     if (res.status === 401) { window.location.href = "/login"; return; }
     const data = await res.json();
     const reply = data.reply || data.detail || data.error || "(no response)";
     typingEl.style.display = "none";
     addBubble("assistant", reply);
+    // Update session title in sidebar after first message
+    const s = sessions.find(x => x.id === currentSessionId);
+    if (s && (s.title === "New chat" || !s.title)) {
+      s.title = text.slice(0, 50);
+      sessionLabel.textContent = s.title;
+      renderSessionsList();
+    }
   } catch(e) {
     typingEl.style.display = "none";
     addBubble("assistant", "⚠️ Network error — please try again.");
@@ -4777,14 +5168,39 @@ async function send() {
   }
 }
 
-async function clearChat() {
-  if (!confirm("Clear your entire conversation history?")) return;
-  await fetch("/chat/clear", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({})});
-  document.querySelectorAll(".bubble").forEach(b => b.remove());
-  messagesEl.appendChild(typingEl);
-  addBubble("assistant", "Conversation history cleared. How can I help you?");
+// ── Controls ───────────────────────────────────────────────────────────────
+function toggleWebSearch() {
+  webSearchEnabled = !webSearchEnabled;
+  searchToggle.classList.toggle("active", webSearchEnabled);
 }
 
+async function clearSession() {
+  if (!currentSessionId) return;
+  if (!confirm("Clear all messages in this conversation? The session will remain.")) return;
+  try {
+    await fetch(`/chat/sessions/${currentSessionId}/clear`, {method:"POST"});
+  } catch(e) {}
+  // Remove message bubbles from view
+  Array.from(messagesEl.querySelectorAll(".bubble")).forEach(b => b.remove());
+  messagesEl.appendChild(typingEl);
+  addBubble("assistant", "Conversation cleared. How can I help you?");
+}
+
+function toggleSidebar() {
+  document.getElementById("sidebar").classList.toggle("open");
+}
+
+// ── Input ──────────────────────────────────────────────────────────────────
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+});
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+sendBtn.addEventListener("click", send);
+
+// ── Auth ───────────────────────────────────────────────────────────────────
 async function logout() {
   await fetch("/auth/logout", {method:"POST"});
   window.location.href = "/login";
@@ -4796,20 +5212,19 @@ function openPwModal() {
 }
 function closePwModal() {
   document.getElementById("pwModal").classList.remove("open");
-  ["oldPw","newPw","confirmPw"].forEach(id => document.getElementById(id).value="");
-  document.getElementById("pwErr").style.display="none";
-  document.getElementById("pwOk").style.display="none";
+  ["oldPw","newPw","confirmPw"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("pwErr").style.display = "none";
+  document.getElementById("pwOk").style.display = "none";
 }
-
 async function submitPwChange() {
   const oldPw = document.getElementById("oldPw").value;
   const newPw = document.getElementById("newPw").value;
   const confirmPw = document.getElementById("confirmPw").value;
   const errEl = document.getElementById("pwErr");
-  const okEl  = document.getElementById("pwOk");
-  errEl.style.display="none"; okEl.style.display="none";
-  if (newPw !== confirmPw) { errEl.textContent="Passwords do not match"; errEl.style.display="block"; return; }
-  if (newPw.length < 8) { errEl.textContent="Password must be at least 8 characters"; errEl.style.display="block"; return; }
+  const okEl = document.getElementById("pwOk");
+  errEl.style.display = "none"; okEl.style.display = "none";
+  if (newPw !== confirmPw) { errEl.textContent = "Passwords do not match"; errEl.style.display = "block"; return; }
+  if (newPw.length < 8) { errEl.textContent = "Password must be at least 8 characters"; errEl.style.display = "block"; return; }
   const res = await fetch("/auth/change-password", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({email: EMAIL, old_password: oldPw, new_password: newPw}),
@@ -4824,6 +5239,12 @@ async function submitPwChange() {
     errEl.style.display = "block";
   }
 }
+
+// ── Init ───────────────────────────────────────────────────────────────────
+(async () => {
+  await loadProviders();
+  await loadSessions();
+})();
 </script>
 </body>
 </html>"""
