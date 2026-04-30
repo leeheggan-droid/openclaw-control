@@ -71,7 +71,8 @@ class Settings:
     # Agent / environment identifiers (used for multi-tenant deployments)
     agent_id: str = os.getenv("AGENT_ID", "")
     env_id: str = os.getenv("ENV_ID", "")
-    # Web server port (used by uvicorn; default matches the Dockerfile / systemd service)
+    # Web server host and port (used by uvicorn; defaults match the Dockerfile / systemd service)
+    host: str = os.getenv("HOST", "127.0.0.1")
     port: int = _int_env("PORT", 8001)
 
 settings = Settings()

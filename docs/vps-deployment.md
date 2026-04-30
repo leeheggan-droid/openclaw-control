@@ -163,13 +163,13 @@ sudo -u openclaw-agent python3 -m venv .venv
 sudo -u openclaw-agent .venv/bin/pip install -r requirements.txt
 
 # 4. Install and start the systemd service
-sudo cp systemd/openclaw-cockpit.service /etc/systemd/system/
+sudo cp systemd/openclaw-web.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now openclaw-cockpit
+sudo systemctl enable --now openclaw-web
 
 # Check it started correctly
-sudo systemctl status openclaw-cockpit
-journalctl -u openclaw-cockpit -n 30
+sudo systemctl status openclaw-web
+journalctl -u openclaw-web -n 30
 ```
 
 ### Option B — Docker Compose (Traefik)
@@ -338,7 +338,7 @@ Common causes of startup failure:
 | `TELEGRAM_BOT_TOKEN is not set` | Add the token to `/etc/openclaw-control.env` and restart |
 | `Unauthorized` / `401` | The token is invalid — regenerate it via @BotFather |
 | `Failed to build Telegram application` | Check the full stack trace in `telegram_bot_error.log` |
-| Bot starts but chat replies fail | Verify the cockpit is running (`systemctl status openclaw-cockpit`) |
+| Bot starts but chat replies fail | Verify the web service is running (`systemctl status openclaw-web`) |
 
 ---
 
@@ -346,7 +346,7 @@ Common causes of startup failure:
 
 | Symptom | Action |
 |---------|--------|
-| Cockpit not reachable at domain | Check `systemctl status openclaw-cockpit` and `systemctl status caddy` |
+| Cockpit not reachable at domain | Check `systemctl status openclaw-web` and `systemctl status caddy` |
 | Container restart loop | `docker logs openclaw-cockpit --tail 50` |
 | `ModuleNotFoundError: No module named 'agents'` | Rebuild the image — `openai-agents` is now in `requirements.txt` |
 | `ImportError: cannot import name 'Agent' from 'agents' (…/openclaw_control/agents/__init__.py)` | Do **not** set `PYTHONPATH=/app/openclaw_control`; the local `agents/` sub-package shadows the pip package |
