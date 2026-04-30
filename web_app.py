@@ -65,20 +65,21 @@ _MAX_ERROR_MSG_LEN = 200
 
 
 def _safe_error_msg(raw: str) -> str:
-    """Return a client-safe, length-capped error message.
+    """Return a client-safe error message.
 
-    Credentials-not-set messages are passed through as-is (they contain no
-    sensitive internal state).  All other messages are replaced with a generic
-    string to avoid leaking internal exception details or stack frames.
+    Credentials-not-set messages (which do not contain exception data) are
+    returned as a generic 'not configured' notice.  All other errors return a
+    fixed generic string so that internal details are never leaked to clients.
+    The full message is always logged before calling this function.
     """
-    _SAFE_PREFIXES = (
+    _CRED_MISSING_PREFIXES = (
         "KRAKEN_API_KEY",
         "ALPACA_API_KEY",
         "KRAKEN_SECRET_KEY",
         "ALPACA_SECRET_KEY",
     )
-    if any(raw.startswith(p) for p in _SAFE_PREFIXES):
-        return raw[:_MAX_ERROR_MSG_LEN]
+    if any(raw.startswith(p) for p in _CRED_MISSING_PREFIXES):
+        return "Exchange API credentials not configured — set the required environment variables."
     return "Exchange API error — check server logs for details."
 
 
@@ -4258,19 +4259,31 @@ def exchange_kraken_live():
 
     Requires KRAKEN_API_KEY and KRAKEN_SECRET_KEY environment variables.
     """
-    positions = _fetch_kraken_positions()
-    balance = _fetch_kraken_balance()
-    positions_error = positions if isinstance(positions, str) else None
-    balance_error = balance if isinstance(balance, str) else None
-    if positions_error:
-        _logger.warning("Kraken positions fetch error: %s", positions_error)
-    if balance_error:
-        _logger.warning("Kraken balance fetch error: %s", balance_error)
+    positions_raw = _fetch_kraken_positions()
+    balance_raw = _fetch_kraken_balance()
+
+    # Decouple from any exception-tainted strings before building the response.
+    if isinstance(positions_raw, list):
+        positions_out: list = positions_raw
+        positions_err: str | None = None
+    else:
+        _logger.warning("Kraken positions fetch error: %s", positions_raw)
+        positions_out = []
+        positions_err = _safe_error_msg(positions_raw)
+
+    if isinstance(balance_raw, dict):
+        balance_out: dict | None = balance_raw
+        balance_err: str | None = None
+    else:
+        _logger.warning("Kraken balance fetch error: %s", balance_raw)
+        balance_out = None
+        balance_err = _safe_error_msg(balance_raw)
+
     return {
-        "positions": positions if isinstance(positions, list) else [],
-        "positions_error": _safe_error_msg(positions_error) if positions_error else None,
-        "balance": balance if isinstance(balance, dict) else None,
-        "balance_error": _safe_error_msg(balance_error) if balance_error else None,
+        "positions": positions_out,
+        "positions_error": positions_err,
+        "balance": balance_out,
+        "balance_error": balance_err,
         "source": "kraken",
     }
 
@@ -4281,19 +4294,31 @@ def exchange_alpaca_live():
 
     Requires ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables.
     """
-    positions = _fetch_alpaca_positions()
-    account = _fetch_alpaca_account()
-    positions_error = positions if isinstance(positions, str) else None
-    account_error = account if isinstance(account, str) else None
-    if positions_error:
-        _logger.warning("Alpaca positions fetch error: %s", positions_error)
-    if account_error:
-        _logger.warning("Alpaca account fetch error: %s", account_error)
+    positions_raw = _fetch_alpaca_positions()
+    account_raw = _fetch_alpaca_account()
+
+    # Decouple from any exception-tainted strings before building the response.
+    if isinstance(positions_raw, list):
+        positions_out_a: list = positions_raw
+        positions_err_a: str | None = None
+    else:
+        _logger.warning("Alpaca positions fetch error: %s", positions_raw)
+        positions_out_a = []
+        positions_err_a = _safe_error_msg(positions_raw)
+
+    if isinstance(account_raw, dict):
+        account_out: dict | None = account_raw
+        account_err: str | None = None
+    else:
+        _logger.warning("Alpaca account fetch error: %s", account_raw)
+        account_out = None
+        account_err = _safe_error_msg(account_raw)
+
     return {
-        "positions": positions if isinstance(positions, list) else [],
-        "positions_error": _safe_error_msg(positions_error) if positions_error else None,
-        "account": account if isinstance(account, dict) else None,
-        "account_error": _safe_error_msg(account_error) if account_error else None,
+        "positions": positions_out_a,
+        "positions_error": positions_err_a,
+        "account": account_out,
+        "account_error": account_err,
         "source": "alpaca",
     }
 
