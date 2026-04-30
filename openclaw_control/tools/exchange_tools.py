@@ -39,6 +39,7 @@ _ALPACA_PAPER_BASE = "https://paper-api.alpaca.markets"
 
 _REQUEST_TIMEOUT = 10  # seconds
 _ALPACA_MAX_LIMIT = 50
+_MIN_VOLUME_GUARD = 1e-12  # avoid division-by-zero when computing average entry price
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +258,7 @@ def fetch_kraken_open_positions() -> list[dict[str, Any]] | str:
                 "side": pos.get("type", ""),
                 "size": float(pos.get("vol", 0)),
                 "size_closed": float(pos.get("vol_closed", 0)),
-                "entry_price": float(pos.get("cost", 0)) / max(float(pos.get("vol", 1)), 1e-12),
+                "entry_price": float(pos.get("cost", 0)) / max(float(pos.get("vol", 1)), _MIN_VOLUME_GUARD),
                 "cost": float(pos.get("cost", 0)),
                 "fee": float(pos.get("fee", 0)),
                 "net_pnl": float(pos.get("net", 0)) if pos.get("net") is not None else None,

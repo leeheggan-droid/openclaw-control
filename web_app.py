@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -56,6 +57,29 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=_lifespan)
+
+_logger = logging.getLogger(__name__)
+
+# Maximum length for error messages returned to API clients.
+_MAX_ERROR_MSG_LEN = 200
+
+
+def _safe_error_msg(raw: str) -> str:
+    """Return a client-safe, length-capped error message.
+
+    Credentials-not-set messages are passed through as-is (they contain no
+    sensitive internal state).  All other messages are replaced with a generic
+    string to avoid leaking internal exception details or stack frames.
+    """
+    _SAFE_PREFIXES = (
+        "KRAKEN_API_KEY",
+        "ALPACA_API_KEY",
+        "KRAKEN_SECRET_KEY",
+        "ALPACA_SECRET_KEY",
+    )
+    if any(raw.startswith(p) for p in _SAFE_PREFIXES):
+        return raw[:_MAX_ERROR_MSG_LEN]
+    return "Exchange API error — check server logs for details."
 
 
 class Message(BaseModel):
@@ -4236,11 +4260,17 @@ def exchange_kraken_live():
     """
     positions = _fetch_kraken_positions()
     balance = _fetch_kraken_balance()
+    positions_error = positions if isinstance(positions, str) else None
+    balance_error = balance if isinstance(balance, str) else None
+    if positions_error:
+        _logger.warning("Kraken positions fetch error: %s", positions_error)
+    if balance_error:
+        _logger.warning("Kraken balance fetch error: %s", balance_error)
     return {
         "positions": positions if isinstance(positions, list) else [],
-        "positions_error": positions if isinstance(positions, str) else None,
+        "positions_error": _safe_error_msg(positions_error) if positions_error else None,
         "balance": balance if isinstance(balance, dict) else None,
-        "balance_error": balance if isinstance(balance, str) else None,
+        "balance_error": _safe_error_msg(balance_error) if balance_error else None,
         "source": "kraken",
     }
 
@@ -4253,11 +4283,17 @@ def exchange_alpaca_live():
     """
     positions = _fetch_alpaca_positions()
     account = _fetch_alpaca_account()
+    positions_error = positions if isinstance(positions, str) else None
+    account_error = account if isinstance(account, str) else None
+    if positions_error:
+        _logger.warning("Alpaca positions fetch error: %s", positions_error)
+    if account_error:
+        _logger.warning("Alpaca account fetch error: %s", account_error)
     return {
         "positions": positions if isinstance(positions, list) else [],
-        "positions_error": positions if isinstance(positions, str) else None,
+        "positions_error": _safe_error_msg(positions_error) if positions_error else None,
         "account": account if isinstance(account, dict) else None,
-        "account_error": account if isinstance(account, str) else None,
+        "account_error": _safe_error_msg(account_error) if account_error else None,
         "source": "alpaca",
     }
 
