@@ -29,6 +29,7 @@ from openclaw_control.memory import agent_memory as _memory
 from openclaw_control.service import (
     handle_message, handle_agent_message,
     run_vibe_report,
+    run_ssh,
     run_ssh_readonly,
     start_team_review, get_team_review_events,
     start_vibe_run, get_vibe_run, handle_vibe_next,
@@ -235,8 +236,12 @@ def ops_report(report_id: str):
 _READONLY_CMD_MAX_LEN = 512
 
 
-class ReadonlySshRequest(BaseModel):
+class SshCommandRequest(BaseModel):
     cmd: str
+
+
+# Alias kept for the read-only endpoint that predates this rename.
+ReadonlySshRequest = SshCommandRequest
 
 
 @app.post("/ops/ssh-readonly-run")
@@ -266,6 +271,49 @@ def ops_ssh_readonly_run(req: ReadonlySshRequest):
             ),
         )
     result = run_ssh_readonly(cmd, timeout=30)
+    return result
+
+
+# Exact commands permitted through the VIBE-lane probe endpoint.
+# Using an exact-match set eliminates shell-injection risk entirely —
+# every permitted string is a hardcoded, known-safe value.
+_VIBE_PROBE_COMMANDS = frozenset({
+    "whoami",
+    "uptime",
+    "docker ps",
+    "docker compose ps",
+    "ls -la",
+    "docker logs --tail=200 openclaw-orchestrator",
+    (
+        "timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null"
+        " || docker logs --tail=200 openclaw-orchestrator"
+    ),
+})
+
+
+@app.post("/ops/ssh-vibe-probe")
+def ops_ssh_vibe_probe(req: SshCommandRequest):
+    """Run a single safe diagnostic command on the VIBE execution host.
+
+    This endpoint exists so that probe commands (e.g. ``whoami``, ``docker ps``)
+    can be verified against the VIBE SSH lane rather than the READONLY lane.
+    Only commands that appear verbatim in ``_VIBE_PROBE_COMMANDS`` are accepted;
+    all others are rejected with 422.
+    """
+    cmd = (req.cmd or "").strip()
+    if not cmd:
+        raise HTTPException(status_code=422, detail="cmd must not be empty")
+    if cmd not in _VIBE_PROBE_COMMANDS:
+        raise HTTPException(
+            status_code=422,
+            detail="command is not in the vibe-probe allowlist",
+        )
+    if not settings.ssh_host:
+        raise HTTPException(
+            status_code=503,
+            detail="OPENCLAW_SSH_HOST is not configured — vibe SSH features are disabled.",
+        )
+    result = run_ssh(cmd, timeout=60)
     return result
 
 
@@ -1670,14 +1718,25 @@ def index():
         </div>
       </div>
 
+      <!-- VIBE probe approval banner — shown before identity/diagnostic pill commands -->
+      <div class="vibeApprovalBanner" id="vibeProbeApprovalBanner">
+        <div class="vibeApprovalTitle">🔵 VIBE lane (probe) — confirm before running</div>
+        <div class="vibeApprovalCmd" id="vibeProbeApprovalCmd"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="vibeProbeApprovalHost"></div>
+        <div class="vibeApprovalBtns">
+          <button class="vibeBtn vibePrimaryBtn" id="vibeProbeConfirmBtn">✅ Confirm &amp; Run</button>
+          <button class="vibeBtn vibeDangerBtn" id="vibeProbeCancelBtn">✗ Cancel</button>
+        </div>
+      </div>
+
       <div class="termControls">
-        <button class="pill" onclick="runReadonlyQuick('uptime')">uptime</button>
-        <button class="pill" onclick="runReadonlyQuick('whoami')">whoami</button>
-        <button class="pill" onclick="runReadonlyQuick('docker ps')">docker ps</button>
-        <button class="pill" onclick="runReadonlyQuick('docker compose ps')">docker compose ps</button>
-        <button class="pill" onclick="runReadonlyQuick('ls -la')">ls -la</button>
-        <button class="pill" onclick="runReadonlyQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
-        <button class="pill" onclick="runReadonlyQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
+        <button class="pill" onclick="runVibeProbeQuick('uptime')">uptime</button>
+        <button class="pill" onclick="runVibeProbeQuick('whoami')">whoami</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker ps')">docker ps</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker compose ps')">docker compose ps</button>
+        <button class="pill" onclick="runVibeProbeQuick('ls -la')">ls -la</button>
+        <button class="pill" onclick="runVibeProbeQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
+        <button class="pill" onclick="runVibeProbeQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
         <button class="pill" onclick="confirmDockerRefresh()">docker refresh</button>
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
@@ -2219,6 +2278,72 @@ def index():
    */
   function runReadonlyQuick(cmd) {
     showReadonlyApproval(cmd);
+  }
+
+  // ── VIBE lane probe — approval gate for identity/diagnostic commands ─────────
+
+  const vibeProbeApprovalBannerEl = document.getElementById("vibeProbeApprovalBanner");
+  const vibeProbeApprovalCmdEl    = document.getElementById("vibeProbeApprovalCmd");
+  const vibeProbeApprovalHostEl   = document.getElementById("vibeProbeApprovalHost");
+  const vibeProbeConfirmBtnEl     = document.getElementById("vibeProbeConfirmBtn");
+  const vibeProbeCancelBtnEl      = document.getElementById("vibeProbeCancelBtn");
+
+  let _pendingVibeProbeCmd = "";
+
+  function showVibeProbeApproval(cmd) {
+    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
+    vibeProbeApprovalCmdEl.textContent = "ssh " + host + " " + shellQuote(cmd);
+    vibeProbeApprovalHostEl.textContent = "Lane: VIBE (probe)  •  Host: " + host;
+    _pendingVibeProbeCmd = cmd;
+    vibeProbeApprovalBannerEl.style.display = "flex";
+    vibeProbeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
+  }
+
+  function hideVibeProbeApproval() {
+    vibeProbeApprovalBannerEl.style.display = "none";
+    _pendingVibeProbeCmd = "";
+  }
+
+  vibeProbeCancelBtnEl.onclick = hideVibeProbeApproval;
+
+  vibeProbeConfirmBtnEl.onclick = async () => {
+    const cmd = _pendingVibeProbeCmd;
+    if (!cmd) return;
+    hideVibeProbeApproval();
+    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
+    const prompt = host + ":$ " + cmd;
+    termLine("prompt", prompt);
+    setBusy(true);
+    try {
+      const res = await fetch(API_BASE + "/ops/ssh-vibe-probe", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({cmd}),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({detail: res.statusText}));
+        termLine("err", "VIBE probe SSH error: " + (detail.detail || res.statusText));
+        return;
+      }
+      const data = await res.json();
+      const out = (data.stdout || "");
+      const err = (data.stderr || data.error || "");
+      if (out) termLine("out", out.trimEnd());
+      if (err) termLine("err", err.trimEnd());
+      if (!out && !err) termLine("out", "[no output]");
+    } catch(e) {
+      termLine("err", "VIBE probe SSH request failed: " + (e && e.message ? e.message : String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Run a VIBE-lane probe command (identity/diagnostic only).
+   * Shows an approval banner and waits for operator confirmation.
+   */
+  function runVibeProbeQuick(cmd) {
+    showVibeProbeApproval(cmd);
   }
 
   // --- Copilot bridge ---
