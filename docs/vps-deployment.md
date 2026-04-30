@@ -69,6 +69,13 @@ GITHUB_TOKEN=ghp_...         # ⚠️  never commit a real token to source contr
 GITHUB_REPO=leeheggan-droid/openclaw-control
 ```
 
+> **Editing an existing key:** If the file already contains `AUTH_SECRET_KEY=`
+> (or any other variable), change the value on that existing line — do **not**
+> add a second line with the same key. Most env-file parsers (including
+> systemd's `EnvironmentFile=` loader) use the **last** occurrence of a key,
+> so a stale earlier value is silently ignored, which can cause hard-to-debug
+> surprises. Keeping one entry per key is the safest approach.
+
 The READONLY lane (`OPENCLAW_SSH_READONLY_HOST`) is used for read-only probes,
 snapshots, and the `/ops/ssh-readonly-run` endpoint. The cockpit surfaces it in
 the `/config` response so you can verify it is loaded correctly.
@@ -345,3 +352,47 @@ Common causes of startup failure:
 | `ImportError: cannot import name 'Agent' from 'agents' (…/openclaw_control/agents/__init__.py)` | Do **not** set `PYTHONPATH=/app/openclaw_control`; the local `agents/` sub-package shadows the pip package |
 | Certificate not issued | Check DNS propagation (`dig leeheggan.tech`), verify ports 80/443 open |
 | SSH connection refused from container | Verify SSH keys are mounted, `OPENCLAW_SSH_KEY` / `OPENCLAW_SSH_READONLY_KEY` point to the right private key, and `known_hosts` contains the target |
+
+### Existing or duplicate keys in a systemd unit file
+
+**Do I need to remove an existing key before adding a new value?**  
+No. If the key already exists in the file, edit its value in-place. Do **not**
+add a second copy of the key — just change the existing line.
+
+**What happens if the same key appears more than once?**  
+In a systemd unit file (`.service`, `.timer`, etc.) systemd applies a
+**last-value-wins** rule for most directives: only the final occurrence is used,
+and earlier duplicates are silently ignored. This makes debugging tricky, so
+the best practice is to keep **one entry per key**.
+
+> **Exception — additive directives:** A handful of directives (e.g.
+> `ExecStartPre=`, `Environment=`, `After=`) are intentionally additive: each
+> additional line *appends* to the list rather than replacing it.  For these
+> keys, multiple lines are perfectly normal and expected.
+
+**Does having an existing key indicate a problem?**  
+Not by itself. A pre-existing key simply means the file was already
+configured; you only need to act if the current value is wrong.
+
+**Is a duplicate key the likely cause of my service failure?**  
+Rarely.  Most `openclaw-web` startup failures come from one of these causes:
+
+| Root cause | What to check |
+|---|---|
+| Wrong path in `ExecStart` | Ensure every directory and filename exists exactly as written |
+| `User=` names a non-existent system user | Run `id <username>` to confirm |
+| Missing or wrong `AUTH_SECRET_KEY` | Check `/etc/openclaw-control.env`; it must not be the default placeholder |
+| Service restarting too fast | Run `journalctl -u openclaw-web -n 50` and look for the first failure |
+
+**Best practices**
+
+1. Open the unit file with `sudo nano /etc/systemd/system/openclaw-web.service`
+   and update values in-place — never paste a whole new block on top of an
+   existing one.
+2. After any edit, run `sudo systemctl daemon-reload` before restarting the
+   service so systemd picks up the new configuration.
+3. Verify the loaded configuration with
+   `sudo systemctl cat openclaw-web` — this shows the file exactly as systemd
+   has parsed it, making duplicate lines easy to spot.
+4. For the environment file (`/etc/openclaw-control.env`), apply the same
+   one-key-per-line rule: edit the existing line rather than adding a new one.
