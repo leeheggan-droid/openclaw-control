@@ -579,11 +579,27 @@ def _coo_partial_memo(workspace: dict) -> str:
 
 
 def _record_run_usage(result: RunResult) -> None:
-    """Extract token counts from a RunResult and update the daily budget tracker."""
-    total_in = sum(r.usage.input_tokens for r in result.raw_responses if r.usage is not None)
-    total_out = sum(r.usage.output_tokens for r in result.raw_responses if r.usage is not None)
-    if total_in or total_out:
-        budget.record_usage(total_in, total_out)
+    """Extract token counts from a RunResult and update the daily budget tracker.
+
+    Guarded with a broad try/except because budget tracking is non-critical;
+    a failure here must never surface as an "Agent error" to the caller.
+    Handles agents SDK versions that return None for individual token fields.
+    """
+    try:
+        total_in = sum(
+            (r.usage.input_tokens or 0)
+            for r in result.raw_responses
+            if r.usage is not None
+        )
+        total_out = sum(
+            (r.usage.output_tokens or 0)
+            for r in result.raw_responses
+            if r.usage is not None
+        )
+        if total_in or total_out:
+            budget.record_usage(total_in, total_out)
+    except Exception:
+        pass  # budget tracking is best-effort
 
 
 def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
