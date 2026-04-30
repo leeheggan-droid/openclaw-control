@@ -21,6 +21,7 @@ RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        openssh-client \
         python3 \
         python3-pip \
  && rm -rf /var/lib/apt/lists/*

@@ -121,6 +121,8 @@ strip_options() {
 
 lane="both"
 pubkey_file=""
+fix_uid=0
+fix_ssh_config=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -144,6 +146,14 @@ while [[ $# -gt 0 ]]; do
             pubkey_file="${1#*=}"
             shift
             ;;
+        --fix-uid)
+            fix_uid=1
+            shift
+            ;;
+        --fix-ssh-config)
+            fix_ssh_config=1
+            shift
+            ;;
         -h|--help)
             cat <<EOF
 Usage: sudo bash vibe-gateway/bin/repair-authorized-keys.sh [options]
@@ -155,6 +165,16 @@ Options:
   --lane vibe|readonly|both   Which lane to repair (default: both)
   --pubkey-file /path/to.pub  Path to a .pub file to seed the key when
                               authorized_keys is missing or empty
+  --fix-uid                   Change openclaw-vibe UID to 1500 and re-chown its
+                              home directory.  Required on systems where the user
+                              was created as a system account (uid<1000) before
+                              the uid=1500 requirement was introduced.  This
+                              ensures the Docker container (vibeuser uid=1500)
+                              can read the 0600 SSH key files.
+  --fix-ssh-config            Rewrite /var/lib/openclaw-vibe/.ssh/config to use
+                              ~ -relative paths (IdentityFile, UserKnownHostsFile)
+                              so the same file works both on the host and inside
+                              the Docker container where ~/.ssh is bind-mounted.
   -h, --help                  Show this help
 
 Vibe lane
@@ -177,6 +197,60 @@ case "$lane" in
     vibe|readonly|both) ;;
     *) die "--lane must be 'vibe', 'readonly', or 'both'; got '${lane}'" ;;
 esac
+
+# ── optional: fix openclaw-vibe UID ───────────────────────────────────────────
+# Deployments where openclaw-vibe was created with --system receive a UID below
+# 1000.  The Docker container runs as vibeuser (UID 1500) and cannot read 0600
+# key files owned by a different UID.  --fix-uid changes the host UID to 1500
+# and re-chowns the home directory so ownership matches the container.
+
+if [[ $fix_uid -eq 1 ]]; then
+    current_uid="$(id -u "$VIBE_USER" 2>/dev/null)" \
+        || die "user '${VIBE_USER}' does not exist"
+    if [[ "$current_uid" -eq 1500 ]]; then
+        info "openclaw-vibe already has uid=1500 — skipping --fix-uid"
+    else
+        info "changing ${VIBE_USER} uid from ${current_uid} to 1500"
+        usermod --uid 1500 "$VIBE_USER"
+        groupmod --gid 1500 "$VIBE_USER" 2>/dev/null || true
+        find "$VIBE_HOME" -user "$current_uid" -exec chown -h "${VIBE_USER}:${VIBE_USER}" {} + 2>/dev/null || true
+        chown -R "${VIBE_USER}:${VIBE_USER}" "$VIBE_HOME"
+        info "✓ ${VIBE_USER} uid changed to 1500; ${VIBE_HOME} re-chowned"
+    fi
+fi
+
+# ── optional: rewrite SSH config to use ~-relative paths ─────────────────────
+# The SSH config written by older installs uses absolute paths like
+# /var/lib/openclaw-vibe/.ssh/... which do not resolve inside the Docker
+# container (home=/home/vibeuser).  --fix-ssh-config rewrites the file to use
+# ~ -relative paths that work in both environments.
+
+if [[ $fix_ssh_config -eq 1 ]]; then
+    ssh_config="${VIBE_HOME}/.ssh/config"
+    if [[ ! -f "$ssh_config" ]]; then
+        warn "SSH config not found: ${ssh_config} — nothing to fix"
+    else
+        # Check whether absolute paths are present.
+        if grep -qE 'IdentityFile[[:space:]]*/|UserKnownHostsFile[[:space:]]*/'\
+                "$ssh_config" 2>/dev/null; then
+            info "rewriting absolute paths to ~ -relative in ${ssh_config}"
+            tmp="$(mktemp "${ssh_config}.tmp.XXXXXX")"
+            chmod 0600 "$tmp"
+            sed \
+                -e 's|^\([[:space:]]*IdentityFile[[:space:]]*\).*/\.ssh/\(.*\)|\1~/.ssh/\2|' \
+                -e 's|^\([[:space:]]*UserKnownHostsFile[[:space:]]*\).*/\.ssh/\(.*\)|\1~/.ssh/\2|' \
+                "$ssh_config" > "$tmp"
+            mv "$tmp" "$ssh_config"
+            chown "${VIBE_USER}:${VIBE_USER}" "$ssh_config"
+            chmod 0600 "$ssh_config"
+            info "✓ SSH config updated"
+            info "New content:"
+            sed 's/^/  /' "$ssh_config" >&2
+        else
+            info "SSH config already uses relative paths — no changes needed"
+        fi
+    fi
+fi
 
 # ── optional: validate pubkey file ────────────────────────────────────────────
 

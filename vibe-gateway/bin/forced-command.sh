@@ -55,9 +55,29 @@ log "invoked; user=$(id -un) cmd=${cmd}"
 # Expected (order-fixed):
 #   vibe --workdir /abs/path --prompt __B64__
 #   vibe --workdir /abs/path -p __B64__
+#
+# Callers may also prefix the command with an inline env-var assignment:
+#   OPENCLAW_PROMPT_B64=<b64> vibe --workdir /abs/path -p __B64__
+#
+# When SSH forwards the command as a single string (the most common usage),
+# sshd places the entire string — including any NAME=VALUE prefix — into
+# SSH_ORIGINAL_COMMAND verbatim.  It does NOT parse shell env-var assignments.
+# We handle this explicitly: only OPENCLAW_PROMPT_B64 is accepted as an inline
+# assignment; any other NAME=VALUE token at position 0 is rejected.
+#
 # We parse tokens manually — no eval, no bash -c.
 
 read -r -a tokens <<< "$cmd"
+
+# Strip leading OPENCLAW_PROMPT_B64=<value> if present.
+if [[ "${tokens[0]:-}" == OPENCLAW_PROMPT_B64=* ]]; then
+    inline_b64="${tokens[0]#OPENCLAW_PROMPT_B64=}"
+    # Inline value populates the env var when it is not already set.
+    [[ -z "${OPENCLAW_PROMPT_B64:-}" ]] && OPENCLAW_PROMPT_B64="$inline_b64"
+    tokens=( "${tokens[@]:1}" )
+elif [[ "${tokens[0]:-}" == *=* && "${tokens[0]:-}" != */* ]]; then
+    die "inline env-var '${tokens[0]%%=*}' is not permitted; only OPENCLAW_PROMPT_B64 is accepted"
+fi
 
 [[ "${tokens[0]:-}" == "vibe" ]] \
     || die "command must be 'vibe'; got '${tokens[0]:-}'"
