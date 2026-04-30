@@ -29,14 +29,10 @@ import sqlite3
 import threading
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import requests as _requests
 from dotenv import load_dotenv
-from openai import OpenAI
-
-if TYPE_CHECKING:
-    pass
+from openai import OpenAI, OpenAIError as _OpenAIError
 
 load_dotenv("/etc/openclaw-control.env", override=True)
 load_dotenv()
@@ -166,9 +162,10 @@ def _get_conn() -> sqlite3.Connection:
 
 def _db() -> sqlite3.Connection:
     global _conn
-    if _conn is None:
-        _conn = _get_conn()
-    return _conn
+    with _lock:
+        if _conn is None:
+            _conn = _get_conn()
+        return _conn
 
 
 # ── Session helpers ────────────────────────────────────────────────────────────
@@ -343,12 +340,17 @@ def _call_openai_compatible(
     if info["base_url"]:
         kwargs["base_url"] = info["base_url"]
     client = OpenAI(**kwargs)
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,  # type: ignore[arg-type]
-        timeout=_CHAT_TIMEOUT,
-    )
-    return response.choices[0].message.content or ""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,  # type: ignore[arg-type]
+            timeout=_CHAT_TIMEOUT,
+        )
+        return response.choices[0].message.content or ""
+    except _OpenAIError as exc:
+        return f"❌ {info['name']} API error ({type(exc).__name__}): {exc}."
+    except (KeyError, IndexError, ValueError) as exc:
+        return f"❌ Unexpected response format from {info['name']}: {exc}."
 
 
 def _call_anthropic(

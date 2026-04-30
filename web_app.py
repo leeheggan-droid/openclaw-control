@@ -90,8 +90,6 @@ class Message(BaseModel):
     text: str
 
 
-_ALLOWED_REPOS = ALLOWED_REPOS
-
 
 class CopilotRequest(BaseModel):
     goal: str
@@ -237,13 +235,15 @@ def _build_issue_body(req: CopilotRequest) -> str:
 
 
 @app.get("/config")
-def config():
+def config(openclaw_session: str | None = Cookie(default=None)):
+    if not _current_user(openclaw_session):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     return {
         "ssh_host": settings.ssh_host,
         "ssh_readonly_host": settings.ssh_readonly_host,
         "repo_dir": settings.repo_dir,
         "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
-        "allowed_repos": sorted(_ALLOWED_REPOS),
+        "allowed_repos": sorted(ALLOWED_REPOS),
     }
 
 
@@ -3425,11 +3425,15 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       const url = API_BASE + (starting ? "/autopilot/start" : "/autopilot/stop");
       await fetch(url, {method: "POST"});
       await pollAutopilotStatus();
-      // If we just started, poll every 5 s while on this tab
+      // If we just started, begin polling every 5 s while on this tab.
+      // If we just stopped, cancel any existing poll timer.
       if (starting && !apPollTimer) {
         apPollTimer = setInterval(() => {
           if (activeAgent === "autopilot") pollAutopilotStatus();
         }, 5000);
+      } else if (!starting && apPollTimer) {
+        clearInterval(apPollTimer);
+        apPollTimer = null;
       }
     } finally {
       apToggleEl.disabled = false;
@@ -3683,32 +3687,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   const krakenBalanceStatsEl  = document.getElementById("krakenBalanceStats");
   const krakenPositionsTableEl= document.getElementById("krakenPositionsTable");
   const krakenTradesTableEl   = document.getElementById("krakenTradesTable");
-
-  function _renderTradesTable(trades, columns) {
-    if (!trades || trades.length === 0) {
-      return "<div class='liveExchangeEmpty'>No recent trades found.</div>";
-    }
-    const table = document.createElement("table");
-    table.className = "tradesTable";
-    const headers = columns.map(c => "<th>" + c.label + "</th>").join("");
-    table.innerHTML = "<thead><tr>" + headers + "</tr></thead>";
-    const tbody = document.createElement("tbody");
-    trades.forEach(t => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = columns.map(c => {
-        const raw = t[c.key];
-        let cell = raw != null ? String(raw) : "—";
-        if (c.format) cell = c.format(raw, t);
-        const cls = c.cls ? c.cls(raw, t) : "";
-        return "<td" + (cls ? " class='" + cls + "'" : "") + ">" + escapeHtml(cell) + "</td>";
-      }).join("");
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    const wrap = document.createElement("div");
-    wrap.appendChild(table);
-    return wrap.innerHTML;
-  }
 
   krakenPullBtnEl.onclick = async () => {
     krakenPullBtnEl.disabled = true;
@@ -4109,7 +4087,7 @@ def copilot_issue(req: CopilotRequest):
     # Resolve target repo: client-supplied value wins if it is in the allowed list.
     repo_full = (
         req.target_repo
-        if (req.target_repo and req.target_repo in _ALLOWED_REPOS)
+        if (req.target_repo and req.target_repo in ALLOWED_REPOS)
         else settings.github_repo
     )
 
@@ -4146,7 +4124,7 @@ def copilot_poll(issue_number: int, repo: str = ""):
         return {"pr_url": None}
 
     # Use client-supplied repo if it is in the allowed list, else fall back to server default.
-    repo_full = repo if (repo and repo in _ALLOWED_REPOS) else settings.github_repo
+    repo_full = repo if (repo and repo in ALLOWED_REPOS) else settings.github_repo
     parts = repo_full.split("/", 1)
     if len(parts) != 2:
         return {"pr_url": None}
@@ -4203,7 +4181,7 @@ def proposal_confirm(req: ProposalConfirmRequest):
     to ``["copilot", "team-review"]`` when not specified by the caller.
     """
     repo = (req.repo or "").strip()
-    if repo not in _ALLOWED_REPOS:
+    if repo not in ALLOWED_REPOS:
         raise HTTPException(
             status_code=422,
             detail=f"Repo '{repo}' is not in the allowed list.",
@@ -5110,9 +5088,10 @@ function renderMarkdown(text) {
   s = s.replace(/(<lio>[\\s\\S]*?<\\/lio>)(\\n<lio>[\\s\\S]*?<\\/lio>)*/g,
     m => "<ol>" + m.replace(/<\\/?lio>/g, m2 => m2.replace("lio","li")) + "</ol>");
 
-  // Links — only allow http/https URLs to prevent javascript: XSS
+  // Links — only allow http/https URLs to prevent javascript: XSS.
+  // Escape `"` in the URL to prevent attribute-boundary injection.
   s = s.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, (_, linkText, url) => {
-    const safeUrl = /^https?:\\/\\//i.test(url) ? url : "#";
+    const safeUrl = (/^https?:\\/\\//i.test(url) ? url : "#").replace(/"/g, "&quot;");
     return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
   });
 
@@ -5339,7 +5318,9 @@ async function send() {
   }
 }
 
-// ── Controls ───────────────────────────────────────────────────────────────async function clearSession() {
+// ── Controls ─────────────────────────────────────────────────────────────────
+
+async function clearSession() {
   if (!currentSessionId) return;
   if (!confirm("Clear all messages in this conversation? The session will remain.")) return;
   try {

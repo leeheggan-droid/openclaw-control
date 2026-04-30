@@ -784,7 +784,7 @@ def handle_agent_message(agent_name: str, text: str, workspace: dict) -> dict:
                             existing_snap[f"last_{report_id}_at"] = datetime.now(_tz.utc).replace(microsecond=0).isoformat()
                             existing_snap["last_report_id"] = report_id
                             _memory.save_snapshot(name, existing_snap, fp)
-                    except (FuturesTimeout, Exception):
+                    except Exception:
                         pass  # fall back to the original output that had the request
 
         # ── Persist COO derived-summary memory ────────────────────────────────
@@ -830,6 +830,8 @@ _TEAM_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 _atexit.register(_TEAM_EXECUTOR.shutdown, wait=False)
 _TEAM_RUNS: dict[str, dict] = {}
 _TEAM_RUNS_LOCK = _threading.Lock()
+# Cap to prevent unbounded memory growth on long-running servers.
+_RUNS_MAX = 200
 
 DEFAULT_TEAM_PROMPT = (
     "Review the latest workspace context and produce: "
@@ -1439,6 +1441,9 @@ def start_team_review(mode: str, prompt: str, workspace: dict) -> str:
     run_id = _uuid.uuid4().hex[:8]
     run: dict = {"events": [], "done": False, "lock": _threading.Lock()}
     with _TEAM_RUNS_LOCK:
+        if len(_TEAM_RUNS) >= _RUNS_MAX:
+            oldest = next(iter(_TEAM_RUNS))
+            del _TEAM_RUNS[oldest]
         _TEAM_RUNS[run_id] = run
 
     # Sequential execution (Vibe → P&L → Quant → COO) requires more wall-clock time
@@ -1529,6 +1534,9 @@ def start_vibe_run(workdir: str, prompt: str) -> str:
     run_id = _uuid.uuid4().hex[:8]
     run: dict = {"status": "running", "output": "", "error": ""}
     with _VIBE_RUNS_LOCK:
+        if len(_VIBE_RUNS) >= _RUNS_MAX:
+            oldest = next(iter(_VIBE_RUNS))
+            del _VIBE_RUNS[oldest]
         _VIBE_RUNS[run_id] = run
 
     def _execute() -> None:
