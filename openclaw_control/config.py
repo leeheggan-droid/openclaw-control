@@ -23,6 +23,10 @@ class Settings:
     # terminal pills, and /ops/report.  When unset, read-only features are
     # disabled gracefully; they NEVER fall back to ssh_host.
     ssh_readonly_host: str = os.getenv("OPENCLAW_SSH_READONLY_HOST", "")
+    # Private key file for the primary (Vibe/execution) SSH lane.  When set,
+    # passed as -i to SSH so the correct key is used even if the default SSH
+    # agent/key differs.  Leave blank to rely on the default SSH key.
+    ssh_key: str = os.getenv("OPENCLAW_SSH_KEY", "")
     # Private key file for the read-only SSH lane.  When set, passed as -i to
     # SSH so the correct key is used even if the default SSH agent/key differs.
     # Leave blank to rely on the default SSH key (~/.ssh/id_ed25519 etc.).

@@ -93,17 +93,27 @@ sudo chmod 600 /etc/openclaw-ssh/id_ed25519
 #   cat /etc/openclaw-ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 ```
 
-Then update `docker-compose.cockpit.yml` to mount the dedicated directory:
+Then add the key paths to `/etc/openclaw-control.env`:
+
+```ini
+# Tell the cockpit which private key to use for each SSH lane.
+OPENCLAW_SSH_KEY=/etc/openclaw-ssh/id_ed25519
+OPENCLAW_SSH_READONLY_KEY=/etc/openclaw-ssh/id_ed25519
+```
+
+And update `docker-compose.cockpit.yml` to mount the dedicated directory:
 
 ```yaml
 volumes:
-  - /etc/openclaw-ssh:/root/.ssh:ro
+  - /etc/openclaw-ssh:/etc/openclaw-ssh:ro
   - cockpit_data:/app/data
 ```
 
 **Quick-start alternative:** if you want to reuse existing root SSH keys
-immediately, mount `/root/.ssh` instead (as the default compose file does).
-Be aware this gives the container access to *all* keys under that directory.
+immediately, mount `/root/.ssh` instead and leave `OPENCLAW_SSH_KEY` /
+`OPENCLAW_SSH_READONLY_KEY` unset (the default compose file mounts
+`/root/.ssh`). Be aware this gives the container access to *all* keys under
+that directory.
 
 Whichever approach you use, ensure the VPS host key(s) are accepted before
 starting the container so SSH does not prompt interactively:
@@ -334,4 +344,4 @@ Common causes of startup failure:
 | `ModuleNotFoundError: No module named 'agents'` | Rebuild the image — `openai-agents` is now in `requirements.txt` |
 | `ImportError: cannot import name 'Agent' from 'agents' (…/openclaw_control/agents/__init__.py)` | Do **not** set `PYTHONPATH=/app/openclaw_control`; the local `agents/` sub-package shadows the pip package |
 | Certificate not issued | Check DNS propagation (`dig leeheggan.tech`), verify ports 80/443 open |
-| SSH connection refused from container | Verify `/root/.ssh` is mounted and `known_hosts` contains the target |
+| SSH connection refused from container | Verify SSH keys are mounted, `OPENCLAW_SSH_KEY` / `OPENCLAW_SSH_READONLY_KEY` point to the right private key, and `known_hosts` contains the target |

@@ -354,15 +354,17 @@ def run_ssh(command: str, timeout: int = 10) -> dict:
     commands).  Read-only probes must use :func:`run_ssh_readonly` instead.
     """
     try:
+        ssh_cmd = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=yes",
+            "-o", "ConnectTimeout=5",
+        ]
+        if settings.ssh_key:
+            ssh_cmd += ["-i", settings.ssh_key]
+        ssh_cmd += [settings.ssh_host, command]
         proc = subprocess.run(
-            [
-                "ssh",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=yes",
-                "-o", "ConnectTimeout=5",
-                settings.ssh_host,
-                command,
-            ],
+            ssh_cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
