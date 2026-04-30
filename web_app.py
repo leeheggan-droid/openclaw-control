@@ -447,7 +447,10 @@ def memory_update(agent: str, req: MemoryUpdateRequest):
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def index(openclaw_session: str | None = Cookie(default=None)):
+    email = _current_user(openclaw_session)
+    if not email:
+        return RedirectResponse("/login", status_code=303)
     gateway_url = os.environ.get("OPENCLAW_GATEWAY_URL", "").strip()
     gateway_script = (
         f'<script>window.OPENCLAW_GATEWAY_URL = {json.dumps(gateway_url)};</script>\n'
