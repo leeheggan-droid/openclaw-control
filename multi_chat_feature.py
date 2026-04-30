@@ -288,7 +288,7 @@ def _brave_search(query: str, count: int = 5) -> str:
     if not api_key:
         return (
             "[Web search unavailable: BRAVE_API_KEY is not configured. "
-            "Add it to /etc/openclaw-control.env to enable web search.]"
+            "Add BRAVE_API_KEY to your environment configuration to enable web search.]"
         )
     query = query.strip()
     if not query:
@@ -308,7 +308,7 @@ def _brave_search(query: str, count: int = 5) -> str:
         resp.raise_for_status()
         data = resp.json()
     except _requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "unknown"
+        status = exc.response.status_code if exc.response is not None else "no response"
         return (
             f"[Web search failed: HTTP {status} — check your Brave API key and quota.]"
         )
