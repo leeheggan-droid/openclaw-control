@@ -878,12 +878,16 @@ def _start_heartbeat(run: dict, deadline: float, interval: float = 30.0) -> None
 
 
 def _run_ssh_with_heartbeat(run: dict, label: str, cmd: str, timeout_s: float) -> dict:
-    """Run a read-only SSH probe, emitting progress heartbeats every 15 s.
+    """Run a read-only SSH probe via the VIBE execution lane, emitting progress heartbeats every 15 s.
 
     Long-running SSH commands (e.g. backtests, 2-year history pulls) block for
     up to *timeout_s* seconds.  A background thread emits vibe-feed events every
     15 s so the team feed shows that the probe is still running rather than
     appearing frozen.  SSH timeout is capped at 300 s regardless of *timeout_s*.
+
+    Uses the VIBE execution lane (``run_ssh`` / ``OPENCLAW_SSH_HOST``) so that
+    team review probes work even when the READONLY lane is unavailable or has
+    broken key auth.
     """
     capped_timeout = int(min(timeout_s, 300))
     stop = _threading.Event()
@@ -897,7 +901,7 @@ def _run_ssh_with_heartbeat(run: dict, label: str, cmd: str, timeout_s: float) -
     t = _threading.Thread(target=_narrate, daemon=True)
     t.start()
     try:
-        return run_ssh_readonly(cmd, timeout=capped_timeout)
+        return run_ssh(cmd, timeout=capped_timeout)
     finally:
         stop.set()
 
@@ -943,8 +947,8 @@ def _gather_vibe_snapshot(run: dict, timeout_s: float) -> _VibeSnapshot:
     Returns a consolidated _VibeSnapshot with the authoritative evidence source
     and a ≤20-line evidence summary derived from the strongest probe result.
     """
-    if not settings.ssh_readonly_host:
-        _push_event(run, "vibe", "message", "READONLY SSH not configured — snapshot skipped")
+    if not settings.ssh_host:
+        _push_event(run, "vibe", "message", "VIBE SSH not configured — snapshot skipped")
         return _VibeSnapshot("", "", "", False)
 
     _push_event(run, "vibe", "start", "")
@@ -1113,7 +1117,7 @@ def _evidence_gate(run: dict, vs: _VibeSnapshot) -> bool:
     When SSH is not configured the user is working offline; agents may still use
     whatever workspace context was provided (terminal tail, conversation history).
     """
-    if settings.ssh_readonly_host and not vs.any_usable:
+    if settings.ssh_host and not vs.any_usable:
         _push_event(
             run, "vibe", "error",
             "❌ Evidence collection failed — SSH is configured but all probes returned no data.\n"
@@ -1164,7 +1168,7 @@ def _run_ew(agent, prompt: str, run: dict, agent_key: str, timeout_s: float) -> 
         run_vibe_probe=run_vibe_report,
         known_report_ids=set(_report_commands_from_map().keys()),
         timeout_s=timeout_s,
-        ssh_configured=bool(settings.ssh_readonly_host),
+        ssh_configured=bool(settings.ssh_host),
         agent_key=agent_key,
         on_probe_success=_on_probe_success,
     )
