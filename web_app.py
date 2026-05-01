@@ -1522,8 +1522,8 @@ def index(openclaw_session: str | None = Cookie(default=None)):
           <span style="font-size:12px;color:var(--muted);user-select:none;">SSH target:</span>
           <div class="badge" id="hostBadge">localhost</div>
           <span style="font-size:12px;color:var(--muted);user-select:none;margin-left:8px;">Domain:</span>
-          <button class="pill" id="domainMainBtn" onclick="switchDomain('main')" title="leeheggan.tech" style="padding:3px 10px;font-size:11px;">leeheggan.tech</button>
-          <button class="pill" id="domainChatBtn" onclick="switchDomain('webchat')" title="leeheggan.tech/web-chat" style="padding:3px 10px;font-size:11px;">web-chat</button>
+          <button class="pill" id="domainMainBtn" onclick="openDomain('main')" title="leeheggan.tech" style="padding:3px 10px;font-size:11px;">leeheggan.tech</button>
+          <button class="pill" id="domainChatBtn" onclick="openDomain('webchat')" title="leeheggan.tech/web-chat" style="padding:3px 10px;font-size:11px;">web-chat</button>
         </div>
       </div>
 
@@ -2209,7 +2209,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     webchat: document.getElementById("domainChatBtn"),
   };
 
-  function switchDomain(key) {
+  function openDomain(key) {
     const url = _DOMAINS[key];
     if (!url) return;
     // Update active styling
@@ -3403,8 +3403,10 @@ try:
     import pathlib as _pathlib
     _services_path = _pathlib.Path(__file__).parent / "control_contract" / "services.json"
     _VPS_SERVICES = _json_mod.loads(_services_path.read_text())
-except Exception:
-    _VPS_SERVICES = {}
+except FileNotFoundError:
+    _logger.warning("control_contract/services.json not found — VPS service registry is empty.")
+except Exception as _exc:
+    _logger.warning("Failed to load control_contract/services.json: %s", _exc)
 
 
 @app.get("/vps/services")
