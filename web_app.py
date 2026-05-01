@@ -4099,6 +4099,72 @@ def chat_web(openclaw_session: str | None = Cookie(default=None)):
     return HTMLResponse(_CHAT_WEB_HTML.replace("__EMAIL__", json.dumps(email)))
 
 
+# ── Deployment diagnostics endpoint ──────────────────────────────────────────
+
+@app.get("/status")
+def deployment_status(openclaw_session: str | None = Cookie(default=None)):
+    """Return runtime deployment diagnostics to help troubleshoot stale-code issues.
+
+    Requires an active authenticated session — unauthenticated requests receive 401.
+
+    Reports:
+    - Current working directory of the running process
+    - Git commit hash (HEAD) of the code being executed
+    - Python executable path
+    - sys.path (module search path)
+    - PYTHONPATH environment variable
+    - __pycache__ freshness for web_app.py (compares .pyc mtime vs source mtime)
+    """
+    import sys
+    import subprocess
+    import glob
+
+    if not _current_user(openclaw_session):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    cwd = os.getcwd()
+
+    # Git commit hash
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "-C", cwd, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        git_commit = None
+
+    # __pycache__ freshness for web_app.py
+    source_file = os.path.join(cwd, "web_app.py")
+    pycache_info: dict = {}
+    if os.path.isfile(source_file):
+        source_mtime = os.path.getmtime(source_file)
+        pycache_dir = os.path.join(cwd, "__pycache__")
+        pyc_files = glob.glob(os.path.join(pycache_dir, "web_app.*.pyc"))
+        if pyc_files:
+            pyc_file = pyc_files[0]
+            pyc_mtime = os.path.getmtime(pyc_file)
+            pycache_info = {
+                "pyc_file": pyc_file,
+                "source_mtime": source_mtime,
+                "pyc_mtime": pyc_mtime,
+                "pyc_is_stale": pyc_mtime < source_mtime,
+            }
+        else:
+            pycache_info = {"pyc_file": None, "note": "no .pyc found for web_app.py"}
+    else:
+        pycache_info = {"note": "web_app.py not found in cwd"}
+
+    return {
+        "cwd": cwd,
+        "git_commit": git_commit,
+        "python_executable": sys.executable,
+        "sys_path": sys.path,
+        "PYTHONPATH": os.environ.get("PYTHONPATH"),
+        "pycache": pycache_info,
+    }
+
+
 # ── Login page HTML ───────────────────────────────────────────────────────────
 
 _LOGIN_HTML = """<!doctype html>
