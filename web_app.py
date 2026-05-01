@@ -37,6 +37,7 @@ from openclaw_control.service import (
 import adapters.vps_wrappers as _vps
 from openclaw_control import trade_log as _trade_log
 from openclaw_control.trade_log import now_iso as _trade_log_now_iso
+from openclaw_control import projects as _projects
 from openclaw_control.tools.exchange_tools import (
     fetch_kraken_open_positions as _fetch_kraken_positions,
     fetch_kraken_trade_balance as _fetch_kraken_balance,
@@ -439,6 +440,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       grid-template-columns: 1.2fr .8fr;
       gap:14px;
       padding:14px;
+      padding-bottom:44px;
       box-sizing:border-box;
     }
 
@@ -1055,73 +1057,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       padding:28px 0;
     }
 
-    /* Main tab quick-action suggestion chips */
-    .mainSuggestsBar{
-      display:none;
-      gap:6px;
-      padding:7px 12px;
-      border-bottom:1px solid var(--border);
-      background:rgba(255,255,255,.01);
-      flex-wrap:wrap;
-      align-items:center;
-      font-size:12px;
-      color:var(--muted);
-    }
-    .suggestChip{
-      padding:4px 11px;
-      border-radius:999px;
-      border:1px solid rgba(34,197,94,.25);
-      background:rgba(34,197,94,.06);
-      color:rgba(230,238,252,.75);
-      font-size:12px;
-      cursor:pointer;
-      font-family:var(--sans);
-      transition:background .15s,color .15s,border-color .15s;
-      white-space:nowrap;
-    }
-    .suggestChip:hover{
-      background:rgba(34,197,94,.15);
-      color:var(--text);
-      border-color:rgba(34,197,94,.45);
-    }
-    .suggestChip:active{transform:scale(.98);}
-
-    /* Cheap Chat provider bar */
-    .cheapBar{
-      display:none;
-      gap:6px;
-      padding:7px 12px;
-      border-bottom:1px solid var(--border);
-      background:rgba(255,255,255,.01);
-      flex-wrap:wrap;
-      align-items:center;
-      font-size:12px;
-      color:var(--muted);
-    }
-    .cheapProviderBtn{
-      padding:3px 12px;
-      border-radius:999px;
-      border:1px solid var(--border);
-      background:rgba(255,255,255,.04);
-      color:var(--muted);
-      font-size:12px;
-      font-weight:600;
-      cursor:pointer;
-      transition:background .15s,color .15s;
-      font-family:var(--sans);
-      white-space:nowrap;
-    }
-    .cheapProviderBtn.active{
-      background:linear-gradient(180deg,rgba(34,197,94,.95),rgba(22,163,74,.95));
-      color:#fff;
-      border-color:transparent;
-    }
-    .cheapProviderBtn:hover:not(.active){background:rgba(255,255,255,.08);color:var(--text);}
-    .cheapModelLabel{
-      font-size:11px;
-      color:rgba(34,197,94,.7);
-      user-select:none;
-    }
     .backendBanner{
       display:none;
       position:fixed;top:0;left:0;right:0;
@@ -1345,9 +1280,19 @@ def index(openclaw_session: str | None = Cookie(default=None)):
           <button class="tabBtn" data-agent="team">Team</button>
           <button class="tabBtn" data-agent="analytics">📊 Analytics</button>
           <button class="tabBtn" data-agent="memory">🧠 Memory</button>
-          <button class="tabBtn" data-agent="cheap">💬 Chat</button>
         </div>
-        <div class="badge" id="statusBadge">ready</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div class="badge" id="statusBadge">ready</div>
+          <div style="position:relative;display:inline-block;">
+            <button id="navMenuBtn" style="width:34px;height:34px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,.03);cursor:pointer;display:grid;place-items:center;transition:background .15s;" title="Menu">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(230,238,252,.7)" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <div id="navMenu" style="display:none;position:absolute;right:0;top:42px;background:#111827;border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:6px;min-width:150px;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,.45);">
+              <a href="/chat-web" style="display:block;padding:8px 12px;color:var(--text);text-decoration:none;font-size:13px;border-radius:8px;transition:background .15s;" onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background=''">💬 Web Chat</a>
+              <button onclick="doLogout()" style="display:block;width:100%;text-align:left;padding:8px 12px;color:rgba(251,113,133,.9);font-size:13px;border:none;background:none;cursor:pointer;border-radius:8px;transition:background .15s;font-family:var(--sans);" onmouseover="this.style.background='rgba(251,113,133,.08)'" onmouseout="this.style.background=''">🔓 Logout</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="teamBtnsBar" id="teamBtnsBar" style="display:none">
@@ -1357,31 +1302,11 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         <button class="teamBtn cancelBtn" id="cancelReviewBtn" style="display:none">✕ Cancel run</button>
       </div>
 
-      <div class="cheapBar" id="cheapBar">
-        <span>Provider:</span>
-        <button class="cheapProviderBtn active" data-provider="groq">Groq</button>
-        <button class="cheapProviderBtn" data-provider="mistral">Mistral</button>
-        <button class="cheapProviderBtn" data-provider="cerebras">Cerebras</button>
-        <span class="cheapModelLabel" id="cheapModelLabel">llama-3.3-70b-versatile</span>
-      </div>
-
-      <!-- Main tab quick-action suggestion chips -->
-      <div class="mainSuggestsBar" id="mainSuggestsBar">
-        <span>Ask:</span>
-        <button class="suggestChip" data-suggest="What's the total P&L for crypto and Alpaca trades?">📊 Total P&amp;L</button>
-        <button class="suggestChip" data-suggest="Show me the latest crypto trades from the bot.">🔄 Crypto trades</button>
-        <button class="suggestChip" data-suggest="What is the Alpaca bot's current P&L and status?">📈 Alpaca P&amp;L</button>
-        <button class="suggestChip" data-suggest="Check the system and container health — is the bot running?">🏥 System health</button>
-        <button class="suggestChip" data-suggest="What are the recent git commits across my repos?">🗂 Git status</button>
-        <button class="suggestChip" data-suggest="What are the latest crypto news and BTC price?">🌐 Crypto news</button>
-        <button class="suggestChip" data-suggest="Is the bot halted? What triggered it?">🛑 Halt status</button>
-      </div>
 
       <div id="chat-main" class="chatBody"></div>
       <div id="chat-pnl"  class="chatBody" style="display:none"></div>
       <div id="chat-quant" class="chatBody" style="display:none"></div>
       <div id="chat-coo"  class="chatBody" style="display:none"></div>
-      <div id="chat-cheap" class="chatBody" style="display:none"></div>
 
       <div class="teamFeed" id="teamFeed"></div>
 
@@ -1390,6 +1315,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         <div class="analyticsToolbar">
           <button class="vibeBtn vibePrimaryBtn" id="analyticsLoadBtn">📈 Load Charts &amp; Table</button>
           <button class="vibeBtn vibeSecondaryBtn" id="analyticsFetchBtn">📡 SSH Probe</button>
+          <button class="vibeBtn vibeSecondaryBtn" id="analyticsDeepBtn">🧮 Deep Analysis</button>
           <button class="vibeBtn vibeSecondaryBtn" id="krakenPullBtn">🐙 Pull Kraken</button>
           <button class="vibeBtn vibeSecondaryBtn" id="alpacaPullBtn">🦙 Pull Alpaca</button>
           <span id="analyticsStatus" style="font-size:12px;color:var(--muted);"></span>
@@ -1511,40 +1437,44 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     </section>
 
     <!-- RIGHT -->
-    <section class="card">
+    <section class="card" id="rightCard">
       <div class="cardHeader">
         <div class="title">
           <span style="width:10px;height:10px;border-radius:999px;background:#60a5fa;display:inline-block"></span>
-          Shell Output
-          <span class="badge">ssh</span>
+          Live Status
         </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-size:12px;color:var(--muted);user-select:none;">SSH target:</span>
-          <div class="badge" id="hostBadge">localhost</div>
-          <span style="font-size:12px;color:var(--muted);user-select:none;margin-left:8px;">Domain:</span>
-          <button class="pill" id="domainMainBtn" onclick="openDomain('main')" title="leeheggan.tech" style="padding:3px 10px;font-size:11px;">leeheggan.tech</button>
-          <button class="pill" id="domainChatBtn" onclick="openDomain('webchat')" title="leeheggan.tech/web-chat" style="padding:3px 10px;font-size:11px;">web-chat</button>
-        </div>
+        <button class="pill" id="refreshStatusBtn" style="padding:3px 10px;font-size:11px;">🔄 Refresh</button>
       </div>
 
-      <div class="termBody" id="terminal"></div>
-
-      <!-- READONLY approval banner — shown before each terminal pill command -->
-      <div class="vibeApprovalBanner" id="readonlyApprovalBanner">
-        <div class="vibeApprovalTitle">🔒 READONLY lane — confirm before running</div>
-        <div class="vibeApprovalCmd" id="readonlyApprovalCmd"></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="readonlyApprovalHost"></div>
-        <div class="vibeApprovalBtns">
-          <button class="vibeBtn vibePrimaryBtn" id="readonlyConfirmBtn">✅ Confirm &amp; Run</button>
-          <button class="vibeBtn vibeDangerBtn" id="readonlyCancelBtn">✗ Cancel</button>
-        </div>
+      <!-- Docker / service status -->
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);">
+        <div class="analyticsSectionTitle" style="margin-bottom:8px;">🐳 Services</div>
+        <div id="dockerStatusList" style="display:flex;flex-direction:column;gap:6px;"></div>
       </div>
 
-      <div class="termControls">
-        <button class="pill" onclick="clearTerminal()">clear</button>
+      <!-- Compact team feed -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);">Team Feed</span>
+        </div>
+        <div class="teamFeed" id="rightTeamFeed" style="display:flex;flex:1;overflow-y:auto;"></div>
       </div>
     </section>
   </div>
+
+  <!-- News ticker -->
+  <div id="newsTicker" style="position:fixed;bottom:0;left:0;right:0;height:30px;background:rgba(11,15,20,.94);border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;overflow:hidden;z-index:100;">
+    <span style="flex-shrink:0;font-size:11px;font-weight:700;color:var(--muted);padding:0 12px;border-right:1px solid var(--border);white-space:nowrap;">📡 ACTIVITY</span>
+    <div style="display:flex;gap:0;white-space:nowrap;overflow:hidden;flex:1;position:relative;">
+      <div id="newsTickerInner" style="display:inline-flex;gap:0;font-size:11px;color:var(--muted);padding-left:16px;animation:tickerScroll 50s linear infinite;">Loading activity…</div>
+    </div>
+  </div>
+  <style>
+  @keyframes tickerScroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+  </style>
 
   <!-- Team review pre-assessment modal -->
   <div id="teamReviewModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:300;align-items:center;justify-content:center;padding:16px;">
@@ -1574,14 +1504,13 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     pnl:   document.getElementById("chat-pnl"),
     quant: document.getElementById("chat-quant"),
     coo:   document.getElementById("chat-coo"),
-    cheap: document.getElementById("chat-cheap"),
   };
   function activeChatPane() { return CHAT_PANES[activeAgent] || null; }
-  const terminalEl = document.getElementById("terminal");
+  const terminalEl = null; // shell panel removed
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("sendBtn");
   const statusBadge = document.getElementById("statusBadge");
-  const hostBadge = document.getElementById("hostBadge");
+  const hostBadge = null; // shell panel removed
 
   const fileInput = document.getElementById("fileInput");
   const imgInput = document.getElementById("imgInput");
@@ -1589,13 +1518,12 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   document.getElementById("imageBtn").onclick = () => imgInput.click();
 
   // --- multi-agent state ---
-  const AGENT_LABELS = {main: "Main AI", pnl: "P&L", quant: "Quant", coo: "COO", cheap: "Cheap Chat"};
+  const AGENT_LABELS = {main: "Main AI", pnl: "P&L", quant: "Quant", coo: "COO"};
   const AGENT_STORE_KEYS = {
     main:  "openclaw_chat_main_v1",
     pnl:   "openclaw_chat_pnl_v1",
     quant: "openclaw_chat_quant_v1",
     coo:   "openclaw_chat_coo_v1",
-    cheap: "openclaw_chat_cheap_v1",
   };
 
   let activeAgent = "main";
@@ -1625,7 +1553,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     const pane = activeChatPane();
     if (pane) pane.scrollTop = pane.scrollHeight;
   }
-  function scrollTermBottom()  { terminalEl.scrollTop = terminalEl.scrollHeight; }
+  function scrollTermBottom()  { /* shell panel removed */ }
 
   function addChat(role, text, extraHTML) {
     const agLabel = role === "user" ? "You" : (AGENT_LABELS[activeAgent] || activeAgent);
@@ -1688,25 +1616,20 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   const teamFeedEl = document.getElementById("teamFeed");
   const analyticsPadEl = document.getElementById("analyticsPad");
   const memoryPadEl    = document.getElementById("memoryPad");
-  const cheapBarEl = document.getElementById("cheapBar");
-  const mainSuggestsBarEl = document.getElementById("mainSuggestsBar");
   const composerEl = document.querySelector(".chatComposer");
   const teamBtnsBarEl = document.getElementById("teamBtnsBar");
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
     const isAnalytics = ag === "analytics";
-    const isCheap = ag === "cheap";
     const isMemory = ag === "memory";
     const isMain = ag === "main";
-    // Show the right chat pane (or none for team/analytics/memory) — no re-render
+    // Show the right chat pane (or none for team/analytics/memory)
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
       pane.style.display = (!isTeam && !isAnalytics && !isMemory && key === ag) ? "" : "none";
     }
-    // Main tab gets its own suggest bar instead of the team review buttons
+    // Show team review buttons for non-main agent tabs (excluding analytics/memory)
     teamBtnsBarEl.style.display  = (!isMain && !isAnalytics && !isMemory) ? "flex" : "none";
-    mainSuggestsBarEl.style.display = isMain ? "flex" : "none";
-    cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
     analyticsPadEl.style.display = isAnalytics ? "flex" : "none";
     memoryPadEl.style.display    = isMemory    ? "flex" : "none";
@@ -1729,33 +1652,22 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     });
   });
 
-  // --- Quick-action suggestion chips (Main tab) ---
-  document.querySelectorAll(".suggestChip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      const text = chip.getAttribute("data-suggest") || "";
-      if (!text) return;
-      inputEl.value = text;
-      autoGrow();
-      inputEl.focus();
-    });
-  });
-
-  // Initialise main tab suggest bar visibility on page load (default tab is main)
-  if (mainSuggestsBarEl) mainSuggestsBarEl.style.display = "flex";
+  // Initialise tab bar on page load (default tab is main)
   if (teamBtnsBarEl) teamBtnsBarEl.style.display = "none";
 
-  // --- terminal helpers ---
-  function termLine(kind, text) {
-    const div = document.createElement("div");
-    div.className = "termLine " + kind;
-    div.textContent = text;
-    terminalEl.appendChild(div);
-    scrollTermBottom();
-  }
+  // --- terminal helpers (shell panel removed — stubs keep callers happy) ---
+  function termLine(kind, text) { /* no-op: shell panel removed */ }
+  function clearTerminal() { /* no-op */ }
 
-  function clearTerminal() { terminalEl.innerHTML = ""; }
+  function getShellOutput() { return ""; }
 
   function setBusy(isBusy) {
+    statusBadge.textContent = isBusy ? "thinking…" : "ready";
+    statusBadge.style.borderColor = isBusy ? "rgba(34,197,94,.55)" : "rgba(255,255,255,.08)";
+    statusBadge.style.color      = isBusy ? "rgba(230,238,252,.85)" : "rgba(230,238,252,.65)";
+  }
+
+  // Auto-grow textarea
     statusBadge.textContent = isBusy ? "thinking…" : "ready";
     statusBadge.style.borderColor = isBusy ? "rgba(34,197,94,.55)" : "rgba(255,255,255,.08)";
     statusBadge.style.color      = isBusy ? "rgba(230,238,252,.85)" : "rgba(230,238,252,.65)";
@@ -1835,40 +1747,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     inputEl.value = "";
     autoGrow();
 
-    // Cheap Chat tab — route to /cheap-chat
-    if (activeAgent === "cheap") {
-      setBusy(true);
-      // Build history for the provider (last 20 turns, user+assistant only)
-      const providerHistory = (histories.cheap || [])
-        .slice(-21, -1)  // exclude the message we just pushed
-        .filter(h => h.role === "user" || h.role === "agent")
-        .map(h => ({role: h.role === "agent" ? "assistant" : "user", content: h.text}));
-      try {
-        const res = await fetch(API_BASE + "/cheap-chat", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            message: text,
-            provider: cheapActiveProvider,
-            history: providerHistory,
-          }),
-        });
-        const data = await res.json();
-        const out = data.reply || data.error || "(no response)";
-        addChat("agent", out);
-        histories.cheap.push({role: "agent", text: out});
-        saveHistory("cheap");
-      } catch(err) {
-        const msg = "Web error: " + (err && err.message ? err.message : String(err));
-        addChat("agent", msg);
-        histories.cheap.push({role: "agent", text: msg});
-        saveHistory("cheap");
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-
     // /copilot command
     const lc = text.toLowerCase();
     if (lc.startsWith("/copilot") || lc.startsWith("fix via copilot:")) {
@@ -1929,12 +1807,9 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     }
   }
 
-  // Fetch SSH host label from server config
+  // Fetch server config
   let serverRepoDir = "";
-  let vibeReadonlyHost = "";
   fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
-    if (cfg && cfg.ssh_host) hostBadge.textContent = cfg.ssh_host;
-    if (cfg && cfg.ssh_readonly_host) vibeReadonlyHost = cfg.ssh_readonly_host;
     if (cfg && cfg.repo_dir) serverRepoDir = cfg.repo_dir;
     if (cfg && Array.isArray(cfg.allowed_repos) && cfg.allowed_repos.length) {
       ALLOWED_REPOS.length = 0;
@@ -1947,75 +1822,10 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     if (banner && urlEl) { urlEl.textContent = API_BASE + "/config"; banner.style.display = "block"; }
   });
 
-  // ── READONLY lane — terminal pill approval gate ───────────────────────────
-
-  const readonlyApprovalBannerEl = document.getElementById("readonlyApprovalBanner");
-  const readonlyApprovalCmdEl    = document.getElementById("readonlyApprovalCmd");
-  const readonlyApprovalHostEl   = document.getElementById("readonlyApprovalHost");
-  const readonlyConfirmBtnEl     = document.getElementById("readonlyConfirmBtn");
-  const readonlyCancelBtnEl      = document.getElementById("readonlyCancelBtn");
-
-  let _pendingReadonlyCmd = "";
-
-  function showReadonlyApproval(cmd) {
-    const host = vibeReadonlyHost || "<OPENCLAW_SSH_READONLY_HOST>";
-    readonlyApprovalCmdEl.textContent = "ssh " + host + " " + shellQuote(cmd);
-    readonlyApprovalHostEl.textContent = "Lane: READONLY  •  Host: " + host;
-    _pendingReadonlyCmd = cmd;
-    readonlyApprovalBannerEl.style.display = "flex";
-    readonlyApprovalBannerEl.scrollIntoView({behavior: "smooth"});
-  }
-
-  function hideReadonlyApproval() {
-    readonlyApprovalBannerEl.style.display = "none";
-    _pendingReadonlyCmd = "";
-  }
-
-  readonlyCancelBtnEl.onclick = hideReadonlyApproval;
-
-  readonlyConfirmBtnEl.onclick = async () => {
-    const cmd = _pendingReadonlyCmd;
-    if (!cmd) return;
-    hideReadonlyApproval();
-    if (!vibeReadonlyHost) {
-      termLine("err", "READONLY SSH not configured (OPENCLAW_SSH_READONLY_HOST unset) — pill disabled.");
-      return;
-    }
-    const host = vibeReadonlyHost;
-    const prompt = host + ":$ " + cmd;
-    termLine("prompt", prompt);
-    setBusy(true);
-    try {
-      const res = await fetch(API_BASE + "/ops/ssh-readonly-run", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({cmd}),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({detail: res.statusText}));
-        termLine("err", "READONLY SSH error: " + (detail.detail || res.statusText));
-        return;
-      }
-      const data = await res.json();
-      const out = (data.stdout || "");
-      const err = (data.stderr || data.error || "");
-      if (out) termLine("out", out.trimEnd());
-      if (err) termLine("err", err.trimEnd());
-      if (!out && !err) termLine("out", "[no output]");
-    } catch(e) {
-      termLine("err", "READONLY SSH request failed: " + (e && e.message ? e.message : String(e)));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   /**
-   * Run a read-only command via the READONLY SSH lane.
-   * Shows an approval banner (command + host) and waits for operator confirmation.
+   * Stub: READONLY lane removed — kept so callers compile without errors.
    */
-  function runReadonlyQuick(cmd) {
-    showReadonlyApproval(cmd);
-  }
+  function runReadonlyQuick(cmd) { /* READONLY shell panel removed */ }
 
   // --- Copilot bridge ---
 
@@ -2219,28 +2029,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     // Open the domain in a new tab
     window.open(url, "_blank", "noopener,noreferrer");
   }
-
-  // ── Cheap Chat ────────────────────────────────────────────────────────────
-
-  const _CHEAP_PROVIDER_MODELS = {
-    groq:      "llama-3.3-70b-versatile",
-    mistral:   "mistral-small-latest",
-    cerebras:  "llama3.1-70b",
-  };
-
-  let cheapActiveProvider = "groq";
-  const cheapModelLabelEl = document.getElementById("cheapModelLabel");
-
-  document.querySelectorAll(".cheapProviderBtn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      cheapActiveProvider = btn.getAttribute("data-provider");
-      document.querySelectorAll(".cheapProviderBtn").forEach(b =>
-        b.classList.toggle("active", b === btn));
-      if (cheapModelLabelEl) {
-        cheapModelLabelEl.textContent = _CHEAP_PROVIDER_MODELS[cheapActiveProvider] || "";
-      }
-    });
-  });
 
   // ── Team review ──────────────────────────────────────────────────────────────
 
@@ -3157,6 +2945,81 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     }
   };
 
+  // ── Deep crypto analytics ─────────────────────────────────────────────────
+  const analyticsDeepBtnEl = document.getElementById("analyticsDeepBtn");
+  if (analyticsDeepBtnEl) analyticsDeepBtnEl.onclick = async () => {
+    analyticsDeepBtnEl.disabled = true;
+    analyticsStatus.textContent = "Running deep analysis…";
+    analyticsBodyEl.querySelectorAll(".analyticsSection").forEach(el => el.remove());
+    analyticsEmptyEl.style.display = "none";
+    try {
+      const res = await fetch(API_BASE + "/analytics/crypto/deep");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        analyticsBodyEl.appendChild(_renderAnalyticsSection("Error", err.detail || "HTTP " + res.status));
+        analyticsStatus.textContent = "Error";
+        return;
+      }
+      const d = await res.json();
+      if (d.error) {
+        analyticsEmptyEl.textContent = d.error;
+        analyticsEmptyEl.style.display = "";
+        analyticsStatus.textContent = "No data";
+        return;
+      }
+      // KPI stat cards
+      const kpiRow = document.createElement("div");
+      kpiRow.className = "statsRow";
+      const winRateCls = d.win_rate >= 55 ? "pos" : d.win_rate < 40 ? "neg" : "";
+      const pfVal = d.profit_factor;
+      const pfCls = pfVal != null ? (pfVal >= 1.5 ? "pos" : pfVal < 1 ? "neg" : "") : "";
+      const sortCls = d.sortino_ratio != null ? (d.sortino_ratio >= 1 ? "pos" : d.sortino_ratio < 0 ? "neg" : "") : "";
+      [
+        _statCard("Total Trades",    String(d.trades_count), ""),
+        _statCard("Closed",          String(d.closed_trades), ""),
+        _statCard("Win Rate",        d.win_rate + "%",  winRateCls),
+        _statCard("Wins / Losses",   d.wins + " / " + d.losses, ""),
+        _statCard("Avg Win",         d.avg_win != null ? (d.avg_win >= 0 ? "+" : "") + d.avg_win : "—", d.avg_win >= 0 ? "pos" : "neg"),
+        _statCard("Avg Loss",        d.avg_loss != null ? String(d.avg_loss) : "—", "neg"),
+        _statCard("Profit Factor",   pfVal != null ? String(pfVal) : "—", pfCls),
+        _statCard("Total P&L",       d.total_pnl != null ? (d.total_pnl >= 0 ? "+" : "") + d.total_pnl : "—", d.total_pnl >= 0 ? "pos" : "neg"),
+        _statCard("Sortino",         d.sortino_ratio != null ? String(d.sortino_ratio) : "—", sortCls),
+        _statCard("Max Consec Wins", String(d.max_consecutive_wins), "pos"),
+        _statCard("Max Consec Loss", String(d.max_consecutive_losses), "neg"),
+        _statCard("Total Fees",      d.total_fees != null ? String(d.total_fees) : "—", ""),
+      ].forEach(c => kpiRow.appendChild(c));
+      analyticsBodyEl.insertBefore(kpiRow, analyticsBodyEl.firstChild);
+      analyticsStatsEl.style.display = "none";
+
+      if (d.best_trade_pnl != null || d.worst_trade_pnl != null) {
+        const bwText = [
+          d.best_trade_pnl  != null ? "Best:  +" + d.best_trade_pnl  + "  (" + (d.best_trade_symbol  || "?") + ")" : null,
+          d.worst_trade_pnl != null ? "Worst: "  + d.worst_trade_pnl + "  (" + (d.worst_trade_symbol || "?") + ")" : null,
+        ].filter(Boolean).join("\\n");
+        analyticsBodyEl.appendChild(_renderAnalyticsSection("Best / Worst Trade", bwText));
+      }
+
+      if (d.by_symbol && Object.keys(d.by_symbol).length) {
+        const syms = Object.entries(d.by_symbol).sort((a, b) => b[1].count - a[1].count);
+        analyticsBodyEl.appendChild(_renderAnalyticsSection("By Symbol",
+          syms.map(([s, v]) => s + ":  " + v.count + " trades   P&L " + (v.pnl >= 0 ? "+" : "") + v.pnl).join("\\n")));
+      }
+
+      if (d.by_exchange && Object.keys(d.by_exchange).length) {
+        const exs = Object.entries(d.by_exchange).sort((a, b) => b[1].count - a[1].count);
+        analyticsBodyEl.appendChild(_renderAnalyticsSection("By Exchange",
+          exs.map(([e, v]) => e + ":  " + v.count + " trades   P&L " + (v.pnl >= 0 ? "+" : "") + v.pnl).join("\\n")));
+      }
+
+      analyticsStatus.textContent = "Deep analysis " + new Date().toLocaleTimeString();
+    } catch(e) {
+      analyticsBodyEl.appendChild(_renderAnalyticsSection("Error", e.message || String(e)));
+      analyticsStatus.textContent = "Error";
+    } finally {
+      analyticsDeepBtnEl.disabled = false;
+    }
+  };
+
   // ── Memory cockpit ─────────────────────────────────────────────────────────
 
   const memRefreshBtnEl    = document.getElementById("memRefreshBtn");
@@ -3262,6 +3125,135 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       memInvalidateBtnEl.disabled = false;
     }
   };
+
+  // ── Hamburger nav menu ────────────────────────────────────────────────────
+  const navMenuBtnEl = document.getElementById("navMenuBtn");
+  const navMenuEl    = document.getElementById("navMenu");
+  if (navMenuBtnEl) {
+    navMenuBtnEl.onclick = e => {
+      e.stopPropagation();
+      navMenuEl.style.display = navMenuEl.style.display === "none" ? "block" : "none";
+    };
+    document.addEventListener("click", () => { if (navMenuEl) navMenuEl.style.display = "none"; });
+  }
+  async function doLogout() {
+    await fetch(API_BASE + "/auth/logout", {method: "POST"});
+    window.location.href = "/login";
+  }
+
+  // ── Docker / service status ──────────────────────────────────────────────
+  const dockerStatusListEl = document.getElementById("dockerStatusList");
+  const refreshStatusBtnEl = document.getElementById("refreshStatusBtn");
+
+  async function loadDockerStatus() {
+    if (!dockerStatusListEl) return;
+    try {
+      const svcsRes = await fetch(API_BASE + "/vps/services");
+      if (!svcsRes.ok) {
+        dockerStatusListEl.innerHTML = "<div style='font-size:12px;color:var(--muted);'>Service registry unavailable</div>";
+        return;
+      }
+      const svcsData = await svcsRes.json();
+      dockerStatusListEl.innerHTML = "";
+      for (const [svcId, svc] of Object.entries(svcsData)) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(0,0,0,.18);border:1px solid var(--border);border-radius:8px;";
+        const left = document.createElement("div");
+        left.style.cssText = "display:flex;flex-direction:column;gap:2px;";
+        const nameEl = document.createElement("span");
+        nameEl.style.cssText = "font-size:12px;font-weight:600;color:var(--text);";
+        nameEl.textContent = svcId;
+        const descEl = document.createElement("span");
+        descEl.style.cssText = "font-size:10px;color:var(--muted);";
+        descEl.textContent = svc.description || "";
+        left.appendChild(nameEl); left.appendChild(descEl);
+        const right = document.createElement("div");
+        right.style.cssText = "display:flex;flex-direction:column;align-items:flex-end;gap:2px;";
+        const dotEl = document.createElement("span");
+        dotEl.style.cssText = "font-size:11px;color:var(--muted);";
+        dotEl.textContent = "…";
+        right.appendChild(dotEl);
+        if (svc.type === "timer") {
+          const cdEl = document.createElement("span");
+          cdEl.id = "svc-cd-" + svcId;
+          cdEl.style.cssText = "font-size:10px;color:rgba(251,191,36,.8);font-family:var(--mono);";
+          right.appendChild(cdEl);
+        }
+        row.appendChild(left); row.appendChild(right);
+        dockerStatusListEl.appendChild(row);
+
+        fetch(API_BASE + "/vps/status/" + svcId).then(async r => {
+          if (!r.ok) { dotEl.textContent = "⚠ unavail"; return; }
+          const sd = await r.json();
+          const active = (sd.active_state || sd.state || "").toLowerCase();
+          const isUp = active.includes("active") || active.includes("running");
+          dotEl.textContent = isUp ? "● active" : "○ " + (active || "unknown");
+          dotEl.style.color  = isUp ? "#86efac" : "#fca5a5";
+          if (svc.type === "timer" && sd.next_elapse) {
+            const cdEl2 = document.getElementById("svc-cd-" + svcId);
+            if (cdEl2) {
+              const target = new Date(sd.next_elapse);
+              (function tick() {
+                const diff = target - Date.now();
+                if (diff <= 0) { cdEl2.textContent = "due now"; return; }
+                const h = Math.floor(diff / 3600000);
+                const m = Math.floor((diff % 3600000) / 60000);
+                const s = Math.floor((diff % 60000) / 1000);
+                cdEl2.textContent = "next: " + (h > 0 ? h + "h " : "") + m + "m " + s + "s";
+                setTimeout(tick, 1000);
+              })();
+            }
+          }
+        }).catch(() => { dotEl.textContent = "⚠ unavail"; });
+      }
+    } catch(e) {
+      if (dockerStatusListEl) dockerStatusListEl.innerHTML = "<div style='font-size:12px;color:var(--muted);padding:4px 0;'>Status unavailable</div>";
+    }
+  }
+
+  if (refreshStatusBtnEl) refreshStatusBtnEl.onclick = loadDockerStatus;
+  loadDockerStatus();
+
+  // ── Right team feed (mirror of left feed) ─────────────────────────────────
+  const rightTeamFeedEl = document.getElementById("rightTeamFeed");
+  function syncRightTeamFeed() {
+    if (!rightTeamFeedEl) return;
+    rightTeamFeedEl.innerHTML = "";
+    teamFeedEvents.slice(-40).forEach(ev => {
+      const row = document.createElement("div");
+      row.style.cssText = "padding:6px 10px;border-bottom:1px solid var(--border);";
+      const meta = document.createElement("div");
+      meta.style.cssText = "font-size:10px;color:var(--muted);margin-bottom:2px;";
+      meta.textContent = (ev.t || "").replace("T", " ").slice(5, 16) + "  " + (ev.agent || "") + "  " + (ev.type || "");
+      row.appendChild(meta);
+      if (ev.content) {
+        const c = document.createElement("div");
+        c.style.cssText = "font-size:11px;color:var(--text);white-space:pre-wrap;";
+        c.textContent = (ev.content || "").slice(0, 140) + ((ev.content || "").length > 140 ? "…" : "");
+        row.appendChild(c);
+      }
+      rightTeamFeedEl.appendChild(row);
+    });
+    rightTeamFeedEl.scrollTop = rightTeamFeedEl.scrollHeight;
+  }
+
+  // ── News ticker ──────────────────────────────────────────────────────────
+  async function loadNewsTicker() {
+    try {
+      const res = await fetch(API_BASE + "/dashboard/news");
+      if (!res.ok) return;
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length) return;
+      const inner = document.getElementById("newsTickerInner");
+      if (!inner) return;
+      // Duplicate items for seamless animation loop
+      const text = items.join("   ·   ");
+      inner.textContent = text + "   ·   " + text;
+    } catch(e) {}
+  }
+  loadNewsTicker();
+
 </script>
 </body>
 </html>
@@ -3498,6 +3490,184 @@ def vps_logs(service_id: str, lines: int = 200):
         return {"service_id": service_id, "logs": _vps.logs(service_id, lines=lines)}
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ── Projects endpoints ─────────────────────────────────────────────────────────
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    notes: str = ""
+    repo: str = ""
+    tags: str = ""
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = ""
+    notes: str = ""
+    repo: str = ""
+    tags: str = ""
+
+
+@app.get("/projects")
+def projects_list():
+    """Return all projects."""
+    return {"projects": _projects.list_projects()}
+
+
+@app.post("/projects")
+def projects_create(req: ProjectCreateRequest):
+    """Create a new project."""
+    if not req.name.strip():
+        raise HTTPException(status_code=422, detail="name is required")
+    return _projects.create_project(req.name.strip(), req.notes, req.repo, req.tags)
+
+
+@app.patch("/projects/{project_id}")
+def projects_update(project_id: int, req: ProjectUpdateRequest):
+    """Update a project's fields."""
+    kwargs = {k: v for k, v in req.model_dump().items() if v != ""}
+    result = _projects.update_project(project_id, **kwargs)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return result
+
+
+@app.delete("/projects/{project_id}")
+def projects_delete(project_id: int):
+    """Delete a project."""
+    ok = _projects.delete_project(project_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"ok": True}
+
+
+# ── Deep crypto analytics endpoint ────────────────────────────────────────────
+
+@app.get("/analytics/crypto/deep")
+def analytics_crypto_deep():
+    """Return in-depth analytics computed from the local trade log."""
+    import math as _math
+
+    rows = _trade_log.get_recent_trades(limit=500)
+    pnl_rows = _trade_log.get_recent_pnl(limit=200)
+
+    if not rows:
+        return {"error": "No trade data available", "trades_count": 0}
+
+    # Closed trades have net_pnl populated
+    closed = [r for r in rows if r.get("net_pnl") is not None]
+    wins   = [r for r in closed if r["net_pnl"] > 0]
+    losses = [r for r in closed if r["net_pnl"] <= 0]
+
+    win_rate = len(wins) / len(closed) if closed else 0
+    avg_win  = sum(r["net_pnl"] for r in wins)  / len(wins)  if wins  else 0
+    avg_loss = sum(r["net_pnl"] for r in losses) / len(losses) if losses else 0
+
+    total_wins_pnl   = sum(r["net_pnl"] for r in wins)
+    total_losses_abs = abs(sum(r["net_pnl"] for r in losses))
+    profit_factor = (total_wins_pnl / total_losses_abs) if (losses and total_losses_abs != 0) else None
+
+    total_pnl = sum(r.get("net_pnl", 0) or 0 for r in closed)
+    best_trade  = max(closed, key=lambda r: r["net_pnl"])  if closed else None
+    worst_trade = min(closed, key=lambda r: r["net_pnl"])  if closed else None
+
+    # By symbol
+    by_symbol: dict = {}
+    for r in rows:
+        sym = r.get("symbol") or "unknown"
+        if sym not in by_symbol:
+            by_symbol[sym] = {"count": 0, "pnl": 0.0}
+        by_symbol[sym]["count"] += 1
+        by_symbol[sym]["pnl"]   += r.get("net_pnl") or 0
+
+    # By exchange
+    by_exchange: dict = {}
+    for r in rows:
+        ex = r.get("exchange") or "unknown"
+        if ex not in by_exchange:
+            by_exchange[ex] = {"count": 0, "pnl": 0.0}
+        by_exchange[ex]["count"] += 1
+        by_exchange[ex]["pnl"]   += r.get("net_pnl") or 0
+
+    # Consecutive win/loss streaks (chronological order)
+    max_cons_wins = max_cons_losses = 0
+    cur_w = cur_l = 0
+    for r in reversed(closed):
+        if r["net_pnl"] > 0:
+            cur_w += 1; cur_l = 0
+        else:
+            cur_l += 1; cur_w = 0
+        max_cons_wins   = max(max_cons_wins,   cur_w)
+        max_cons_losses = max(max_cons_losses, cur_l)
+
+    # Sortino ratio from P&L snapshots
+    sortino = None
+    if pnl_rows and len(pnl_rows) > 2:
+        pnl_vals = [r.get("total_pnl") for r in pnl_rows if r.get("total_pnl") is not None]
+        if len(pnl_vals) > 2:
+            returns = [pnl_vals[i] - pnl_vals[i - 1] for i in range(1, len(pnl_vals))]
+            neg_sq  = [r * r for r in returns if r < 0]
+            if neg_sq:
+                downside_dev = _math.sqrt(sum(neg_sq) / len(neg_sq))
+                mean_r = sum(returns) / len(returns)
+                if downside_dev > 0:
+                    sortino = round(mean_r / downside_dev, 4)
+
+    total_fees = sum(r.get("fee") or 0 for r in rows)
+    avg_fee    = total_fees / len(rows) if rows else 0
+    sizes      = [r.get("size") or 0 for r in rows]
+    avg_size   = sum(sizes) / len(sizes) if sizes else 0
+    max_size   = max(sizes) if sizes else 0
+
+    return {
+        "trades_count":           len(rows),
+        "closed_trades":          len(closed),
+        "win_rate":               round(win_rate * 100, 2),
+        "wins":                   len(wins),
+        "losses":                 len(losses),
+        "avg_win":                round(avg_win, 4),
+        "avg_loss":               round(avg_loss, 4),
+        "profit_factor":          round(profit_factor, 4) if profit_factor is not None else None,
+        "total_pnl":              round(total_pnl, 4),
+        "best_trade_pnl":         round(best_trade["net_pnl"], 4)  if best_trade  else None,
+        "best_trade_symbol":      best_trade["symbol"]             if best_trade  else None,
+        "worst_trade_pnl":        round(worst_trade["net_pnl"], 4) if worst_trade else None,
+        "worst_trade_symbol":     worst_trade["symbol"]            if worst_trade else None,
+        "max_consecutive_wins":   max_cons_wins,
+        "max_consecutive_losses": max_cons_losses,
+        "sortino_ratio":          sortino,
+        "total_fees":             round(total_fees, 6),
+        "avg_fee":                round(avg_fee, 6),
+        "avg_trade_size":         round(avg_size, 6),
+        "max_trade_size":         round(max_size, 6),
+        "by_symbol":   {k: {"count": v["count"], "pnl": round(v["pnl"], 4)} for k, v in by_symbol.items()},
+        "by_exchange": {k: {"count": v["count"], "pnl": round(v["pnl"], 4)} for k, v in by_exchange.items()},
+    }
+
+
+# ── Dashboard news endpoint ────────────────────────────────────────────────────
+
+@app.get("/dashboard/news")
+def dashboard_news():
+    """Return recent trade activity for the dashboard news ticker."""
+    recent_trades = _trade_log.get_recent_trades(limit=5)
+    inactivity    = _trade_log.get_inactivity_status()
+
+    items = []
+    for t in recent_trades:
+        side  = (t.get("side") or "").upper()
+        sym   = t.get("symbol") or "?"
+        price = t.get("fill_price")
+        ts    = (t.get("ts") or "")[:16].replace("T", " ")
+        pnl   = t.get("net_pnl")
+        pnl_s = (f"  P&L {'+' if pnl > 0 else ''}{round(pnl, 4)}" if pnl is not None else "")
+        items.append(f"{ts}  {side} {sym} @ {price}{pnl_s}")
+
+    if inactivity.get("is_inactive"):
+        hours = inactivity.get("hours_since_last_trade", "?")
+        items.append(f"⚠️ No trades recorded in the last {hours}h")
+
+    return {"items": items, "count": len(items)}
 
 
 # ── Trade log endpoints ───────────────────────────────────────────────────────
@@ -4074,6 +4244,10 @@ _CHAT_WEB_HTML = """<!doctype html>
     .session-item:hover .session-del{opacity:1;}
     .sidebar-footer{padding:10px 12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;}
     .sidebar-footer .user-email{font-size:.78rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .project-item{padding:5px 8px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid var(--border);cursor:pointer;transition:background .15s;}
+    .project-item:hover{background:rgba(255,255,255,.07);}
+    .project-name{font-size:.78rem;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .project-repo{font-size:.71rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
     /* ── Main area ── */
     .main{flex:1;display:flex;flex-direction:column;min-width:0;}
@@ -4185,6 +4359,16 @@ _CHAT_WEB_HTML = """<!doctype html>
       <button class="btn-new" onclick="newSession()">+ New</button>
     </div>
     <div class="sessions-list" id="sessionsList"></div>
+
+    <!-- Projects pane -->
+    <div style="border-top:1px solid var(--border);padding:6px 6px 2px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px 6px;">
+        <span style="font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);">Projects</span>
+        <button id="btnAddProject" style="background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.25);border-radius:6px;color:var(--accent);font-size:.73rem;font-weight:600;padding:2px 8px;cursor:pointer;">+ Add</button>
+      </div>
+      <div id="projectsList" style="display:flex;flex-direction:column;gap:3px;max-height:160px;overflow-y:auto;padding:0 2px 4px;"></div>
+    </div>
+
     <div class="sidebar-footer">
       <div class="user-email" id="userEmailSidebar"></div>
       <button class="btn-sm" onclick="openPwModal()">Change password</button>
@@ -4250,6 +4434,28 @@ _CHAT_WEB_HTML = """<!doctype html>
     <div class="modal-btns">
       <button class="cancel" onclick="closePwModal()">Cancel</button>
       <button class="save" onclick="submitPwChange()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Project modal -->
+<div class="modal-bg" id="projectModal">
+  <div class="modal" style="max-width:420px;">
+    <h2 id="projModalTitle">New Project</h2>
+    <label>Name *</label>
+    <input type="text" id="projName" placeholder="My trading bot" maxlength="120"/>
+    <label>Repo (owner/repo)</label>
+    <input type="text" id="projRepo" placeholder="leeheggan-droid/openclaw-crypto" maxlength="200"/>
+    <label>Notes</label>
+    <textarea id="projNotes" rows="3" style="width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-size:.9rem;outline:none;resize:vertical;margin-top:4px;" placeholder="Goals, links, context…"></textarea>
+    <label>Tags</label>
+    <input type="text" id="projTags" placeholder="crypto, trading, live" maxlength="200"/>
+    <div class="modal-btns" style="flex-wrap:wrap;gap:8px;">
+      <button class="cancel" id="projDeleteBtn" onclick="deleteProjectCurrent()" style="background:rgba(248,113,113,.1);color:#fca5a5;border:1px solid rgba(248,113,113,.2);">Delete</button>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button class="cancel" onclick="closeProjectModal()">Cancel</button>
+        <button class="save" onclick="saveProject()">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -4375,7 +4581,9 @@ async function loadSessions() {
     if (sessions.length === 0) {
       await newSession();
     } else if (!currentSessionId) {
-      await switchSession(sessions[0].id);
+      const savedId = localStorage.getItem("openclaw_chat_session_v1");
+      const found = savedId && sessions.find(s => s.id === savedId);
+      await switchSession(found ? savedId : sessions[0].id);
     }
   } catch(e) {}
 }
@@ -4422,6 +4630,7 @@ async function newSession() {
 
 async function switchSession(sessionId) {
   currentSessionId = sessionId;
+  localStorage.setItem("openclaw_chat_session_v1", sessionId);
   const s = sessions.find(x => x.id === sessionId);
   sessionLabel.textContent = (s && s.title && s.title !== "New chat") ? s.title : "New chat";
   // Update provider/model dropdowns to match session settings
@@ -4614,7 +4823,109 @@ async function submitPwChange() {
 (async () => {
   await loadProviders();
   await loadSessions();
+  loadProjects();
 })();
+
+// ── Projects ──────────────────────────────────────────────────────────────
+let projects = [];
+let editingProjectId = null;
+
+async function loadProjects() {
+  try {
+    const res = await fetch("/projects");
+    if (!res.ok) return;
+    projects = (await res.json()).projects || [];
+    renderProjects();
+  } catch(e) {}
+}
+
+function renderProjects() {
+  const list = document.getElementById("projectsList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (projects.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:.73rem;color:var(--muted);padding:4px 6px;";
+    empty.textContent = "No projects yet";
+    list.appendChild(empty);
+    return;
+  }
+  for (const p of projects) {
+    const item = document.createElement("div");
+    item.className = "project-item";
+    const name = document.createElement("div");
+    name.className = "project-name";
+    name.textContent = p.name;
+    item.appendChild(name);
+    if (p.repo) {
+      const repo = document.createElement("div");
+      repo.className = "project-repo";
+      repo.textContent = "📁 " + p.repo;
+      item.appendChild(repo);
+    }
+    if (p.notes) {
+      const notes = document.createElement("div");
+      notes.style.cssText = "font-size:.71rem;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      notes.textContent = p.notes.slice(0, 60) + (p.notes.length > 60 ? "…" : "");
+      item.appendChild(notes);
+    }
+    item.addEventListener("click", () => openProjectModal(p));
+    list.appendChild(item);
+  }
+}
+
+document.getElementById("btnAddProject").addEventListener("click", () => openProjectModal(null));
+
+function openProjectModal(p) {
+  editingProjectId = p ? p.id : null;
+  document.getElementById("projName").value  = p ? (p.name  || "") : "";
+  document.getElementById("projRepo").value  = p ? (p.repo  || "") : "";
+  document.getElementById("projNotes").value = p ? (p.notes || "") : "";
+  document.getElementById("projTags").value  = p ? (p.tags  || "") : "";
+  document.getElementById("projModalTitle").textContent = p ? "Edit Project" : "New Project";
+  document.getElementById("projDeleteBtn").style.display = p ? "" : "none";
+  document.getElementById("projectModal").classList.add("open");
+}
+
+function closeProjectModal() {
+  document.getElementById("projectModal").classList.remove("open");
+  editingProjectId = null;
+}
+
+async function saveProject() {
+  const name  = document.getElementById("projName").value.trim();
+  const repo  = document.getElementById("projRepo").value.trim();
+  const notes = document.getElementById("projNotes").value.trim();
+  const tags  = document.getElementById("projTags").value.trim();
+  if (!name) { alert("Project name is required"); return; }
+  try {
+    if (editingProjectId) {
+      await fetch(`/projects/${editingProjectId}`, {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name, repo, notes, tags}),
+      });
+    } else {
+      await fetch("/projects", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name, repo, notes, tags}),
+      });
+    }
+    closeProjectModal();
+    await loadProjects();
+  } catch(e) { alert("Error: " + e.message); }
+}
+
+async function deleteProjectCurrent() {
+  if (!editingProjectId) return;
+  if (!confirm("Delete this project?")) return;
+  try {
+    await fetch(`/projects/${editingProjectId}`, {method: "DELETE"});
+    closeProjectModal();
+    await loadProjects();
+  } catch(e) { alert("Error: " + e.message); }
+}
 </script>
 </body>
 </html>"""
