@@ -51,3 +51,4 @@ cookies.txt
 package-lock.json
 *-l
 SELECT
+-l*
