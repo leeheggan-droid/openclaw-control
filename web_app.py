@@ -31,13 +31,10 @@ from openclaw_control.memory import agent_memory as _memory
 from openclaw_control.service import (
     handle_message, handle_agent_message,
     run_vibe_report,
-    run_ssh,
     run_ssh_readonly,
     start_team_review, get_team_review_events,
-    start_vibe_run, get_vibe_run, handle_vibe_next,
-    start_autopilot, stop_autopilot, get_autopilot_status,
-    get_autopilot_findings, ack_autopilot_findings, get_autopilot_events,
 )
+import adapters.vps_wrappers as _vps
 from openclaw_control import trade_log as _trade_log
 from openclaw_control.trade_log import now_iso as _trade_log_now_iso
 from openclaw_control.tools.exchange_tools import (
@@ -118,22 +115,6 @@ class ProposalConfirmRequest(BaseModel):
     repo: str
     labels: list[str] = []
     assign_copilot: bool = True
-
-
-class VibePlanRequest(BaseModel):
-    goal: str
-    workspace: dict = {}
-
-
-class VibeNextRequest(BaseModel):
-    goal: str
-    history: list[dict] = []   # list of {"command": str, "output": str}
-    workspace: dict = {}
-
-
-class VibeExecuteRequest(BaseModel):
-    workdir: str
-    prompt: str
 
 
 class CheapChatRequest(BaseModel):
@@ -242,7 +223,6 @@ def config(openclaw_session: str | None = Cookie(default=None)):
         "ssh_host": settings.ssh_host,
         "ssh_readonly_host": settings.ssh_readonly_host,
         "repo_dir": settings.repo_dir,
-        "vibe_workdir": settings.vibe_workdir or settings.repo_dir,
         "allowed_repos": sorted(ALLOWED_REPOS),
     }
 
@@ -324,49 +304,6 @@ def ops_ssh_readonly_run(req: ReadonlySshRequest):
             ),
         )
     result = run_ssh_readonly(cmd, timeout=30)
-    return result
-
-
-# Exact commands permitted through the VIBE-lane probe endpoint.
-# Using an exact-match set eliminates shell-injection risk entirely —
-# every permitted string is a hardcoded, known-safe value.
-_VIBE_PROBE_COMMANDS = frozenset({
-    "whoami",
-    "uptime",
-    "docker ps",
-    "docker compose ps",
-    "ls -la",
-    "docker logs --tail=200 openclaw-orchestrator",
-    (
-        "timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null"
-        " || docker logs --tail=200 openclaw-orchestrator"
-    ),
-})
-
-
-@app.post("/ops/ssh-vibe-probe")
-def ops_ssh_vibe_probe(req: SshCommandRequest):
-    """Run a single safe diagnostic command on the VIBE execution host.
-
-    This endpoint exists so that probe commands (e.g. ``whoami``, ``docker ps``)
-    can be verified against the VIBE SSH lane rather than the READONLY lane.
-    Only commands that appear verbatim in ``_VIBE_PROBE_COMMANDS`` are accepted;
-    all others are rejected with 422.
-    """
-    cmd = (req.cmd or "").strip()
-    if not cmd:
-        raise HTTPException(status_code=422, detail="cmd must not be empty")
-    if cmd not in _VIBE_PROBE_COMMANDS:
-        raise HTTPException(
-            status_code=422,
-            detail="command is not in the vibe-probe allowlist",
-        )
-    if not settings.ssh_host:
-        raise HTTPException(
-            status_code=503,
-            detail="OPENCLAW_SSH_HOST is not configured — vibe SSH features are disabled.",
-        )
-    result = run_ssh(cmd, timeout=60)
     return result
 
 
@@ -980,21 +917,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     }
     .proposalResult a{color:#86efac;text-decoration:underline;}
 
-    /* Vibe execution gateway */
-    .vibePad{
-      flex:1;
-      display:none;
-      flex-direction:column;
-      overflow:hidden;
-    }
-    .vibeInputSection{
-      padding:12px;
-      border-bottom:1px solid var(--border);
-      background:rgba(255,255,255,.01);
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
+    /* Shared control button styles */
     .vibeLabel{
       font-size:11px;
       color:var(--muted);
@@ -1004,19 +927,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       margin-bottom:2px;
       display:block;
     }
-    .vibeTextInput{
-      width:100%;
-      box-sizing:border-box;
-      background:rgba(0,0,0,.22);
-      border:1px solid var(--border);
-      border-radius:10px;
-      padding:8px 10px;
-      color:var(--text);
-      font-family:var(--mono);
-      font-size:13px;
-      outline:none;
-    }
-    .vibeTextInput:focus{border-color:rgba(34,197,94,.4);}
     .vibeTextarea{
       width:100%;
       box-sizing:border-box;
@@ -1033,11 +943,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       min-height:80px;
     }
     .vibeTextarea:focus{border-color:rgba(34,197,94,.4);}
-    .vibeActions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-    }
     .vibeBtn{
       padding:6px 14px;
       border-radius:999px;
@@ -1094,30 +999,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       word-break:break-all;
     }
     .vibeApprovalBtns{display:flex;gap:8px;}
-    .vibeFeed{
-      flex:1;
-      overflow:auto;
-      padding:10px 12px;
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-    }
-    .vibeFeed::-webkit-scrollbar{width:10px;}
-    .vibeFeed::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
-    .vibeFeedRow{
-      font-family:var(--mono);
-      font-size:12px;
-      white-space:pre-wrap;
-      padding:8px 10px;
-      background:rgba(0,0,0,.18);
-      border:1px solid var(--border);
-      border-radius:10px;
-      color:var(--text);
-      line-height:1.45;
-    }
-    .vibeFeedRow.info{color:rgba(147,197,253,.85);border-color:rgba(59,130,246,.2);}
-    .vibeFeedRow.done{color:rgba(134,239,172,.85);border-color:rgba(34,197,94,.2);}
-    .vibeFeedRow.err {color:rgba(252,165,165,.85);border-color:rgba(251,113,133,.2);}
 
     /* Analytics tab */
     .analyticsPad{
@@ -1173,106 +1054,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       text-align:center;
       padding:28px 0;
     }
-
-    /* Autopilot investigate tab */
-    .autopilotPad{
-      flex:1;
-      display:none;
-      flex-direction:column;
-      overflow:hidden;
-    }
-    .apStatus{
-      padding:10px 12px;
-      border-bottom:1px solid var(--border);
-      background:rgba(255,255,255,.01);
-      display:flex;
-      align-items:center;
-      gap:10px;
-      flex-wrap:wrap;
-      font-size:12px;
-      color:var(--muted);
-    }
-    .apStatusDot{
-      width:8px; height:8px;
-      border-radius:999px;
-      background:rgba(156,163,175,.5);
-      flex-shrink:0;
-    }
-    .apStatusDot.running{background:var(--accent);box-shadow:0 0 6px rgba(34,197,94,.5);}
-    .apFeed{
-      flex:1;
-      overflow:auto;
-      padding:10px 12px;
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-    }
-    .apFeed::-webkit-scrollbar{width:10px;}
-    .apFeed::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:999px;}
-    .apFindingRow{
-      padding:10px 12px;
-      background:rgba(0,0,0,.18);
-      border:1px solid var(--border);
-      border-radius:10px;
-    }
-    .apFindingRow.unread{border-left:3px solid rgba(251,113,133,.6);}
-    .apFindingMeta{
-      display:flex; gap:6px; align-items:center;
-      font-size:11px; color:var(--muted); margin-bottom:5px;
-    }
-    .apUrgency{
-      padding:1px 7px; border-radius:999px;
-      font-size:10px; font-weight:700; letter-spacing:.2px;
-    }
-    .apUrgency.high  {background:rgba(251,113,133,.2);color:#fca5a5;}
-    .apUrgency.medium{background:rgba(251,191,36,.18);color:rgba(251,191,36,.9);}
-    .apUrgency.low   {background:rgba(59,130,246,.18);color:#93c5fd;}
-    .apSummary{font-size:13px; color:var(--text); line-height:1.35;}
-    .apAction{font-size:12px; color:var(--muted); margin-top:4px;}
-    .apAction a{color:#60a5fa; text-decoration:underline; word-break:break-all;}
-    .apAction a:hover{color:#93c5fd;}
-    .apBadge{
-      display:inline-block;
-      background:rgba(251,113,133,.9);
-      color:#fff; border-radius:999px;
-      font-size:10px; padding:0 5px;
-      min-width:16px; text-align:center;
-      font-weight:700; margin-left:3px;
-      vertical-align:middle; line-height:16px;
-    }
-    .apEmptyState{
-      flex:1; display:flex; align-items:center; justify-content:center;
-      color:var(--muted); font-size:13px; flex-direction:column; gap:6px;
-      text-align:center;
-    }
-    .apEventRow{
-      padding:4px 8px;
-      font-size:11px;
-      color:var(--muted);
-      border-left:2px solid transparent;
-      border-radius:4px;
-      background:rgba(0,0,0,.1);
-    }
-    .apEventRow.gather  {border-left-color:rgba(59,130,246,.45);}
-    .apEventRow.analyze {border-left-color:rgba(139,92,246,.45);}
-    .apEventRow.conclude{border-left-color:rgba(251,191,36,.45);}
-    .apEventRow.escalate{border-left-color:rgba(251,113,133,.45);}
-    .apEventRow.clear   {border-left-color:rgba(34,197,94,.45);color:rgba(134,239,172,.75);}
-    .apEventRow.error   {border-left-color:rgba(239,68,68,.45);color:rgba(252,165,165,.8);}
-    .apEventRow.skip    {color:rgba(156,163,175,.45);}
-    .apApproveBtn{
-      margin-top:8px;
-      padding:4px 12px;
-      font-size:11px;
-      border-radius:6px;
-      border:1px solid rgba(34,197,94,.4);
-      background:rgba(34,197,94,.08);
-      color:rgba(134,239,172,.9);
-      cursor:pointer;
-    }
-    .apApproveBtn:hover{background:rgba(34,197,94,.18);}
-    .apApproveBtn:disabled{opacity:.4;cursor:not-allowed;}
-    .apApproveResult{font-size:11px;margin-top:5px;color:var(--muted);}
 
     /* Main tab quick-action suggestion chips */
     .mainSuggestsBar{
@@ -1561,9 +1342,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
           <button class="tabBtn" data-agent="pnl">P&amp;L</button>
           <button class="tabBtn" data-agent="quant">Quant</button>
           <button class="tabBtn" data-agent="coo">COO</button>
-          <button class="tabBtn" data-agent="vibe">Vibe</button>
           <button class="tabBtn" data-agent="team">Team</button>
-          <button class="tabBtn" data-agent="autopilot">Autopilot <span class="apBadge" id="apTabBadge" style="display:none">0</span></button>
           <button class="tabBtn" data-agent="analytics">📊 Analytics</button>
           <button class="tabBtn" data-agent="memory">🧠 Memory</button>
           <button class="tabBtn" data-agent="cheap">💬 Chat</button>
@@ -1605,55 +1384,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
       <div id="chat-cheap" class="chatBody" style="display:none"></div>
 
       <div class="teamFeed" id="teamFeed"></div>
-
-      <!-- Vibe execution gateway panel -->
-      <div class="vibePad" id="vibePad">
-        <div class="vibeInputSection">
-          <div>
-            <label class="vibeLabel" for="vibeGoalInput">Goal</label>
-            <textarea class="vibeTextarea" id="vibeGoalInput" rows="2" placeholder="Describe what you want to achieve…"></textarea>
-          </div>
-          <div>
-            <label class="vibeLabel" for="vibeWorkdirInput">Workdir</label>
-            <input class="vibeTextarea" id="vibeWorkdirInput" type="text" placeholder="/opt/openclaw-crypto" style="font-family:monospace;padding:6px 8px;" />
-          </div>
-          <div>
-            <label class="vibeLabel" for="vibePromptInput">Vibe Prompt</label>
-            <textarea class="vibeTextarea" id="vibePromptInput" rows="3" placeholder="AI will plan a vibe prompt — or type one directly"></textarea>
-          </div>
-          <div class="vibeActions">
-            <button class="vibeBtn vibeSecondaryBtn" id="vibePlanBtn">✨ Plan with AI</button>
-            <button class="vibeBtn vibePrimaryBtn" id="vibeExecuteBtn">▶ Approve &amp; Execute</button>
-          </div>
-        </div>
-        <div class="vibeApprovalBanner" id="vibeApprovalBanner">
-          <div class="vibeApprovalTitle">⚠️ Review &amp; Confirm Vibe Execution</div>
-          <div class="vibeApprovalCmd" id="vibeApprovalCmd"></div>
-          <div class="vibeApprovalLane" style="font-size:11px;color:var(--muted);margin-top:2px;"></div>
-          <div class="vibeApprovalBtns">
-            <button class="vibeBtn vibePrimaryBtn" id="vibeConfirmBtn">✅ Confirm &amp; Execute</button>
-            <button class="vibeBtn vibeDangerBtn" id="vibeCancelApprovalBtn">✗ Cancel</button>
-          </div>
-        </div>
-        <div class="vibeFeed" id="vibeFeed"></div>
-      </div>
-
-      <!-- Autopilot investigate panel -->
-      <div class="autopilotPad" id="autopilotPad">
-        <div class="apStatus">
-          <span class="apStatusDot" id="apDot"></span>
-          <span id="apStatusText">Stopped</span>
-          <span style="flex:1"></span>
-          <button class="vibeBtn vibeSecondaryBtn" id="apToggleBtn" style="font-size:11px;padding:4px 10px;">▶ Start</button>
-          <button class="vibeBtn vibeSecondaryBtn" id="apAckBtn" style="font-size:11px;padding:4px 10px;">✓ Mark all read</button>
-        </div>
-        <div class="apFeed" id="apFeed">
-          <div class="apEmptyState" id="apEmpty">
-            <span>⚙ No findings yet</span>
-            <span style="font-size:11px;max-width:300px;">Autopilot investigates autonomously and only surfaces issues here — routine checks stay silent.</span>
-          </div>
-        </div>
-      </div>
 
       <!-- Analytics tab panel -->
       <div class="analyticsPad" id="analyticsPad">
@@ -1763,7 +1493,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         <div class="hintBar">
           <div>Enter = send • Shift+Enter = newline • <code>/copilot &lt;goal&gt;</code> • Team review: type <code>@filename</code> to attach a file</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <span>Shell: <code>!uptime</code>, <code>!docker ps</code></span>
             <select class="repoSelect" id="repoSelect" title="Target repo for Copilot issues">
               <option value="">Auto</option>
               <option value="leeheggan-droid/openclaw-crypto">openclaw-crypto</option>
@@ -1792,6 +1521,9 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         <div style="display:flex;align-items:center;gap:6px;">
           <span style="font-size:12px;color:var(--muted);user-select:none;">SSH target:</span>
           <div class="badge" id="hostBadge">localhost</div>
+          <span style="font-size:12px;color:var(--muted);user-select:none;margin-left:8px;">Domain:</span>
+          <button class="pill" id="domainMainBtn" onclick="switchDomain('main')" title="leeheggan.tech" style="padding:3px 10px;font-size:11px;">leeheggan.tech</button>
+          <button class="pill" id="domainChatBtn" onclick="switchDomain('webchat')" title="leeheggan.tech/web-chat" style="padding:3px 10px;font-size:11px;">web-chat</button>
         </div>
       </div>
 
@@ -1808,26 +1540,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
         </div>
       </div>
 
-      <!-- VIBE probe approval banner — shown before identity/diagnostic pill commands -->
-      <div class="vibeApprovalBanner" id="vibeProbeApprovalBanner">
-        <div class="vibeApprovalTitle">🔵 VIBE lane (probe) — confirm before running</div>
-        <div class="vibeApprovalCmd" id="vibeProbeApprovalCmd"></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px;" id="vibeProbeApprovalHost"></div>
-        <div class="vibeApprovalBtns">
-          <button class="vibeBtn vibePrimaryBtn" id="vibeProbeConfirmBtn">✅ Confirm &amp; Run</button>
-          <button class="vibeBtn vibeDangerBtn" id="vibeProbeCancelBtn">✗ Cancel</button>
-        </div>
-      </div>
-
       <div class="termControls">
-        <button class="pill" onclick="runVibeProbeQuick('uptime')">uptime</button>
-        <button class="pill" onclick="runVibeProbeQuick('whoami')">whoami</button>
-        <button class="pill" onclick="runVibeProbeQuick('docker ps')">docker ps</button>
-        <button class="pill" onclick="runVibeProbeQuick('docker compose ps')">docker compose ps</button>
-        <button class="pill" onclick="runVibeProbeQuick('ls -la')">ls -la</button>
-        <button class="pill" onclick="runVibeProbeQuick('docker logs --tail=200 openclaw-orchestrator')">logs last 200</button>
-        <button class="pill" onclick="runVibeProbeQuick('timeout 30 docker logs -f openclaw-orchestrator 2>/dev/null || docker logs --tail=200 openclaw-orchestrator')">logs follow 30s</button>
-        <button class="pill" onclick="confirmDockerRefresh()">docker refresh</button>
         <button class="pill" onclick="clearTerminal()">clear</button>
       </div>
     </section>
@@ -1973,8 +1686,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
 
   // --- tab switching ---
   const teamFeedEl = document.getElementById("teamFeed");
-  const vibePadEl  = document.getElementById("vibePad");
-  const autopilotPadEl = document.getElementById("autopilotPad");
   const analyticsPadEl = document.getElementById("analyticsPad");
   const memoryPadEl    = document.getElementById("memoryPad");
   const cheapBarEl = document.getElementById("cheapBar");
@@ -1984,31 +1695,24 @@ def index(openclaw_session: str | None = Cookie(default=None)):
 
   function showAgentTab(ag) {
     const isTeam = ag === "team";
-    const isVibe = ag === "vibe";
-    const isAutopilot = ag === "autopilot";
     const isAnalytics = ag === "analytics";
     const isCheap = ag === "cheap";
     const isMemory = ag === "memory";
     const isMain = ag === "main";
-    // Show the right chat pane (or none for team/vibe/autopilot/analytics/memory) — no re-render
+    // Show the right chat pane (or none for team/analytics/memory) — no re-render
     for (const [key, pane] of Object.entries(CHAT_PANES)) {
-      pane.style.display = (!isTeam && !isVibe && !isAutopilot && !isAnalytics && !isMemory && key === ag) ? "" : "none";
+      pane.style.display = (!isTeam && !isAnalytics && !isMemory && key === ag) ? "" : "none";
     }
     // Main tab gets its own suggest bar instead of the team review buttons
-    teamBtnsBarEl.style.display  = (!isMain && !isVibe && !isAutopilot && !isAnalytics && !isMemory) ? "flex" : "none";
+    teamBtnsBarEl.style.display  = (!isMain && !isAnalytics && !isMemory) ? "flex" : "none";
     mainSuggestsBarEl.style.display = isMain ? "flex" : "none";
     cheapBarEl.style.display     = isCheap     ? "flex" : "none";
     teamFeedEl.style.display     = isTeam      ? "flex" : "none";
-    vibePadEl.style.display      = isVibe      ? "flex" : "none";
-    autopilotPadEl.style.display = isAutopilot ? "flex" : "none";
     analyticsPadEl.style.display = isAnalytics ? "flex" : "none";
     memoryPadEl.style.display    = isMemory    ? "flex" : "none";
-    composerEl.style.display     = (isTeam || isVibe || isAutopilot || isAnalytics || isMemory) ? "none" : "";
+    composerEl.style.display     = (isTeam || isAnalytics || isMemory) ? "none" : "";
     if (isTeam) {
       renderTeamFeed();
-    }
-    if (isAutopilot) {
-      pollAutopilotStatus();
     }
     if (isMemory) {
       loadMemoryCockpit();
@@ -2082,7 +1786,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   fileInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
-    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return;
+    if (["team", "analytics", "memory"].includes(activeAgent)) return;
     const maxBytes = 200 * 1024;
     if (f.size > maxBytes) {
       addChat("user", `(attached file too large for inline text: ${f.name}, ${f.size} bytes)`);
@@ -2106,7 +1810,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   imgInput.onchange = async (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
-    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return;
+    if (["team", "analytics", "memory"].includes(activeAgent)) return;
     const url = URL.createObjectURL(f);
     const extra = `<div class="imgPreview"><img src="${url}" alt="attachment"/></div>`;
     addChat("user", `Attached image: ${f.name}`, extra);
@@ -2122,7 +1826,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   async function send(textOverride) {
     const text = (textOverride !== undefined) ? textOverride : inputEl.value.trim();
     if (!text) return;
-    if (["team", "vibe", "autopilot", "analytics", "memory"].includes(activeAgent)) return; // composer hidden on these tabs
+    if (["team", "analytics", "memory"].includes(activeAgent)) return; // composer hidden on these tabs
 
     addChat("user", text);
     histories[activeAgent].push({role: "user", text});
@@ -2130,12 +1834,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
 
     inputEl.value = "";
     autoGrow();
-
-    // Direct shell command — route to terminal pane, not to agent
-    if (text.startsWith("!")) {
-      await runQuick(text.slice(1).trim());
-      return;
-    }
 
     // Cheap Chat tab — route to /cheap-chat
     if (activeAgent === "cheap") {
@@ -2231,71 +1929,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     }
   }
 
-  async function runQuick(cmd) {
-    const prompt = `jacks@${hostBadge.textContent || "host"}:$ ${cmd}`;
-    termLine("prompt", prompt);
-
-    setBusy(true);
-    try {
-      const res = await fetch(API_BASE + "/message", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({text: "!" + cmd})
-      });
-      const data = await res.json();
-      const out = (data.stdout || "");
-      const err = (data.stderr || data.error || "");
-      if (out) termLine("out", out.trimEnd());
-      if (err) termLine("err", err.trimEnd());
-      if (!out && !err) termLine("out", "[no output]");
-    } catch(err) {
-      termLine("err", "SSH request failed: " + (err && err.message ? err.message : String(err)));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function confirmDockerRefresh() {
-    if (!confirm("This will stop containers, hard-reset the repo, and rebuild the orchestrator. Continue?")) return;
-    var s = [
-      "bash <<'SH'",
-      "set -euo pipefail",
-      "",
-      'REPO_DIR="/opt/openclaw-crypto"',
-      'COMPOSE_FILE="docker-compose.orchestrator.yml"',
-      'ENV_SRC="/etc/openclaw-crypto/openclaw.env"',
-      "",
-      'cd "$REPO_DIR"',
-      "",
-      'echo "== Stop containers (releases file locks) =="',
-      'docker compose -f "$COMPOSE_FILE" down --remove-orphans || true',
-      "",
-      'echo "== Update repo to origin/main =="',
-      "git fetch --all --prune",
-      "git checkout main",
-      "git reset --hard origin/main",
-      "",
-      'echo "== Fix permissions so git clean can remove container-created files =="',
-      "if command -v sudo >/dev/null 2>&1; then",
-      '  sudo chown -R "$(id -u):$(id -g)" . || true',
-      "else",
-      '  echo "WARNING: sudo not found."',
-      "fi",
-      "",
-      'echo "== Clean untracked/ignored files =="',
-      "git clean -fdx || { command -v sudo >/dev/null 2>&1 && sudo git clean -fdx; }",
-      "",
-      'echo "== Re-link env and start =="',
-      'ln -sfn "$ENV_SRC" .env',
-      "",
-      'docker compose -f "$COMPOSE_FILE" up -d --build',
-      'docker compose -f "$COMPOSE_FILE" ps',
-      'docker compose -f "$COMPOSE_FILE" logs --tail=200',
-      "SH"
-    ].join("\\n");
-    runQuick(s);
-  }
-
   // Fetch SSH host label from server config
   let serverRepoDir = "";
   let vibeReadonlyHost = "";
@@ -2382,72 +2015,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
    */
   function runReadonlyQuick(cmd) {
     showReadonlyApproval(cmd);
-  }
-
-  // ── VIBE lane probe — approval gate for identity/diagnostic commands ─────────
-
-  const vibeProbeApprovalBannerEl = document.getElementById("vibeProbeApprovalBanner");
-  const vibeProbeApprovalCmdEl    = document.getElementById("vibeProbeApprovalCmd");
-  const vibeProbeApprovalHostEl   = document.getElementById("vibeProbeApprovalHost");
-  const vibeProbeConfirmBtnEl     = document.getElementById("vibeProbeConfirmBtn");
-  const vibeProbeCancelBtnEl      = document.getElementById("vibeProbeCancelBtn");
-
-  let _pendingVibeProbeCmd = "";
-
-  function showVibeProbeApproval(cmd) {
-    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-    vibeProbeApprovalCmdEl.textContent = "ssh " + host + " " + shellQuote(cmd);
-    vibeProbeApprovalHostEl.textContent = "Lane: VIBE (probe)  •  Host: " + host;
-    _pendingVibeProbeCmd = cmd;
-    vibeProbeApprovalBannerEl.style.display = "flex";
-    vibeProbeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
-  }
-
-  function hideVibeProbeApproval() {
-    vibeProbeApprovalBannerEl.style.display = "none";
-    _pendingVibeProbeCmd = "";
-  }
-
-  vibeProbeCancelBtnEl.onclick = hideVibeProbeApproval;
-
-  vibeProbeConfirmBtnEl.onclick = async () => {
-    const cmd = _pendingVibeProbeCmd;
-    if (!cmd) return;
-    hideVibeProbeApproval();
-    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-    const prompt = host + ":$ " + cmd;
-    termLine("prompt", prompt);
-    setBusy(true);
-    try {
-      const res = await fetch(API_BASE + "/ops/ssh-vibe-probe", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({cmd}),
-      });
-      if (!res.ok) {
-        const detail = await res.json().catch(() => ({detail: res.statusText}));
-        termLine("err", "VIBE probe SSH error: " + (detail.detail || res.statusText));
-        return;
-      }
-      const data = await res.json();
-      const out = (data.stdout || "");
-      const err = (data.stderr || data.error || "");
-      if (out) termLine("out", out.trimEnd());
-      if (err) termLine("err", err.trimEnd());
-      if (!out && !err) termLine("out", "[no output]");
-    } catch(e) {
-      termLine("err", "VIBE probe SSH request failed: " + (e && e.message ? e.message : String(e)));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /**
-   * Run a VIBE-lane probe command (identity/diagnostic only).
-   * Shows an approval banner and waits for operator confirmation.
-   */
-  function runVibeProbeQuick(cmd) {
-    showVibeProbeApproval(cmd);
   }
 
   // --- Copilot bridge ---
@@ -2631,6 +2198,28 @@ def index(openclaw_session: str | None = Cookie(default=None)):
     await triggerCopilot(goal, lastUser ? lastUser.text : "", lastAgent ? lastAgent.text : "");
   };
 
+  // ── Domain switcher ───────────────────────────────────────────────────────
+
+  const _DOMAINS = {
+    main:    "https://leeheggan.tech",
+    webchat: "https://leeheggan.tech/web-chat",
+  };
+  const _domainBtns = {
+    main:    document.getElementById("domainMainBtn"),
+    webchat: document.getElementById("domainChatBtn"),
+  };
+
+  function switchDomain(key) {
+    const url = _DOMAINS[key];
+    if (!url) return;
+    // Update active styling
+    for (const [k, btn] of Object.entries(_domainBtns)) {
+      if (btn) btn.style.outline = (k === key) ? "1px solid rgba(34,197,94,.7)" : "";
+    }
+    // Open the domain in a new tab
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   // ── Cheap Chat ────────────────────────────────────────────────────────────
 
   const _CHEAP_PROVIDER_MODELS = {
@@ -2656,7 +2245,7 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   // ── Team review ──────────────────────────────────────────────────────────────
 
   const TEAM_FEED_KEY = "openclaw_team_feed_v1";
-  const AGENT_DISPLAY = {main: "Main", pnl: "P&L", quant: "Quant", coo: "COO", vibe: "Vibe", system: "System"};
+  const AGENT_DISPLAY = {main: "Main", pnl: "P&L", quant: "Quant", coo: "COO", system: "System"};
 
   const quickReviewBtn    = document.getElementById("quickReviewBtn");
   const detailedReviewBtn = document.getElementById("detailedReviewBtn");
@@ -3050,402 +2639,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   detailedReviewBtn.onclick = () => openTeamReviewModal("detailed", "");
   yearlyReviewBtn.onclick   = () => openTeamReviewModal("detailed", "2-year");
   cancelReviewBtn.onclick   = cancelTeamReview;
-
-  // ── Vibe execution gateway ────────────────────────────────────────────────
-
-  const vibeGoalInputEl      = document.getElementById("vibeGoalInput");
-  const vibeWorkdirInputEl   = document.getElementById("vibeWorkdirInput");
-  const vibePromptInputEl    = document.getElementById("vibePromptInput");
-  const vibePlanBtnEl        = document.getElementById("vibePlanBtn");
-  const vibeExecuteBtnEl     = document.getElementById("vibeExecuteBtn");
-  const vibeApprovalBannerEl = document.getElementById("vibeApprovalBanner");
-  const vibeApprovalCmdEl    = document.getElementById("vibeApprovalCmd");
-  const vibeConfirmBtnEl     = document.getElementById("vibeConfirmBtn");
-  const vibeCancelApprovalEl = document.getElementById("vibeCancelApprovalBtn");
-  const vibeFeedEl           = document.getElementById("vibeFeed");
-
-  let vibeRunId   = null;
-  let vibePollTimer = null;
-  let vibeSshHost = "";
-
-  // Capture ssh_host from server config
-  fetch(API_BASE + "/config").then(r => r.json()).then(cfg => {
-    if (cfg && cfg.ssh_host) vibeSshHost = cfg.ssh_host;
-  }).catch(() => {});
-
-  function vibeFeedAppend(text, kind) {
-    const row = document.createElement("div");
-    row.className = "vibeFeedRow " + (kind || "");
-    row.textContent = text;
-    vibeFeedEl.appendChild(row);
-    vibeFeedEl.scrollTop = vibeFeedEl.scrollHeight;
-  }
-
-  function setVibeBusy(busy) {
-    vibePlanBtnEl.disabled    = busy;
-    vibeExecuteBtnEl.disabled = busy;
-    vibeConfirmBtnEl.disabled = busy;
-    setBusy(busy);
-  }
-
-  function showVibeApproval(workdir, prompt) {
-    const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-    vibeApprovalCmdEl.textContent =
-      "ssh " + host + " vibe --workdir " + shellQuote(workdir) + " --prompt " + shellQuote(prompt);
-    // Show which lane this runs on
-    const laneEl = vibeApprovalBannerEl.querySelector(".vibeApprovalLane");
-    if (laneEl) laneEl.textContent = "Lane: VIBE (execution)  •  Host: " + host;
-    vibeApprovalBannerEl.style.display = "flex";
-    vibeApprovalBannerEl.scrollIntoView({behavior: "smooth"});
-  }
-
-  function hideVibeApproval() {
-    vibeApprovalBannerEl.style.display = "none";
-  }
-
-  // ✨ Plan with AI: ask the Vibe Planner agent to formulate workdir + prompt
-  vibePlanBtnEl.onclick = async () => {
-    const goal = vibeGoalInputEl.value.trim();
-    if (!goal) { vibeGoalInputEl.focus(); return; }
-    hideVibeApproval();
-    setVibeBusy(true);
-    vibeFeedAppend("⏳ Planning with AI…", "info");
-    try {
-      const res = await fetch(API_BASE + "/vibe/plan", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          goal,
-          workspace: {terminal_tail: getShellOutput()},
-        }),
-      });
-      const data = await res.json();
-      const raw = data.output || data.error || "";
-      try {
-        // Agent should return JSON {"workdir": "...", "prompt": "..."}
-        const parsed = JSON.parse(raw);
-        if (parsed.workdir) vibeWorkdirInputEl.value = parsed.workdir;
-        if (parsed.prompt)  vibePromptInputEl.value  = parsed.prompt;
-        vibeFeedAppend("✅ AI plan ready — review workdir & prompt above, then execute.", "done");
-      } catch {
-        vibeFeedAppend("AI response (could not auto-fill — copy manually):\\n" + raw, "info");
-      }
-    } catch(err) {
-      vibeFeedAppend("❌ Plan error: " + (err.message || String(err)), "err");
-    } finally {
-      setVibeBusy(false);
-    }
-  };
-
-  // ▶ Approve & Execute: show approval banner
-  vibeExecuteBtnEl.onclick = () => {
-    const workdir = vibeWorkdirInputEl.value.trim();
-    const prompt  = vibePromptInputEl.value.trim();
-    if (!workdir) { vibeWorkdirInputEl.focus(); return; }
-    if (!prompt)  { vibePromptInputEl.focus();  return; }
-    showVibeApproval(workdir, prompt);
-  };
-
-  // ✅ Confirm & Execute
-  vibeConfirmBtnEl.onclick = async () => {
-    const workdir = vibeWorkdirInputEl.value.trim();
-    const prompt  = vibePromptInputEl.value.trim();
-    if (!workdir || !prompt) return;
-    hideVibeApproval();
-    setVibeBusy(true);
-    vibeFeedAppend("🚀 Dispatching Vibe…", "info");
-    vibeFeedAppend("workdir: " + workdir, "info");
-    vibeFeedAppend("prompt:  " + prompt, "info");
-    try {
-      const res = await fetch(API_BASE + "/vibe/execute", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({workdir, prompt}),
-      });
-      const data = await res.json();
-      if (data.error) {
-        vibeFeedAppend("❌ " + data.error, "err");
-        setVibeBusy(false);
-        return;
-      }
-      vibeRunId = data.run_id;
-      vibeFeedAppend("⏳ Run ID: " + vibeRunId + " — executing (may take up to 15 min)…", "info");
-      vibePollTimer = setInterval(() => pollVibeRun(workdir, prompt), 3000);
-    } catch(err) {
-      vibeFeedAppend("❌ Request error: " + (err.message || String(err)), "err");
-      setVibeBusy(false);
-    }
-  };
-
-  // ✗ Cancel approval
-  vibeCancelApprovalEl.onclick = hideVibeApproval;
-
-  async function pollVibeRun(pendingWorkdir, pendingPrompt) {
-    if (!vibeRunId) return;
-    try {
-      const res = await fetch(API_BASE + "/vibe/poll/" + vibeRunId);
-      const data = await res.json();
-      if (data.status === "done") {
-        clearInterval(vibePollTimer);
-        vibePollTimer = null;
-        vibeRunId = null;
-        const output = data.output || "(no output)";
-        vibeFeedAppend("✅ Vibe finished:\\n" + output, "done");
-        setVibeBusy(false);
-      } else if (data.status === "error") {
-        clearInterval(vibePollTimer);
-        vibePollTimer = null;
-        vibeRunId = null;
-        vibeFeedAppend("❌ Vibe error: " + (data.error || "unknown error"), "err");
-        setVibeBusy(false);
-      } else if (data.status === "not_found") {
-        clearInterval(vibePollTimer);
-        vibePollTimer = null;
-        vibeRunId = null;
-        vibeFeedAppend("❌ Run not found.", "err");
-        setVibeBusy(false);
-      }
-      // "running" → keep polling
-    } catch(_err) {
-      // Network blip — keep polling
-    }
-  }
-
-  // ── Autopilot investigate tab ─────────────────────────────────────────────
-
-  const apDotEl     = document.getElementById("apDot");
-  const apStatusEl  = document.getElementById("apStatusText");
-  const apToggleEl  = document.getElementById("apToggleBtn");
-  const apAckEl     = document.getElementById("apAckBtn");
-  const apFeedEl    = document.getElementById("apFeed");
-  const apEmptyEl   = document.getElementById("apEmpty");
-  const apBadgeEl   = document.getElementById("apTabBadge");
-
-  let apRunning    = false;
-  let apPollTimer  = null;
-  let apFindingCursor = 0;
-  let apEventCursor   = 0;
-
-  function _fmt_ago(isoStr) {
-    if (!isoStr) return "—";
-    const diff = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000);
-    if (diff < 5)   return "just now";
-    if (diff < 60)  return diff + "s ago";
-    if (diff < 3600) return Math.round(diff / 60) + "m ago";
-    return Math.round(diff / 3600) + "h ago";
-  }
-
-  function _fmt_countdown(secs) {
-    if (secs === null || secs === undefined) return "";
-    if (secs <= 0) return "running now";
-    if (secs < 60)  return "next in " + secs + "s";
-    return "next in " + Math.round(secs / 60) + "m";
-  }
-
-  function apUpdateBadge(unread) {
-    if (unread > 0) {
-      apBadgeEl.textContent = unread;
-      apBadgeEl.style.display = "";
-    } else {
-      apBadgeEl.style.display = "none";
-    }
-  }
-
-  function apRenderEvent(ev) {
-    const row = document.createElement("div");
-    row.className = "apEventRow " + (ev.kind || "");
-    const ts = (ev.t || "").replace("T"," ").replace("+00:00","").replace("Z","");
-    row.textContent = ts + "  " + (ev.message || "");
-    return row;
-  }
-
-  function apRenderFinding(f) {
-    const row = document.createElement("div");
-    row.className = "apFindingRow" + (f.acked ? "" : " unread");
-
-    const meta = document.createElement("div");
-    meta.className = "apFindingMeta";
-
-    const ts = document.createElement("span");
-    ts.textContent = (f.t || "").replace("T", " ").replace("+00:00","").replace("Z","") + " UTC";
-    meta.appendChild(ts);
-
-    const urg = document.createElement("span");
-    urg.className = "apUrgency " + (f.urgency || "low");
-    urg.textContent = (f.urgency || "low").toUpperCase();
-    meta.appendChild(urg);
-
-    row.appendChild(meta);
-
-    const summary = document.createElement("div");
-    summary.className = "apSummary";
-    summary.textContent = f.summary || "";
-    row.appendChild(summary);
-
-    if (f.recommended_action) {
-      const action = document.createElement("div");
-      action.className = "apAction";
-      action.textContent = "→ " + f.recommended_action;
-      row.appendChild(action);
-    }
-
-    if (f.vibe_workdir || f.vibe_prompt) {
-      const cmdEl = document.createElement("div");
-      cmdEl.className = "apAction";
-      const host = vibeSshHost || "<OPENCLAW_SSH_HOST>";
-      cmdEl.textContent = "⚙ Command [VIBE lane]: ssh " + host + " vibe --workdir " + (f.vibe_workdir || "?") + " --prompt …";
-      row.appendChild(cmdEl);
-
-      const approveBtn = document.createElement("button");
-      approveBtn.className = "apApproveBtn";
-      approveBtn.textContent = "✅ Approve & Execute via Vibe";
-      const resultEl = document.createElement("div");
-      resultEl.className = "apApproveResult";
-      approveBtn.onclick = () => apApproveAndExecute(f.vibe_workdir || "", f.vibe_prompt || "", approveBtn, resultEl);
-      row.appendChild(approveBtn);
-      row.appendChild(resultEl);
-    }
-
-    if (f.github_issue_url) {
-      const issueEl = document.createElement("div");
-      issueEl.className = "apAction";
-      const issueLink = document.createElement("a");
-      issueLink.href = f.github_issue_url;
-      issueLink.target = "_blank";
-      issueLink.rel = "noopener noreferrer";
-      issueLink.textContent = `🐛 GitHub issue #${f.github_issue_number || "?"} created automatically`;
-      issueEl.appendChild(issueLink);
-      row.appendChild(issueEl);
-    }
-
-    return row;
-  }
-
-  async function apApproveAndExecute(workdir, prompt, btnEl, resultEl) {
-    btnEl.disabled = true;
-    btnEl.textContent = "⏳ Executing…";
-    resultEl.textContent = "";
-    try {
-      const res = await fetch(API_BASE + "/vibe/execute", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({workdir, prompt}),
-      });
-      const data = await res.json();
-      if (data.error) {
-        resultEl.textContent = "❌ " + data.error;
-        btnEl.disabled = false;
-        btnEl.textContent = "✅ Approve & Execute via Vibe";
-        return;
-      }
-      const runId = data.run_id;
-      resultEl.textContent = "⏳ Run ID: " + runId + " — executing…";
-      // Poll until done
-      const pollInterval = setInterval(async () => {
-        try {
-          const pr = await fetch(API_BASE + "/vibe/poll/" + runId);
-          const pd = await pr.json();
-          if (pd.status === "done") {
-            clearInterval(pollInterval);
-            resultEl.textContent = "✅ Done: " + (pd.output || "").split("\\n").slice(0, 3).join(" | ");
-          } else if (pd.status === "error" || pd.status === "not_found") {
-            clearInterval(pollInterval);
-            resultEl.textContent = "❌ " + (pd.error || pd.status);
-            btnEl.disabled = false;
-            btnEl.textContent = "✅ Approve & Execute via Vibe";
-          }
-        } catch(_e) {}
-      }, 3000);
-    } catch(err) {
-      resultEl.textContent = "❌ " + (err.message || String(err));
-      btnEl.disabled = false;
-      btnEl.textContent = "✅ Approve & Execute via Vibe";
-    }
-  }
-
-  async function pollAutopilotStatus() {
-    try {
-      const [statusRes, eventsRes] = await Promise.all([
-        fetch(API_BASE + "/autopilot/status"),
-        fetch(API_BASE + "/autopilot/events?cursor=" + apEventCursor),
-      ]);
-      const data = await statusRes.json();
-      const evData = await eventsRes.json();
-      apRunning = !!data.running;
-
-      apDotEl.className  = "apStatusDot" + (apRunning ? " running" : "");
-      apToggleEl.textContent = apRunning ? "⏸ Stop" : "▶ Start";
-
-      const parts = [];
-      if (apRunning) {
-        parts.push("Running");
-        const cntd = _fmt_countdown(data.seconds_until_next_run);
-        if (cntd) parts.push(cntd);
-      } else {
-        parts.push("Stopped");
-      }
-      if (data.last_run) parts.push("last check " + _fmt_ago(data.last_run));
-      if (!apRunning && data.last_clear) parts.push("last clear " + _fmt_ago(data.last_clear));
-      apStatusEl.textContent = parts.join("  ·  ");
-
-      apUpdateBadge(data.unread || 0);
-
-      // Render new progress events
-      if (evData.events && evData.events.length) {
-        apEmptyEl.style.display = "none";
-        evData.events.forEach(ev => {
-          apFeedEl.appendChild(apRenderEvent(ev));
-        });
-        apEventCursor += evData.events.length;
-        apFeedEl.scrollTop = apFeedEl.scrollHeight;
-      }
-
-      // Fetch any new findings
-      if (data.finding_count > apFindingCursor) {
-        const fr = await fetch(API_BASE + "/autopilot/findings?cursor=" + apFindingCursor);
-        const fd = await fr.json();
-        if (fd.findings && fd.findings.length) {
-          apEmptyEl.style.display = "none";
-          fd.findings.forEach(f => {
-            apFeedEl.appendChild(apRenderFinding(f));
-          });
-          apFindingCursor += fd.findings.length;
-          apFeedEl.scrollTop = apFeedEl.scrollHeight;
-        }
-      }
-    } catch(_e) {
-      // Network blip — ignore
-    }
-  }
-
-  apToggleEl.onclick = async () => {
-    const starting = !apRunning;
-    apToggleEl.disabled = true;
-    try {
-      const url = API_BASE + (starting ? "/autopilot/start" : "/autopilot/stop");
-      await fetch(url, {method: "POST"});
-      await pollAutopilotStatus();
-      // If we just started, begin polling every 5 s while on this tab.
-      // If we just stopped, cancel any existing poll timer.
-      if (starting && !apPollTimer) {
-        apPollTimer = setInterval(() => {
-          if (activeAgent === "autopilot") pollAutopilotStatus();
-        }, 5000);
-      } else if (!starting && apPollTimer) {
-        clearInterval(apPollTimer);
-        apPollTimer = null;
-      }
-    } finally {
-      apToggleEl.disabled = false;
-    }
-  };
-
-  apAckEl.onclick = async () => {
-    await fetch(API_BASE + "/autopilot/ack", {method: "POST"});
-    apUpdateBadge(0);
-    // Mark rendered rows as read
-    apFeedEl.querySelectorAll(".apFindingRow.unread").forEach(r => r.classList.remove("unread"));
-  };
 
   // ── Analytics tab ─────────────────────────────────────────────────────────
 
@@ -4202,78 +3395,107 @@ def proposal_confirm(req: ProposalConfirmRequest):
     return result
 
 
-# ── Vibe execution gateway endpoints ─────────────────────────────────────────
+# ── VPS wrapper endpoints ─────────────────────────────────────────────────────
 
-@app.post("/vibe/plan")
-def vibe_plan(req: VibePlanRequest):
-    """Ask the Vibe Planner agent to formulate a shell command for a given goal."""
-    return handle_agent_message("vibe", req.goal, req.workspace)
-
-
-@app.post("/vibe/execute")
-def vibe_execute(req: VibeExecuteRequest):
-    """Start a vibe run on the VPS via SSH after user approval. Returns run_id for polling."""
-    workdir = (req.workdir or "").strip()
-    prompt = (req.prompt or "").strip()
-    if not workdir:
-        return {"error": "workdir is required"}
-    if not prompt:
-        return {"error": "prompt is required"}
-    run_id = start_vibe_run(workdir, prompt)
-    return {"run_id": run_id}
+_VPS_SERVICES: dict = {}
+try:
+    import json as _json_mod
+    import pathlib as _pathlib
+    _services_path = _pathlib.Path(__file__).parent / "control_contract" / "services.json"
+    _VPS_SERVICES = _json_mod.loads(_services_path.read_text())
+except Exception:
+    _VPS_SERVICES = {}
 
 
-@app.get("/vibe/poll/{run_id}")
-def vibe_poll(run_id: str):
-    """Return the current status and output of a Vibe run."""
-    return get_vibe_run(run_id)
+@app.get("/vps/services")
+def vps_services():
+    """Return the canonical service registry from control_contract/services.json."""
+    return _VPS_SERVICES
 
 
-@app.post("/vibe/next")
-def vibe_next(req: VibeNextRequest):
-    """Evaluate collected SSH outputs against the goal; return next command or final answer."""
-    goal = (req.goal or "").strip()
-    if not goal:
-        return {"done": True, "answer": "No goal specified."}
-    return handle_vibe_next(goal, req.history, req.workspace)
+@app.get("/vps/status/{service_id}")
+def vps_status(service_id: str):
+    """Return the systemd status of a registered service via the VPS wrapper."""
+    if service_id not in _VPS_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    try:
+        return _vps.status(service_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-# ── Autopilot investigate endpoints ──────────────────────────────────────────
-
-@app.post("/autopilot/start")
-def autopilot_start(interval: int = 0):
-    """Start the autopilot background investigation loop."""
-    return start_autopilot(interval or None)
-
-
-@app.post("/autopilot/stop")
-def autopilot_stop():
-    """Stop the autopilot background investigation loop."""
-    return stop_autopilot()
-
-
-@app.get("/autopilot/status")
-def autopilot_status():
-    """Return current autopilot state (running, last_run, unread count, etc.)."""
-    return get_autopilot_status()
+@app.post("/vps/start/{service_id}")
+def vps_start(service_id: str):
+    """Start a registered service via the VPS wrapper (services only, not timers)."""
+    svc = _VPS_SERVICES.get(service_id)
+    if not svc:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    if svc.get("type") == "timer":
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{service_id}' is a timer-backed job — use /vps/run/{service_id} instead.",
+        )
+    try:
+        return _vps.start(service_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.get("/autopilot/findings")
-def autopilot_findings(cursor: int = 0):
-    """Return autopilot findings from the given cursor position."""
-    return get_autopilot_findings(cursor)
+@app.post("/vps/stop/{service_id}")
+def vps_stop(service_id: str):
+    """Stop a registered service via the VPS wrapper."""
+    if service_id not in _VPS_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    try:
+        return _vps.stop(service_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.get("/autopilot/events")
-def autopilot_events(cursor: int = 0):
-    """Return autopilot live progress events from the given cursor position."""
-    return get_autopilot_events(cursor)
+@app.post("/vps/restart/{service_id}")
+def vps_restart(service_id: str):
+    """Restart a registered service via the VPS wrapper (services only, not timers)."""
+    svc = _VPS_SERVICES.get(service_id)
+    if not svc:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    if svc.get("type") == "timer":
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{service_id}' is a timer-backed job — use /vps/run/{service_id} instead.",
+        )
+    try:
+        return _vps.restart(service_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.post("/autopilot/ack")
-def autopilot_ack():
-    """Acknowledge all findings (clears the unread badge)."""
-    return ack_autopilot_findings()
+@app.post("/vps/run/{service_id}")
+def vps_run(service_id: str):
+    """Trigger a oneshot run of a timer-backed job via the VPS wrapper."""
+    svc = _VPS_SERVICES.get(service_id)
+    if not svc:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    if svc.get("type") != "timer":
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{service_id}' is a long-running service — use /vps/start/{service_id} instead.",
+        )
+    try:
+        return _vps.run_once(service_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/vps/logs/{service_id}")
+def vps_logs(service_id: str, lines: int = 200):
+    """Return the last N log lines for a registered service via the VPS wrapper."""
+    if service_id not in _VPS_SERVICES:
+        raise HTTPException(status_code=404, detail=f"Unknown service '{service_id}'.")
+    lines = max(1, min(lines, 1000))
+    try:
+        return {"service_id": service_id, "logs": _vps.logs(service_id, lines=lines)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ── Trade log endpoints ───────────────────────────────────────────────────────
