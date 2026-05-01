@@ -1668,16 +1668,6 @@ def index(openclaw_session: str | None = Cookie(default=None)):
   }
 
   // Auto-grow textarea
-    statusBadge.textContent = isBusy ? "thinking…" : "ready";
-    statusBadge.style.borderColor = isBusy ? "rgba(34,197,94,.55)" : "rgba(255,255,255,.08)";
-    statusBadge.style.color      = isBusy ? "rgba(230,238,252,.85)" : "rgba(230,238,252,.65)";
-  }
-
-  function getShellOutput() {
-    return Array.from(terminalEl.querySelectorAll(".termLine"))
-      .map(el => el.textContent)
-      .slice(-200)
-      .join("\\n");
   }
 
   // Auto-grow textarea
