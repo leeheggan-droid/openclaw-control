@@ -1,0 +1,18 @@
+{
+  "openclaw-crypto": {
+    "type": "service",
+    "unit": "openclaw-crypto.service",
+    "description": "Long-running crypto trading bot"
+  },
+  "alpaca-orb": {
+    "type": "service",
+    "unit": "alpaca_orb_bite_bot.service",
+    "description": "Alpaca ORB + CORE trading bot"
+  },
+  "linkedin-news": {
+    "type": "timer",
+    "unit": "linkedin-news.timer",
+    "service": "linkedin-news.service",
+    "description": "Scheduled LinkedIn Data Centre News generator"
+  }
+}

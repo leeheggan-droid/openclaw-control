@@ -42,3 +42,12 @@ htmlcov/
 .vscode/
 *.swp
 *~
+
+# ── Local debris / experiments ──────────────────────────────
+.env*
+.env-backup
+.env-broken
+cookies.txt
+package-lock.json
+*-l
+SELECT
