@@ -1,0 +1,24 @@
+# =============================================================================
+# tasks/logs.yml — Fetch recent logs from running containers
+# =============================================================================
+# Called by site.yml when action=logs.
+# Retrieves the last 100 lines of output from every service defined in the
+# compose file and prints them to the Ansible console.
+#
+# Customisation tips:
+#   - Change --tail=100 to any number (or "all") to adjust log volume.
+#   - Add a service name after `docker compose logs` to target one container,
+#     e.g.:  docker compose logs --tail=200 bot-alpha
+# =============================================================================
+
+---
+- name: Fetch container logs (last 100 lines per service)
+  ansible.builtin.command:
+    cmd: docker compose logs --tail=100 --no-color
+    chdir: "{{ docker_compose_dir }}"
+  register: compose_logs
+  changed_when: false               # purely informational
+
+- name: Display container logs
+  ansible.builtin.debug:
+    msg: "{{ compose_logs.stdout_lines }}"

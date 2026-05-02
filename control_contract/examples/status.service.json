@@ -1,9 +1,0 @@
-{
-  "service_id": "alpaca-orb",
-  "type": "service",
-  "unit": "alpaca_orb_bite_bot.service",
-  "active": "active",
-  "substate": "running",
-  "enabled": "enabled",
-  "pid": 788064
-}

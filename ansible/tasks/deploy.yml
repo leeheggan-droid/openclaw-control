@@ -1,0 +1,50 @@
+# =============================================================================
+# tasks/deploy.yml — Pull latest images and recreate containers
+# =============================================================================
+# Called by site.yml when action=deploy.
+# Performs a full rolling update:
+#   1. Pull the latest versions of all images listed in docker-compose.yml
+#   2. Recreate containers that have a new image available (--no-deps skips
+#      restarting dependency containers unnecessarily)
+#
+# Use this task when you have pushed new Docker image versions to your
+# registry and want to roll them out to the VPS.
+# =============================================================================
+
+---
+- name: Pull latest Docker images
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: "{{ docker_compose_dir }}"
+  register: compose_pull
+  # `docker compose pull` outputs to stderr, so we check both streams.
+  changed_when: "'Pulled' in compose_pull.stdout or 'Pulled' in compose_pull.stderr"
+
+- name: Show image pull output
+  ansible.builtin.debug:
+    msg: "{{ (compose_pull.stdout_lines + compose_pull.stderr_lines) | select('ne', '') | list }}"
+
+- name: Recreate containers with updated images
+  ansible.builtin.command:
+    # --remove-orphans cleans up containers for services removed from the
+    # compose file since the last deploy.
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ docker_compose_dir }}"
+  register: compose_up
+  changed_when: "'Started' in compose_up.stdout or 'Recreated' in compose_up.stdout"
+
+- name: Show docker compose up output
+  ansible.builtin.debug:
+    msg: "{{ compose_up.stdout_lines }}"
+
+# Confirm the stack is healthy after deploy.
+- name: Verify containers are running after deploy
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ docker_compose_dir }}"
+  register: post_deploy_status
+  changed_when: false
+
+- name: Display post-deploy container status
+  ansible.builtin.debug:
+    msg: "{{ post_deploy_status.stdout_lines }}"

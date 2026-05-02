@@ -1,0 +1,35 @@
+# =============================================================================
+# tasks/restart.yml — Restart Docker containers
+# =============================================================================
+# Called by site.yml when action=restart.
+# Uses `docker compose restart` which sends SIGTERM (then SIGKILL after the
+# stop timeout) to each running container and restarts it without rebuilding
+# the image.
+#
+# If you need a full stop-and-start (which picks up compose file changes),
+# use action=down followed by action=up instead.
+# =============================================================================
+
+---
+- name: Restart containers with docker compose restart
+  ansible.builtin.command:
+    cmd: docker compose restart
+    chdir: "{{ docker_compose_dir }}"
+  register: compose_restart
+  changed_when: true                # restart always changes container state
+
+- name: Show docker compose restart output
+  ansible.builtin.debug:
+    msg: "{{ compose_restart.stdout_lines }}"
+
+# Confirm everything came back up.
+- name: Verify containers are running after restart
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ docker_compose_dir }}"
+  register: post_restart_status
+  changed_when: false
+
+- name: Display post-restart container status
+  ansible.builtin.debug:
+    msg: "{{ post_restart_status.stdout_lines }}"
