@@ -48,7 +48,7 @@ ansible --version
 
 | Requirement | Notes |
 |---|---|
-| Ubuntu | 22.04 or 24.04 recommended |
+| Ubuntu | 24.04.4 LTS (Noble Numbat) — confirmed target |
 | Docker CE | [Install guide](https://docs.docker.com/engine/install/ubuntu/) |
 | Docker Compose v2 | Ships with Docker CE as the `docker compose` plugin |
 | `docker-compose.yml` | Must exist at the path set in `ansible/inventory` (default: `/opt/openclaw`) |

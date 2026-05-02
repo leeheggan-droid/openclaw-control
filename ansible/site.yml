@@ -29,7 +29,7 @@
 #   - SSH access to the VPS using the key in ansible/inventory
 #
 # Prerequisites on the VPS:
-#   - Ubuntu (tested on 22.04 / 24.04)
+#   - Ubuntu 24.04.4 LTS (Noble Numbat) — confirmed target OS
 #   - Docker and Docker Compose v2 installed
 #   - A docker-compose.yml at the path defined by `docker_compose_dir`
 #     in ansible/inventory (default: /opt/openclaw)
@@ -59,9 +59,10 @@
       ansible.builtin.assert:
         that:
           - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version("24.04", ">=")
         fail_msg: >-
-          This playbook targets Ubuntu. Detected: {{ ansible_distribution }}.
-          Override or adapt the playbook for other distros.
+          This playbook targets Ubuntu 24.04+. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}.
+          Override or adapt the playbook for other distros/versions.
         success_msg: "Target OS confirmed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
 
     - name: Check docker is available on the VPS
