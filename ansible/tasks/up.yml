@@ -1,0 +1,31 @@
+# =============================================================================
+# tasks/up.yml — Start Docker containers
+# =============================================================================
+# Called by site.yml when action=up.
+# Runs `docker compose up -d` to start all services defined in
+# docker-compose.yml in detached (background) mode.
+# =============================================================================
+
+---
+- name: Start containers with docker compose up -d
+  ansible.builtin.command:
+    cmd: docker compose up -d
+    chdir: "{{ docker_compose_dir }}"
+  register: compose_up
+  changed_when: "'Started' in compose_up.stdout or 'Created' in compose_up.stdout"
+
+- name: Show docker compose up output
+  ansible.builtin.debug:
+    msg: "{{ compose_up.stdout_lines }}"
+
+# Follow up with a status check so you can confirm everything came up cleanly.
+- name: Verify containers are running after up
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ docker_compose_dir }}"
+  register: post_up_status
+  changed_when: false
+
+- name: Display post-up container status
+  ansible.builtin.debug:
+    msg: "{{ post_up_status.stdout_lines }}"
