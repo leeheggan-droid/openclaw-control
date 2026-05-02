@@ -1,0 +1,40 @@
+name: Link Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Ansible task'
+        required: true
+        type: choice
+        options:
+          - up
+          - down
+          - restart
+          - status
+          - deploy
+          - logs
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Write inventory
+        run: |
+          echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
+
+      - name: Run playbook
+        run: ansible-playbook ansible/site.yml -e "task=${{ inputs.task }}"
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
