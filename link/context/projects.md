@@ -33,20 +33,25 @@
 
 ---
 
-## openclaw-crypto (Crypto Bot)
+## Bot Services (Host Overview)
+
+> See `link/context/services/host-overview.md` for the master operations brief.
+> **Always identify the execution layer before running any command** — some bots
+> are systemd-native, others are Docker containers.
+
+### openclaw-crypto (Crypto Bot)
 **Status:** Active  
-**Service name:** `openclaw-crypto`  
-**Repo:** leeheggan-droid/openclaw-crypto (separate repo — this entry covers control integration only)  
-**Purpose:** Automated crypto trading bot running as a Docker Compose service on the VPS
+**Execution model:** systemd (`openclaw-crypto.service`) — **NOT Docker**  
+**Repo:** leeheggan-droid/openclaw-crypto  
+**Service context:** `link/context/services/openclaw-crypto.md`
 
-### Service context
-See `link/context/services/openclaw-crypto.md` for the full interaction guide.
+### Alpaca ORB Bite Bot
+**Status:** Active  
+**Execution model:** systemd (`alpaca_orb_bite_bot.service`) — **NOT Docker**  
+**Service context:** `link/context/services/alpaca-orb-bite-bot.md`
 
-### Current State
-- Managed via `openclaw-control` Ansible playbook with `-e "service=openclaw-crypto"`
-- Supported operations: `status`, `up`, `down`, `restart`, `deploy`, `logs`
-
-### Next Steps
-- [ ] Confirm `service` variable scoping works in all Ansible task files (`up.yml`, `down.yml`, etc.)
-- [ ] Verify the crypto bot image/container name matches `openclaw-crypto` in `docker-compose.yml`
-- [ ] Document any API keys or environment variables the service requires (without committing secrets)
+### LinkedIn Data Centre News Bot
+**Status:** Active  
+**Execution model:** Docker container (`linkedin_data_centre_news-linkedin-cron-1`)  
+**Scheduler:** supercronic (inside container)  
+**Service context:** `link/context/services/linkedin-data-centre-news-bot.md`

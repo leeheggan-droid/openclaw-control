@@ -1,99 +1,76 @@
 # Service: openclaw-crypto
 
-> Persistent memory for the `openclaw-crypto` Docker Compose service.
-> This file is the source of truth for how **control** and **Link** interact with the crypto bot.
+> Persistent memory for the `openclaw-crypto.service` systemd unit.
+> For the full host context (all bots), see `link/context/services/host-overview.md`.
 
 ---
 
 ## Service Identity
 
-| Field            | Value                  |
-|------------------|------------------------|
-| Service name     | `openclaw-crypto`      |
-| Compose project  | `openclaw`             |
-| Compose dir      | `/opt/openclaw`        |
-| VPS              | `srv1501082` / `72.61.123.4` |
-| VPS user         | `jacks`                |
+| Field              | Value                              |
+|--------------------|------------------------------------|
+| systemd unit       | `openclaw-crypto.service`          |
+| Execution model    | **systemd-managed, native host — NOT Docker** |
+| Entrypoint         | `/usr/bin/python3 main.py`         |
+| Working directory  | `/home/jacks/openclaw-crypto`      |
+| Secrets            | `.env.secrets` (in working dir)    |
+| VPS                | `srv1501082` / `72.61.123.4`       |
+| VPS user           | `jacks`                            |
+| Logs               | journald only                      |
 
 ---
 
-## How control manages this service
+## Authoritative Commands
 
-All operations go through the standard `openclaw-control` Ansible playbook with the optional `service` variable to scope commands to `openclaw-crypto` only.
-
-### Scope to this service only (recommended)
+### Check status (safe — run freely)
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml \
-  -e "action=<action>" -e "service=openclaw-crypto"
+systemctl status openclaw-crypto.service
 ```
 
-### Affect the entire stack (all services)
+### Stream live logs (safe — run freely)
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml -e "action=<action>"
+journalctl -u openclaw-crypto.service -f
 ```
 
-### Available actions
+### Inspect the service unit file (safe — run freely)
 
-| Action    | Effect on `openclaw-crypto`                         | Destructive? |
-|-----------|-----------------------------------------------------|--------------|
-| `status`  | `docker compose ps openclaw-crypto`                 | No (default) |
-| `up`      | `docker compose up -d openclaw-crypto`              | No |
-| `down`    | `docker compose down openclaw-crypto`               | **Yes** |
-| `restart` | `docker compose restart openclaw-crypto`            | No |
-| `deploy`  | `docker compose pull openclaw-crypto` + `up -d`     | **Yes** |
-| `logs`    | `docker compose logs --tail=100 openclaw-crypto`    | No |
+```bash
+systemctl cat openclaw-crypto.service
+```
 
-> ⚠️ `down` and `deploy` are destructive. Link must always ask for explicit
-> confirmation before running either of these against `openclaw-crypto`.
+### Restart (confirm intent before running)
 
----
+```bash
+systemctl restart openclaw-crypto.service
+```
 
-## How Link interacts with this service
+### Stop ⚠️ destructive — require explicit user confirmation
 
-1. **Check status** — safe, run freely:
-   ```bash
-   ansible-playbook -i ansible/inventory ansible/site.yml \
-     -e "action=status" -e "service=openclaw-crypto"
-   ```
+```bash
+systemctl stop openclaw-crypto.service
+```
 
-2. **Read logs** — safe, run freely:
-   ```bash
-   ansible-playbook -i ansible/inventory ansible/site.yml \
-     -e "action=logs" -e "service=openclaw-crypto"
-   ```
+### Start
 
-3. **Start / restart** — safe, confirm intent before running:
-   ```bash
-   ansible-playbook -i ansible/inventory ansible/site.yml \
-     -e "action=restart" -e "service=openclaw-crypto"
-   ```
-
-4. **Deploy (new image)** — destructive, require explicit user confirmation:
-   ```bash
-   ansible-playbook -i ansible/inventory ansible/site.yml \
-     -e "action=deploy" -e "service=openclaw-crypto"
-   ```
-
-5. **Stop** — destructive, require explicit user confirmation:
-   ```bash
-   ansible-playbook -i ansible/inventory ansible/site.yml \
-     -e "action=down" -e "service=openclaw-crypto"
-   ```
-
-> Before triggering any operation, read `link/context/environment.md` to confirm
-> whether to use the `LOCAL_SSH` or `GITHUB_ACTIONS` execution path.
+```bash
+systemctl start openclaw-crypto.service
+```
 
 ---
 
-## Notes
+## Critical Notes
 
-- Service definition lives in `/opt/openclaw/docker-compose.yml` on the VPS.
-- The `service` variable scoping (`-e "service=openclaw-crypto"`) requires the
-  relevant Ansible task files (`up.yml`, `down.yml`, etc.) to use
-  `{{ service | default('') }}` in their `docker compose` commands. Verify this
-  is in place before relying on service-scoped operations.
+> ⚠️ **This bot does NOT run in Docker.** Never use `docker ps` or `docker logs`
+> to check its state — they will show nothing and give a false "not running" result.
+
+> Old file-based logs under `/data/.openclaw/...` are historical only — not
+> authoritative for current state.
+
+- All authoritative log output goes to journald (`journalctl`).
+- Secrets are loaded from `.env.secrets` in the working directory — never commit
+  this file.
 
 ---
 
