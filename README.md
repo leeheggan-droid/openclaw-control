@@ -72,6 +72,11 @@ memory store for the Link operational AI assistant.  These files are
 human-readable, version-controlled, and loaded into context at the start of
 each Link session.
 
+**`link/context/environment.md`** is the single source of truth for the active
+execution context (local SSH vs GitHub Actions).  Link must read it before
+taking any operational action.  A human operator updates it whenever the
+execution environment changes.
+
 ---
 
 ## Tech Stack
@@ -334,6 +339,7 @@ openclaw-control/
 │
 ├── link/
 │   └── context/               # Persistent memory store for the Link AI assistant
+│       ├── environment.md     # Active execution context — read this first before any operation
 │       ├── decisions.md       # Architectural and operational decisions log
 │       ├── projects.md        # Active projects and their status
 │       └── quirks.md          # API quirks, platform-specific gotchas, technical debt
