@@ -1,0 +1,25 @@
+# =============================================================================
+# tasks/systemd-restart.yml — Restart a systemd-managed service
+# =============================================================================
+# Called by site.yml when service != "docker" and action=restart.
+# Requires the `systemd_unit` variable to be set by site.yml.
+# Uses `become: true` so the Ansible SSH user can run systemctl as root.
+# =============================================================================
+
+---
+- name: Restart systemd service
+  ansible.builtin.systemd:
+    name: "{{ systemd_unit }}"
+    state: restarted
+  become: true
+
+- name: Verify service is active after restart
+  ansible.builtin.command:
+    cmd: systemctl is-active {{ systemd_unit | quote }}
+  register: is_active
+  changed_when: false
+  failed_when: false
+
+- name: Display service active state
+  ansible.builtin.debug:
+    msg: "{{ systemd_unit }} is {{ is_active.stdout }}"

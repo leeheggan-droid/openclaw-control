@@ -47,6 +47,17 @@
     # Default action when none is passed via -e "action=..."
     action: status
 
+    # Target service layer.  Accepted values:
+    #   docker             — Docker Compose stack (LinkedIn bot)
+    #   openclaw-crypto    — openclaw-crypto.service (systemd, native)
+    #   alpaca-orb-bite-bot — alpaca_orb_bite_bot.service (systemd, native)
+    service: docker
+
+    # Maps the human-friendly service input to its actual systemd unit name.
+    systemd_unit_map:
+      openclaw-crypto: openclaw-crypto.service
+      alpaca-orb-bite-bot: alpaca_orb_bite_bot.service
+
     # docker_compose_dir and docker_compose_project are defined in
     # ansible/inventory [vps:vars] — they can be overridden here or per-host.
 
@@ -65,28 +76,47 @@
           Override or adapt the playbook for other distros/versions.
         success_msg: "Target OS confirmed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
 
+    # Resolve the systemd unit name early so all task files can reference it.
+    - name: Validate service name for non-Docker services
+      ansible.builtin.assert:
+        that:
+          - service in systemd_unit_map
+        fail_msg: >-
+          Unknown service '{{ service }}'. Valid non-Docker services: {{ systemd_unit_map.keys() | list | join(', ') }}.
+      when: service != "docker"
+
+    - name: Set systemd_unit fact for non-Docker services
+      ansible.builtin.set_fact:
+        systemd_unit: "{{ systemd_unit_map[service] }}"
+      when: service != "docker"
+
     - name: Check docker is available on the VPS
       ansible.builtin.command: docker --version
       register: docker_version_check
       changed_when: false           # this task never changes state
+      when: service == "docker"
 
     - name: Show Docker version
       ansible.builtin.debug:
         msg: "{{ docker_version_check.stdout }}"
+      when: service == "docker"
 
     - name: Check docker compose is available on the VPS
       ansible.builtin.command: docker compose version
       register: compose_version_check
       changed_when: false
+      when: service == "docker"
 
     - name: Show Docker Compose version
       ansible.builtin.debug:
         msg: "{{ compose_version_check.stdout }}"
+      when: service == "docker"
 
     - name: Confirm docker-compose.yml exists at docker_compose_dir
       ansible.builtin.stat:
         path: "{{ docker_compose_dir }}/docker-compose.yml"
       register: compose_file_stat
+      when: service == "docker"
 
     - name: Fail if docker-compose.yml is missing
       ansible.builtin.fail:
@@ -94,47 +124,80 @@
           docker-compose.yml not found at {{ docker_compose_dir }}/docker-compose.yml.
           Check the `docker_compose_dir` variable in ansible/inventory or
           copy/create your compose file on the VPS first.
-      when: not compose_file_stat.stat.exists
+      when: service == "docker" and not compose_file_stat.stat.exists
 
   # ---------------------------------------------------------------------------
   # Main tasks — delegate to the appropriate include based on `action`
   # ---------------------------------------------------------------------------
   tasks:
 
+    # =========================================================================
+    # Docker Compose tasks (service == "docker")
+    # =========================================================================
+
     # ---- status (default, read-only) ----------------------------------------
     - name: Show container status
       ansible.builtin.include_tasks: tasks/status.yml
-      when: action == "status"
+      when: service == "docker" and action == "status"
 
     # ---- up -----------------------------------------------------------------
     - name: Start containers (up)
       ansible.builtin.include_tasks: tasks/up.yml
-      when: action == "up"
+      when: service == "docker" and action == "up"
 
     # ---- down ---------------------------------------------------------------
     - name: Stop containers (down)
       ansible.builtin.include_tasks: tasks/down.yml
-      when: action == "down"
+      when: service == "docker" and action == "down"
 
     # ---- restart ------------------------------------------------------------
     - name: Restart containers
       ansible.builtin.include_tasks: tasks/restart.yml
-      when: action == "restart"
+      when: service == "docker" and action == "restart"
 
     # ---- deploy (pull latest images + recreate) -----------------------------
     - name: Deploy (pull + recreate containers)
       ansible.builtin.include_tasks: tasks/deploy.yml
-      when: action == "deploy"
+      when: service == "docker" and action == "deploy"
 
     # ---- logs ---------------------------------------------------------------
     - name: Fetch recent container logs
       ansible.builtin.include_tasks: tasks/logs.yml
-      when: action == "logs"
+      when: service == "docker" and action == "logs"
 
-    # ---- guard: unknown action ----------------------------------------------
+    # =========================================================================
+    # systemd service tasks (service == "openclaw-crypto" | "alpaca-orb-bite-bot")
+    # =========================================================================
+
+    # ---- status -------------------------------------------------------------
+    - name: Show systemd service status
+      ansible.builtin.include_tasks: tasks/systemd-status.yml
+      when: service != "docker" and action == "status"
+
+    # ---- restart ------------------------------------------------------------
+    - name: Restart systemd service
+      ansible.builtin.include_tasks: tasks/systemd-restart.yml
+      when: service != "docker" and action == "restart"
+
+    # ---- logs ---------------------------------------------------------------
+    - name: Fetch systemd service logs
+      ansible.builtin.include_tasks: tasks/systemd-logs.yml
+      when: service != "docker" and action == "logs"
+
+    # ---- unsupported action for systemd -------------------------------------
+    - name: Warn — action not supported for systemd services
+      ansible.builtin.debug:
+        msg: >-
+          Action '{{ action }}' is not supported for systemd service '{{ service }}'.
+          Supported actions for systemd services: status, restart, logs.
+      when: service != "docker" and action not in ["status", "restart", "logs"]
+
+    # =========================================================================
+    # Guard: unknown action for Docker
+    # =========================================================================
     - name: Warn about unknown action
       ansible.builtin.debug:
         msg: >-
           Unknown action '{{ action }}'.
           Valid actions: status, up, down, restart, deploy, logs.
-      when: action not in ["status", "up", "down", "restart", "deploy", "logs"]
+      when: service == "docker" and action not in ["status", "up", "down", "restart", "deploy", "logs"]

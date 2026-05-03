@@ -14,6 +14,15 @@ on:
           - status
           - deploy
           - logs
+      service:
+        description: 'Target service layer'
+        required: true
+        type: choice
+        default: docker
+        options:
+          - docker
+          - openclaw-crypto
+          - alpaca-orb-bite-bot
 
 jobs:
   run:
@@ -35,6 +44,6 @@ jobs:
           echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
       - name: Run playbook
-        run: ansible-playbook ansible/site.yml -e "task=${{ inputs.task }}"
+        run: ansible-playbook ansible/site.yml -e "action=${{ inputs.task }} service=${{ inputs.service }}"
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
