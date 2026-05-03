@@ -303,13 +303,14 @@ The runner installs Ansible, writes the SSH key from the `VPS_SSH_KEY` secret,
 writes the inventory from the `ANSIBLE_INVENTORY` secret, and runs the
 playbook.
 
-> [TODO: verify] The current workflow passes `-e "task=…"` but `site.yml`
-> expects `-e "action=…"` — confirm this variable name is consistent between
-> `link.yml` and `site.yml`.
+> [TODO: verify] `.github/workflows/link.yml` currently passes
+> `-e "task=…"` but `ansible/site.yml` expects `-e "action=…"` — confirm
+> this variable name is consistent between the two files.
 
-> [TODO: verify] The workflow writes the inventory to `ansible/inventory.ini`
-> but the `ansible-playbook` command does not pass `-i ansible/inventory.ini` —
-> confirm the inventory path used in the workflow is correct.
+> [TODO: verify] `.github/workflows/link.yml` writes the inventory to
+> `ansible/inventory.ini` but the `ansible-playbook` command in that same
+> workflow does not pass `-i ansible/inventory.ini` — confirm the inventory
+> path referenced in the workflow is correct.
 
 ---
 
@@ -423,7 +424,7 @@ See `ansible/roles/README.md` for a full walkthrough and example role ideas.
 ## License
 
 No licence file is present in this repository.
-[TODO: verify] Confirm the intended licence and add a `LICENSE` file.
+[TODO: verify] Confirm the intended license and add a `LICENSE` file.
 
 ---
 
