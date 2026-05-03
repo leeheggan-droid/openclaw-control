@@ -33,11 +33,20 @@
 
 ---
 
-## Trading Bots (Planned)
-**Status:** Not started  
-**Purpose:** Automated trading strategies running as Docker containers
+## openclaw-crypto (Crypto Bot)
+**Status:** Active  
+**Service name:** `openclaw-crypto`  
+**Repo:** leeheggan-droid/openclaw-crypto (separate repo — this entry covers control integration only)  
+**Purpose:** Automated crypto trading bot running as a Docker Compose service on the VPS
 
-### Notes
-- Will be managed via openclaw-control
-- Kraken and Alpaca integrations available for market data and execution
-- Strategy development pending
+### Service context
+See `link/context/services/openclaw-crypto.md` for the full interaction guide.
+
+### Current State
+- Managed via `openclaw-control` Ansible playbook with `-e "service=openclaw-crypto"`
+- Supported operations: `status`, `up`, `down`, `restart`, `deploy`, `logs`
+
+### Next Steps
+- [ ] Confirm `service` variable scoping works in all Ansible task files (`up.yml`, `down.yml`, etc.)
+- [ ] Verify the crypto bot image/container name matches `openclaw-crypto` in `docker-compose.yml`
+- [ ] Document any API keys or environment variables the service requires (without committing secrets)
