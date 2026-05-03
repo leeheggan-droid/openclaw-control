@@ -2,6 +2,8 @@
 
 > Persistent memory file for Link, the operational AI assistant.
 > Read at conversation start. Updated as we go.
+> **Before taking any operational action, read `link/context/environment.md`
+> to determine the active execution context and correct trigger method.**
 
 ---
 
