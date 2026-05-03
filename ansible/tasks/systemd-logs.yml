@@ -1,0 +1,18 @@
+# =============================================================================
+# tasks/systemd-logs.yml — Fetch recent logs for a systemd-managed service
+# =============================================================================
+# Called by site.yml when service != "docker" and action=logs.
+# Requires the `systemd_unit` variable to be set by site.yml.
+# Returns the last 100 lines from journald (matches the Docker logs default).
+# =============================================================================
+
+---
+- name: Fetch recent logs via journalctl
+  ansible.builtin.command:
+    cmd: journalctl -u {{ systemd_unit | quote }} --no-pager -n 100
+  register: journal_logs
+  changed_when: false
+
+- name: Display journal logs
+  ansible.builtin.debug:
+    msg: "{{ journal_logs.stdout_lines }}"
