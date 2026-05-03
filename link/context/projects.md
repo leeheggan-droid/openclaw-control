@@ -33,11 +33,25 @@
 
 ---
 
-## Trading Bots (Planned)
-**Status:** Not started  
-**Purpose:** Automated trading strategies running as Docker containers
+## Bot Services (Host Overview)
 
-### Notes
-- Will be managed via openclaw-control
-- Kraken and Alpaca integrations available for market data and execution
-- Strategy development pending
+> See `link/context/services/host-overview.md` for the master operations brief.
+> **Always identify the execution layer before running any command** — some bots
+> are systemd-native, others are Docker containers.
+
+### openclaw-crypto (Crypto Bot)
+**Status:** Active  
+**Execution model:** systemd (`openclaw-crypto.service`) — **NOT Docker**  
+**Repo:** leeheggan-droid/openclaw-crypto  
+**Service context:** `link/context/services/openclaw-crypto.md`
+
+### Alpaca ORB Bite Bot
+**Status:** Active  
+**Execution model:** systemd (`alpaca_orb_bite_bot.service`) — **NOT Docker**  
+**Service context:** `link/context/services/alpaca-orb-bite-bot.md`
+
+### LinkedIn Data Centre News Bot
+**Status:** Active  
+**Execution model:** Docker container (`linkedin_data_centre_news-linkedin-cron-1`)  
+**Scheduler:** supercronic (inside container)  
+**Service context:** `link/context/services/linkedin-data-centre-news-bot.md`
