@@ -1,0 +1,45 @@
+# =============================================================================
+# tasks/status-all.yml — Show status of every bot in one pass
+# =============================================================================
+# Called by site.yml when service=all and action=status.
+# Uses the correct tool for each bot:
+#   - systemctl  → openclaw-crypto and alpaca_orb_bite_bot (systemd-native)
+#   - docker compose ps → linkedin_data_centre_news (Docker)
+# Each check uses failed_when: false so a stopped/failed service does not
+# abort the play before the remaining bots are checked.
+# =============================================================================
+
+---
+- name: "[openclaw-crypto] systemd status"
+  ansible.builtin.command:
+    cmd: systemctl status openclaw-crypto.service --no-pager
+  register: crypto_status
+  changed_when: false
+  failed_when: false
+
+- name: "[openclaw-crypto] display status"
+  ansible.builtin.debug:
+    msg: "{{ crypto_status.stdout_lines }}"
+
+- name: "[alpaca-orb-bite-bot] systemd status"
+  ansible.builtin.command:
+    cmd: systemctl status alpaca_orb_bite_bot.service --no-pager
+  register: alpaca_status
+  changed_when: false
+  failed_when: false
+
+- name: "[alpaca-orb-bite-bot] display status"
+  ansible.builtin.debug:
+    msg: "{{ alpaca_status.stdout_lines }}"
+
+- name: "[linkedin-docker] docker compose ps"
+  ansible.builtin.command:
+    cmd: docker compose ps
+    chdir: "{{ docker_compose_dir }}"
+  register: docker_status
+  changed_when: false
+  failed_when: false
+
+- name: "[linkedin-docker] display status"
+  ansible.builtin.debug:
+    msg: "{{ docker_status.stdout_lines }}"
