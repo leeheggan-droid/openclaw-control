@@ -22,19 +22,34 @@
 Run from the **repository root** on your local machine:
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml -e "action=<action>"
+ansible-playbook -i ansible/inventory ansible/site.yml -e "action=<action> service=<service>"
 ```
 
 Replace `<action>` with one of:
 
 | Action    | Effect                                           | Destructive? |
 |-----------|--------------------------------------------------|--------------|
-| `status`  | `docker compose ps` — show running containers   | No (default) |
+| `status`  | Show running state for the selected service      | No (default) |
 | `up`      | `docker compose up -d` — start all services     | No |
 | `down`    | `docker compose down` — stop and remove         | **Yes** |
-| `restart` | `docker compose restart` — restart in place     | No |
+| `restart` | Restart service in place                        | No |
 | `deploy`  | `docker compose pull` + `up -d --remove-orphans`| **Yes** |
-| `logs`    | `docker compose logs --tail=100` — last 100 lines | No |
+| `logs`    | Fetch last 100 lines of logs                    | No |
+
+Replace `<service>` with one of:
+
+| Service               | What it targets                                              |
+|-----------------------|--------------------------------------------------------------|
+| `all`                 | All 3 bots in one pass — only `status` is supported         |
+| `docker`              | LinkedIn Data Centre News Bot (Docker Compose)              |
+| `openclaw-crypto`     | OpenClaw Crypto bot (systemd: `openclaw-crypto.service`)    |
+| `alpaca-orb-bite-bot` | Alpaca ORB Bite Bot (systemd: `alpaca_orb_bite_bot.service`)|
+
+**Quick full-system status check:**
+
+```bash
+ansible-playbook -i ansible/inventory ansible/site.yml -e "action=status service=all"
+```
 
 ---
 
@@ -59,11 +74,6 @@ Replace `<action>` with one of:
 - SSH key is injected at runtime from the `VPS_SSH_KEY` repository secret.
 - Inventory is injected at runtime from the `ANSIBLE_INVENTORY` repository secret.
 - **Trigger method:** GitHub UI → Actions → Link Control → Run workflow → select action.
-
-> ⚠️ **Known issues with the `GITHUB_ACTIONS` path** (see README TODOs):
->
-> 1. `.github/workflows/link.yml` passes `-e "task=…"` but `ansible/site.yml` expects `-e "action=…"`. The playbook will silently default to `status` on every run until this is fixed.
-> 2. The workflow writes the inventory to `ansible/inventory.ini` but the `ansible-playbook` command does not pass `-i ansible/inventory.ini`, so it falls back to the committed `ansible/inventory` file instead of the secret. Both bugs must be resolved before the GitHub Actions path is production-ready.
 
 ---
 

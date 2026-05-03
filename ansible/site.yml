@@ -83,12 +83,12 @@
           - service in systemd_unit_map
         fail_msg: >-
           Unknown service '{{ service }}'. Valid non-Docker services: {{ systemd_unit_map.keys() | list | join(', ') }}.
-      when: service != "docker"
+      when: service not in ["docker", "all"]
 
     - name: Set systemd_unit fact for non-Docker services
       ansible.builtin.set_fact:
         systemd_unit: "{{ systemd_unit_map[service] }}"
-      when: service != "docker"
+      when: service not in ["docker", "all"]
 
     - name: Check docker is available on the VPS
       ansible.builtin.command: docker --version
@@ -166,23 +166,41 @@
       when: service == "docker" and action == "logs"
 
     # =========================================================================
+    # All-bots tasks (service == "all")
+    # =========================================================================
+
+    # ---- status (all three bots in one pass) --------------------------------
+    - name: Show status of all bots
+      ansible.builtin.include_tasks: tasks/status-all.yml
+      when: service == "all" and action == "status"
+
+    # ---- warn: unsupported action for service=all ---------------------------
+    - name: Warn — only status is supported for service=all
+      ansible.builtin.debug:
+        msg: >-
+          Action '{{ action }}' is not supported for service='all'.
+          Use service='all' with action='status' only.
+          For '{{ action }}', target a specific service instead.
+      when: service == "all" and action != "status"
+
+    # =========================================================================
     # systemd service tasks (service == "openclaw-crypto" | "alpaca-orb-bite-bot")
     # =========================================================================
 
     # ---- status -------------------------------------------------------------
     - name: Show systemd service status
       ansible.builtin.include_tasks: tasks/systemd-status.yml
-      when: service != "docker" and action == "status"
+      when: service not in ["docker", "all"] and action == "status"
 
     # ---- restart ------------------------------------------------------------
     - name: Restart systemd service
       ansible.builtin.include_tasks: tasks/systemd-restart.yml
-      when: service != "docker" and action == "restart"
+      when: service not in ["docker", "all"] and action == "restart"
 
     # ---- logs ---------------------------------------------------------------
     - name: Fetch systemd service logs
       ansible.builtin.include_tasks: tasks/systemd-logs.yml
-      when: service != "docker" and action == "logs"
+      when: service not in ["docker", "all"] and action == "logs"
 
     # ---- unsupported action for systemd -------------------------------------
     - name: Warn — action not supported for systemd services
@@ -190,7 +208,7 @@
         msg: >-
           Action '{{ action }}' is not supported for systemd service '{{ service }}'.
           Supported actions for systemd services: status, restart, logs.
-      when: service != "docker" and action not in ["status", "restart", "logs"]
+      when: service not in ["docker", "all"] and action not in ["status", "restart", "logs"]
 
     # =========================================================================
     # Guard: unknown action for Docker

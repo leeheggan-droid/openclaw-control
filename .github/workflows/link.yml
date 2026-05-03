@@ -20,6 +20,7 @@ on:
         type: choice
         default: docker
         options:
+          - all
           - docker
           - openclaw-crypto
           - alpaca-orb-bite-bot
@@ -44,6 +45,6 @@ jobs:
           echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
       - name: Run playbook
-        run: ansible-playbook ansible/site.yml -e "action=${{ inputs.task }} service=${{ inputs.service }}"
+        run: ansible-playbook -i ansible/inventory.ini ansible/site.yml -e "action=${{ inputs.task }} service=${{ inputs.service }}"
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
