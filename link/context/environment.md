@@ -10,46 +10,51 @@
 
 | Field        | Value |
 |--------------|-------|
-| Context      | `LOCAL_SSH` |
-| Last updated | 2026-05-04 00:00 UTC |
+| Context      | `GITHUB_ACTIONS` |
+| Last updated | 2026-05-04 12:45 UTC |
 | Updated by   | Lee |
-| Notes        | Running from local machine. SSH key at `~/.ssh/id_ed25519`. |
+| Notes        | Triggered via GitHub Actions workflow_dispatch. Secrets: `VPS_SSH_KEY`, `ANSIBLE_INVENTORY`. |
 
 ---
 
-## How to Trigger a Deployment (LOCAL_SSH)
+## How to Trigger an Action (GITHUB_ACTIONS)
 
-Run from the **repository root** on your local machine:
+Go to **GitHub UI → Actions → Link Control → Run workflow** and select an action.
 
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml -e "action=<action> service=<service>"
+Or via GitHub API (for Link):
+```
+POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatches
+{ "ref": "main", "inputs": { "action": "<action>", "tail_lines": "10" } }
 ```
 
-Replace `<action>` with one of:
+### Available Actions
 
-| Action    | Effect                                           | Destructive? |
-|-----------|--------------------------------------------------|--------------|
-| `status`  | Show running state for the selected service      | No (default) |
-| `up`      | `docker compose up -d` — start all services     | No |
-| `down`    | `docker compose down` — stop and remove         | **Yes** |
-| `restart` | Restart service in place                        | No |
-| `deploy`  | `docker compose pull` + `up -d --remove-orphans`| **Yes** |
-| `logs`    | Fetch last 100 lines of logs                    | No |
+| Action           | Effect                                                          | Destructive? |
+|------------------|-----------------------------------------------------------------|--------------|
+| `status-all`     | Full server status — Docker containers + all systemd bots       | No (default) |
+| `status`         | Show Openclaw Docker container status                           | No |
+| `systemd-status` | Status of all 3 systemd bots (crypto, alpaca, linkedin-news)   | No |
+| `logs`           | Fetch logs from Openclaw Docker containers                      | No |
+| `systemd-logs`   | Fetch logs from all 3 systemd bots (`tail_lines` controls count)| No |
+| `restart`        | Restart Openclaw Docker stack                                   | No |
+| `systemd-restart`| Restart all 3 systemd bots                                      | No |
+| `up`             | `docker compose up -d` — start Docker stack                    | No |
+| `down`           | `docker compose down` — stop and remove Docker stack            | **Yes** |
+| `deploy`         | `docker compose pull` + `up -d --remove-orphans`               | **Yes** |
 
-Replace `<service>` with one of:
+### The `tail_lines` Input
 
-| Service               | What it targets                                              |
-|-----------------------|--------------------------------------------------------------|
-| `all`                 | All 3 bots in one pass — only `status` is supported         |
-| `docker`              | LinkedIn Data Centre News Bot (Docker Compose)              |
-| `openclaw-crypto`     | OpenClaw Crypto bot (systemd: `openclaw-crypto.service`)    |
-| `alpaca-orb-bite-bot` | Alpaca ORB Bite Bot (systemd: `alpaca_orb_bite_bot.service`)|
+Only applies to `logs` and `systemd-logs` actions. Defaults to `50`.
+Set to `10` for a quick last-10-lines check.
 
-**Quick full-system status check:**
+### Quick reference — most common requests
 
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml -e "action=status service=all"
-```
+| What Link is asked                                  | Action to use    | tail_lines |
+|-----------------------------------------------------|------------------|------------|
+| "Last 10 lines of the crypto bot logs"              | `systemd-logs`   | `10`       |
+| "Show me the status of all bots"                    | `status-all`     | —          |
+| "Is the crypto bot running?"                        | `systemd-status` | —          |
+| "Show me the openclaw app logs"                     | `logs`           | `50`       |
 
 ---
 
