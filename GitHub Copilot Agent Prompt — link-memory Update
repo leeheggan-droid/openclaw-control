@@ -1,0 +1,67 @@
+GitHub Copilot Agent Prompt — link-memory Update (2026-05-04)
+
+# GitHub Copilot Agent Prompt — link-memory Update
+**Date:** 2026-05-04
+**Repo:** leeheggan-droid/link-memory
+**Purpose:** Update link-memory with the new Docker control runner execution context
+
+---
+
+## CONTEXT — What changed
+
+The `openclaw-control` repo now ships a `Dockerfile` that builds an ephemeral
+Ansible control runner image (`openclaw-control:ci`).  This adds a **third
+execution context** for running Ansible against the VPS:
+
+| Context | How |
+|---|---|
+| `LOCAL_SSH` | `ansible-playbook -i ansible/inventory ansible/site.yml --tags <tag>` |
+| `LOCAL_DOCKER` | `docker run --rm -v "$PWD:/work" -v "$HOME/.ssh:/root/.ssh:ro" openclaw-control:ci -i ansible/inventory ansible/site.yml --tags <tag>` |
+| `GITHUB_ACTIONS` | GitHub API workflow_dispatch → `link.yml` → ubuntu-latest runner → Ansible |
+
+The Docker runner (`LOCAL_DOCKER`) is **ephemeral** — it runs one Ansible
+command and exits.  The VPS is always the **remote target**, never the control
+host.  No Ansible installation is needed on the operator's machine.
+
+## Build command
+```bash
+docker build -t openclaw-control:ci .
+```
+
+## Run command (full status check example)
+```bash
+docker run --rm \
+  -e ANSIBLE_HOST_KEY_CHECKING=False \
+  -e ANSIBLE_SSH_ARGS="-F /dev/null" \
+  -v "$PWD:/work" \
+  -v "$HOME/.ssh:/root/.ssh:ro" \
+  openclaw-control:ci \
+  -i ansible/inventory ansible/site.yml --tags status-all
+```
+
+---
+
+## TASK — What to update in link-memory
+
+Search for any memory entries that describe openclaw-control's execution model
+and add/update them to reflect the three execution contexts above.
+
+Specifically, ensure the following facts are stored or updated:
+
+1. **Docker control runner exists** — `openclaw-control:ci` is an ephemeral
+   Ansible runner.  Build: `docker build -t openclaw-control:ci .`  The
+   Dockerfile lives in the repo root.
+
+2. **Three execution contexts** — `LOCAL_SSH`, `LOCAL_DOCKER`, `GITHUB_ACTIONS`.
+   Link's active context is `GITHUB_ACTIONS` (unchanged).
+
+3. **Bot execution model unchanged** — all bots on srv1501082 still run as
+   native systemd services (NOT Docker).  The Docker runner only runs on the
+   *control side*, not on the VPS.
+
+4. **No new VPS Docker containers** — the `docker ps` task in `status-all.yml`
+   runs on the VPS for informational purposes only; there are no expected
+   running containers on the VPS.
+
+Do not change any memories that remain accurate.  Do not delete memories about
+the GitHub Actions trigger path — it is still the active context for Link.

@@ -1,11 +1,12 @@
 # openclaw-control
 
 An Ansible-based control layer for remotely managing the OpenClaw bot stack on
-an Ubuntu VPS.  Operations are triggered either directly via `ansible-playbook`
-from a local machine or automatically through a GitHub Actions
-`workflow_dispatch` event ("Link Control").  All bots run as **native systemd
-services** on the host.  The web UI (`www.leeheggan.tech`) is a separate Vercel
-app (the Link repo) and is not managed here.
+an Ubuntu VPS.  Operations are triggered via one of three paths: directly via
+`ansible-playbook` on a local machine, via the `openclaw-control:ci` Docker
+container (no Ansible installation required), or automatically through a GitHub
+Actions `workflow_dispatch` event ("Link Control").  All bots run as **native
+systemd services** on the host.  The web UI (`www.leeheggan.tech`) is a
+separate Vercel app (the Link repo) and is not managed here.
 
 ---
 
@@ -27,19 +28,23 @@ app (the Link repo) and is not managed here.
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Control surface (one of two paths)                 │
-│                                                     │
-│  A) Local machine                                   │
-│     ansible-playbook -i ansible/inventory …         │
-│                                                     │
-│  B) GitHub Actions ("Link Control" workflow)        │
-│     Triggered via workflow_dispatch in the UI       │
-│     or GitHub API; Ansible runs on ubuntu-latest    │
-│     runner, SSH key injected from repository secret │
-└────────────────────┬────────────────────────────────┘
-                     │ SSH (RSA key)
-                     ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Control surface (one of three paths)                        │
+│                                                              │
+│  A) Local machine — ansible-playbook                         │
+│     ansible-playbook -i ansible/inventory …                  │
+│                                                              │
+│  B) Local machine / VPS — Docker runner (no Ansible needed)  │
+│     docker run --rm -v "$PWD:/work" -v "$HOME/.ssh:…"        │
+│       openclaw-control:ci -i ansible/inventory …             │
+│                                                              │
+│  C) GitHub Actions ("Link Control" workflow)                 │
+│     Triggered via workflow_dispatch in the UI                │
+│     or GitHub API; Ansible runs on ubuntu-latest             │
+│     runner, SSH key injected from repository secret          │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ SSH (RSA key)
+                           ▼
          ┌───────────────────────────────────────────┐
          │  Ubuntu VPS — srv1501082 / 72.61.123.4    │
          │                                           │
@@ -103,6 +108,8 @@ execution environment changes.
 
 ### On your control machine (laptop / CI server)
 
+**Option A — native Ansible:**
+
 | Requirement | Min version | Install |
 |---|---|---|
 | Python | 3.9+ | [python.org](https://www.python.org/) |
@@ -115,6 +122,16 @@ Verify:
 ansible --version
 python3 --version
 ```
+
+**Option B — Docker runner (no Ansible install needed):**
+
+| Requirement | Notes |
+|---|---|
+| Docker CE | Any recent version |
+| SSH key `~/.ssh/id_rsa` | Must be authorised on the VPS for user `jacks` |
+
+Build the image once: `docker build -t openclaw-control:ci .`  
+See `DOCKER_CONTROL.md` for full Docker runner instructions.
 
 ### On the VPS
 
@@ -176,7 +193,6 @@ srv1501082 ansible_host=72.61.123.4 ansible_user=jacks ansible_ssh_private_key_f
 
 [vps:vars]
 ansible_python_interpreter=/usr/bin/python3
-docker_compose_dir=/docker/openclaw-1ne6     # path to docker-compose.yml on the VPS
 ```
 
 ### 5. Test connectivity
@@ -322,6 +338,28 @@ ansible-playbook -i ansible/inventory ansible/site.yml --tags status-all -v
 The runner installs Ansible, writes the SSH key from the `VPS_SSH_KEY` secret
 to `~/.ssh/id_rsa`, writes the inventory from the `ANSIBLE_INVENTORY` secret
 to `ansible/inventory.ini`, and runs `ansible/site.yml` with the selected tag.
+
+### Via Docker control runner (LOCAL_DOCKER)
+
+Build the image (once):
+
+```bash
+docker build -t openclaw-control:ci .
+```
+
+Then run any tag:
+
+```bash
+docker run --rm \
+  -e ANSIBLE_HOST_KEY_CHECKING=False \
+  -e ANSIBLE_SSH_ARGS="-F /dev/null" \
+  -v "$PWD:/work" \
+  -v "$HOME/.ssh:/root/.ssh:ro" \
+  openclaw-control:ci \
+  -i ansible/inventory ansible/site.yml --tags status-all
+```
+
+See `DOCKER_CONTROL.md` for the full reference.
 
 ### Via GitHub API (for Link)
 

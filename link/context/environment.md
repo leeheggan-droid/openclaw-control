@@ -29,12 +29,12 @@ POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatch
 
 ### Available Actions
 
-| Action           | Effect                                                            | Destructive? |
-|------------------|-------------------------------------------------------------------|--------------|
-| `status-all`     | Full server status — all systemd bots                             | No (default) |
+| Action           | Effect                                                             | Destructive? |
+|------------------|--------------------------------------------------------------------|--------------|
+| `status-all`     | Full server status — all systemd bots                              | No (default) |
 | `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)| No |
-| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)  | No |
-| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news) | No |
+| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)   | No |
+| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
 
 ### The `tail_lines` Input
 
@@ -78,6 +78,27 @@ Short version:
   ```bash
   ansible-playbook -i ansible/inventory ansible/site.yml --tags <action>
   ```
+
+### `LOCAL_DOCKER`
+
+- The operator is running on a **local machine** (or the VPS itself) with **Docker** installed.
+- No local Ansible installation is required — Ansible runs inside the container.
+- SSH key `~/.ssh/id_rsa` is present and its public half is authorised on the VPS for user `jacks`.
+- The `openclaw-control:ci` image must be built first: `docker build -t openclaw-control:ci .`
+- Inventory is `ansible/inventory` (committed; no secrets).
+- **Trigger method:**
+
+  ```bash
+  docker run --rm \
+    -e ANSIBLE_HOST_KEY_CHECKING=False \
+    -e ANSIBLE_SSH_ARGS="-F /dev/null" \
+    -v "$PWD:/work" \
+    -v "$HOME/.ssh:/root/.ssh:ro" \
+    openclaw-control:ci \
+    -i ansible/inventory ansible/site.yml --tags <action>
+  ```
+
+- See `DOCKER_CONTROL.md` for full build and run instructions.
 
 ### `GITHUB_ACTIONS`
 
