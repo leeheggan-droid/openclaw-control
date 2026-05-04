@@ -1,0 +1,417 @@
+GitHub Copilot Agent Prompt — openclaw-control Rewrite (2026-05-04)
+
+# GitHub Copilot Agent Prompt — openclaw-control Rewrite
+**Date:** 2026-05-04
+**Repo:** leeheggan-droid/openclaw-control
+**Purpose:** Full rewrite of control repo to match real server state
+
+---
+
+Repo: leeheggan-droid/openclaw-control
+Task: Rewrite the entire control repo to accurately reflect the real server state. Every file below must be replaced with the exact content specified. Do not invent anything — use only what is documented here.
+
+---
+
+## CONTEXT — What this repo controls
+
+Server: srv1501082.hstgr.cloud / 72.61.123.4
+SSH user: jacks
+Repo clone path on server: /home/jacks/openclaw-control
+
+The server runs two categories of services:
+
+Category A — Docker (compose), managed via /docker/openclaw-1ne6/:
+- openclaw-1ne6-openclaw-1 — main Openclaw app, port 43248, Traefik routed to www.leeheggan.tech
+- openclaw-1ne6-openclaw-cron-1 — supercronic cron runner, shares volumes with main container
+- traefik — reverse proxy, SSL via Let's Encrypt
+
+Category B — systemd native services on the VPS:
+- openclaw-crypto.service — Kraken crypto trading bot. User: jacks. WorkingDirectory: /home/jacks/openclaw-crypto. ExecStart: /usr/bin/python3 main.py. Secrets: /home/jacks/openclaw-crypto/.env.secrets. Restart: always.
+- alpaca_orb_bite_bot.service — Alpaca stock trading bot. User: jacks. WorkingDirectory: /home/jacks/alpaca_orb_bite_bot. ExecStart: /home/jacks/alpaca_orb_bite_bot/venv/bin/python main.py. Secrets: /etc/alpaca_orb_bite_bot.env. Restart: on-failure.
+- linkedin-news.timer + linkedin-news.service — LinkedIn news bot. Type: oneshot. User: jacks. WorkingDirectory: /home/jacks/LinkedIn_Data_Centre_News. ExecStart: /usr/bin/python3 -m linkedin.runner. Timer fires: Sun *-*-* 22:00:00 UTC (= Monday 08:00 AEST). Secrets: /home/jacks/LinkedIn_Data_Centre_News/.env.
+
+---
+
+## FILES TO CHANGE
+
+---
+
+### 1. ansible/inventory
+Replace entire file with:
+```
+[vps]
+srv1501082 ansible_host=72.61.123.4 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[vps:vars]
+ansible_python_interpreter=/usr/bin/python3
+docker_compose_dir=/docker/openclaw-1ne6
+```
+
+---
+
+### 2. ansible/tasks/up.yml
+Replace entire file with:
+```yaml
+---
+- name: Start Openclaw Docker stack
+  hosts: vps
+  tasks:
+    - name: docker compose up
+      command: docker compose up -d
+      args:
+        chdir: "{{ docker_compose_dir }}"
+```
+
+---
+
+### 3. ansible/tasks/down.yml
+Replace entire file with:
+```yaml
+---
+- name: Stop Openclaw Docker stack
+  hosts: vps
+  tasks:
+    - name: docker compose down
+      command: docker compose down
+      args:
+        chdir: "{{ docker_compose_dir }}"
+```
+
+---
+
+### 4. ansible/tasks/restart.yml
+Replace entire file with:
+```yaml
+---
+- name: Restart Openclaw Docker stack
+  hosts: vps
+  tasks:
+    - name: docker compose restart
+      command: docker compose restart
+      args:
+        chdir: "{{ docker_compose_dir }}"
+```
+
+---
+
+### 5. ansible/tasks/status.yml
+Replace entire file with:
+```yaml
+---
+- name: Status — Openclaw Docker containers
+  hosts: vps
+  tasks:
+    - name: Show running containers
+      command: docker ps --filter name=openclaw-1ne6 --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: result
+    - debug:
+        msg: "{{ result.stdout }}"
+```
+
+---
+
+### 6. ansible/tasks/status-all.yml
+Replace entire file with:
+```yaml
+---
+- name: Full server status — Docker + systemd bots
+  hosts: vps
+  tasks:
+    - name: Docker containers
+      command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: docker_status
+    - debug:
+        var: docker_status.stdout_lines
+
+    - name: openclaw-crypto systemd status
+      command: systemctl status openclaw-crypto.service --no-pager
+      register: crypto_status
+      ignore_errors: true
+    - debug:
+        var: crypto_status.stdout_lines
+
+    - name: alpaca_orb_bite_bot systemd status
+      command: systemctl status alpaca_orb_bite_bot.service --no-pager
+      register: alpaca_status
+      ignore_errors: true
+    - debug:
+        var: alpaca_status.stdout_lines
+
+    - name: linkedin-news timer status
+      command: systemctl status linkedin-news.timer --no-pager
+      register: linkedin_status
+      ignore_errors: true
+    - debug:
+        var: linkedin_status.stdout_lines
+```
+
+---
+
+### 7. ansible/tasks/logs.yml
+Replace entire file with:
+```yaml
+---
+- name: Logs — Openclaw Docker containers
+  hosts: vps
+  tasks:
+    - name: openclaw app logs
+      command: docker logs openclaw-1ne6-openclaw-1 --tail 50
+      register: app_logs
+    - debug:
+        var: app_logs.stdout_lines
+
+    - name: openclaw cron logs
+      command: docker logs openclaw-1ne6-openclaw-cron-1 --tail 20
+      register: cron_logs
+    - debug:
+        var: cron_logs.stdout_lines
+```
+
+---
+
+### 8. ansible/tasks/systemd-status.yml
+Replace entire file with:
+```yaml
+---
+- name: Status — all systemd bots
+  hosts: vps
+  tasks:
+    - name: openclaw-crypto
+      command: systemctl status openclaw-crypto.service --no-pager
+      register: r1
+      ignore_errors: true
+    - debug:
+        var: r1.stdout_lines
+
+    - name: alpaca_orb_bite_bot
+      command: systemctl status alpaca_orb_bite_bot.service --no-pager
+      register: r2
+      ignore_errors: true
+    - debug:
+        var: r2.stdout_lines
+
+    - name: linkedin-news timer
+      command: systemctl status linkedin-news.timer --no-pager
+      register: r3
+      ignore_errors: true
+    - debug:
+        var: r3.stdout_lines
+```
+
+---
+
+### 9. ansible/tasks/systemd-restart.yml
+Replace entire file with:
+```yaml
+---
+- name: Restart — all systemd bots
+  hosts: vps
+  tasks:
+    - name: Restart openclaw-crypto
+      command: systemctl restart openclaw-crypto.service
+      become: true
+
+    - name: Restart alpaca_orb_bite_bot
+      command: systemctl restart alpaca_orb_bite_bot.service
+      become: true
+
+    - name: Restart linkedin-news timer
+      command: systemctl restart linkedin-news.timer
+      become: true
+```
+
+---
+
+### 10. ansible/tasks/systemd-logs.yml
+Replace entire file with:
+```yaml
+---
+- name: Logs — all systemd bots (last 50 lines each)
+  hosts: vps
+  tasks:
+    - name: openclaw-crypto logs
+      command: journalctl -u openclaw-crypto.service --no-pager -n 50
+      register: r1
+    - debug:
+        var: r1.stdout_lines
+
+    - name: alpaca_orb_bite_bot logs
+      command: journalctl -u alpaca_orb_bite_bot.service --no-pager -n 50
+      register: r2
+    - debug:
+        var: r2.stdout_lines
+
+    - name: linkedin-news logs
+      command: journalctl -u linkedin-news.service --no-pager -n 50
+      register: r3
+    - debug:
+        var: r3.stdout_lines
+```
+
+---
+
+### 11. ansible/tasks/deploy.yml
+Replace entire file with:
+```yaml
+---
+- name: Deploy — pull latest and restart Docker stack
+  hosts: vps
+  tasks:
+    - name: Git pull latest
+      git:
+        repo: https://github.com/leeheggan-droid/openclaw-control.git
+        dest: /home/jacks/openclaw-control
+        version: main
+        force: yes
+
+    - name: Docker compose build
+      command: docker compose build
+      args:
+        chdir: "{{ docker_compose_dir }}"
+
+    - name: Docker compose up
+      command: docker compose up -d
+      args:
+        chdir: "{{ docker_compose_dir }}"
+```
+
+---
+
+### 12. .github/workflows/link.yml
+DELETE this file entirely. The link container no longer exists on this server.
+
+---
+
+### 13. ansible/site.yml
+Replace entire file with:
+```yaml
+---
+# openclaw-control — main site playbook
+# Usage: ansible-playbook -i ansible/inventory ansible/site.yml --tags <tag>
+
+- import_playbook: tasks/status-all.yml
+  tags: [status-all]
+
+- import_playbook: tasks/status.yml
+  tags: [status]
+
+- import_playbook: tasks/up.yml
+  tags: [up]
+
+- import_playbook: tasks/down.yml
+  tags: [down]
+
+- import_playbook: tasks/restart.yml
+  tags: [restart]
+
+- import_playbook: tasks/logs.yml
+  tags: [logs]
+
+- import_playbook: tasks/deploy.yml
+  tags: [deploy]
+
+- import_playbook: tasks/systemd-status.yml
+  tags: [systemd-status]
+
+- import_playbook: tasks/systemd-restart.yml
+  tags: [systemd-restart]
+
+- import_playbook: tasks/systemd-logs.yml
+  tags: [systemd-logs]
+```
+
+---
+
+### 14. context.md
+Replace entire file with:
+```
+# openclaw-control — Server Context
+
+**Server:** srv1501082.hstgr.cloud / 72.61.123.4
+**SSH user:** jacks
+**Updated:** 2026-05-04
+
+## Docker Stack — /docker/openclaw-1ne6/
+
+| Container | Role | Port |
+|---|---|---|
+| openclaw-1ne6-openclaw-1 | Openclaw app (Wizard AI agent) | 43248 |
+| openclaw-1ne6-openclaw-cron-1 | supercronic cron runner | — |
+| traefik | Reverse proxy, SSL | 80/443 |
+
+- Domain: www.leeheggan.tech → Traefik → openclaw container
+- Volumes: ./data:/data, /opt/openclaw/config, /opt/openclaw/skills, /opt/openclaw/cache, /opt/openclaw/logs
+- Env: /docker/openclaw-1ne6/.env
+
+## systemd Services
+
+| Service | Description | Location |
+|---|---|---|
+| openclaw-crypto.service | Kraken crypto trading bot (REAL GBP) | /home/jacks/openclaw-crypto/ |
+| alpaca_orb_bite_bot.service | Alpaca stock bot (paper trading) | /home/jacks/alpaca_orb_bite_bot/ |
+| linkedin-news.timer | LinkedIn DC news bot — fires Sun 22:00 UTC | /home/jacks/LinkedIn_Data_Centre_News/ |
+
+## Key Paths
+
+| Path | Purpose |
+|---|---|
+| /docker/openclaw-1ne6/ | Docker compose project |
+| /home/jacks/openclaw-crypto/ | Crypto bot source + secrets |
+| /home/jacks/alpaca_orb_bite_bot/ | Alpaca bot source + venv |
+| /home/jacks/LinkedIn_Data_Centre_News/ | LinkedIn bot source |
+| /opt/openclaw/ | Openclaw config, skills, cache, logs (mounted into container) |
+
+## Notes
+- leeheggan.tech is hosted on Vercel — Traefik only handles www.leeheggan.tech → openclaw app
+- Crypto bot uses Kraken API (real money — do not restart without checking open positions)
+- Alpaca bot is paper trading only
+- LinkedIn bot runs weekly via systemd timer (not Docker cron)
+```
+
+---
+
+### 15. link/context/services/host-overview.md
+Replace entire file with:
+```
+# Host Overview — srv1501082
+
+**Provider:** Hostinger KVM 2
+**IP:** 72.61.123.4
+**Hostname:** srv1501082.hstgr.cloud
+**SSH user:** jacks
+**OS:** Ubuntu (systemd)
+
+## Running Services
+
+### Docker (compose) — /docker/openclaw-1ne6/
+| Container | Status | Notes |
+|---|---|---|
+| openclaw-1ne6-openclaw-1 | Running | Openclaw app, port 43248 |
+| openclaw-1ne6-openclaw-cron-1 | Running | supercronic, shares /data volume |
+| traefik | Running | SSL + routing for www.leeheggan.tech |
+
+### systemd
+| Unit | Status | Notes |
+|---|---|---|
+| openclaw-crypto.service | Running | Kraken crypto bot — REAL GBP |
+| alpaca_orb_bite_bot.service | Running | Alpaca paper trading bot |
+| linkedin-news.timer | Waiting | Fires Sun 22:00 UTC weekly |
+
+## What is NOT here
+- No Telegram bot
+- No SSH-to-Claude proxy
+- No link container
+- No /etc/openclaw/ config directory
+
+## Domain
+- leeheggan.tech → Vercel (static site)
+- www.leeheggan.tech → Traefik → openclaw container (port 43248)
+```
+
+---
+
+## SUMMARY OF ACTIONS
+- Modify: ansible/inventory, ansible/site.yml, all ansible/tasks/*.yml, context.md, link/context/services/host-overview.md
+- Delete: .github/workflows/link.yml
+- Do not touch: ansible/roles/README.md, link/context/decisions.md, link/context/environment.md, link/context/projects.md, link/context/quirks.md, link/context/services/alpaca-orb-bite-bot.md, link/context/services/linkedin-data-centre-news-bot.md, link/context/services/openclaw-crypto.md, .github/ISSUE_TEMPLATE/copilot_task.md, .github/copilot-instructions.md
+
