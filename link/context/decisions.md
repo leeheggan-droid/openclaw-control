@@ -55,6 +55,29 @@
 
 
 
+## 2026-05-04 — Docker Control Runner (`openclaw-control:ci`)
+**Decision:** Add a `Dockerfile` to the repo root so Ansible can be run via Docker without a local Ansible installation  
+**Rationale:**
+- Solves Ubuntu PEP 668 issues (can't `pip install ansible` directly on newer Ubuntu hosts)
+- Makes local runs and GitHub Actions runs behave identically
+- Operators on the VPS or any Docker-capable machine can run Ansible without installing Python/Ansible
+- The runner is ephemeral — one command, then exits; VPS is always the remote target, never the control host
+
+**How it works:**
+- Base image: `python:3.11-slim`
+- Ansible installed via `pip install ansible` inside the image
+- Entrypoint: `ansible-playbook`; repo mounted at `/work`; SSH keys mounted read-only
+- Image name: `openclaw-control:ci`
+- Adds `LOCAL_DOCKER` as a third execution context alongside `LOCAL_SSH` and `GITHUB_ACTIONS`
+
+**Alternatives considered:**
+- Install Ansible system-wide with `--break-system-packages` — rejected (fragile, pollutes host)
+- Use a pre-built Ansible image — rejected (adds external dependency; simple Dockerfile is cleaner)
+
+**Revisit if:** A dedicated CI runner is added that has Ansible pre-installed
+
+---
+
 ## YYYY-MM-DD — [Decision Title]
 **Decision:** [What was decided]  
 **Rationale:** [Why this choice]  
