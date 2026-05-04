@@ -1,31 +1,34 @@
----
-- name: Full server status — all systemd bots
-  hosts: vps
+- hosts: vps
   tasks:
-    - name: openclaw-agent systemd status
+    - name: Docker containers
+      command: >
+        docker ps --format
+        "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}"
+
+    - name: openclaw-agent.service
       command: systemctl status openclaw-agent.service --no-pager
       register: agent_status
-      ignore_errors: true
-    - debug:
-        var: agent_status.stdout_lines
+      failed_when: false
 
-    - name: openclaw-crypto systemd status
+    - name: openclaw-crypto.service
       command: systemctl status openclaw-crypto.service --no-pager
       register: crypto_status
-      ignore_errors: true
-    - debug:
-        var: crypto_status.stdout_lines
+      failed_when: false
 
-    - name: alpaca_orb_bite_bot systemd status
+    - name: alpaca_orb_bite_bot.service
       command: systemctl status alpaca_orb_bite_bot.service --no-pager
       register: alpaca_status
-      ignore_errors: true
-    - debug:
-        var: alpaca_status.stdout_lines
+      failed_when: false
 
-    - name: linkedin-news timer status
+    - name: linkedin-news.timer
       command: systemctl status linkedin-news.timer --no-pager
       register: linkedin_status
-      ignore_errors: true
-    - debug:
-        var: linkedin_status.stdout_lines
+      failed_when: false
+
+    - name: Show service status
+      debug:
+        msg:
+          - "{{ agent_status.stdout_lines }}"
+          - "{{ crypto_status.stdout_lines }}"
+          - "{{ alpaca_status.stdout_lines }}"
+          - "{{ linkedin_status.stdout_lines }}"
