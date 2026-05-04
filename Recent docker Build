@@ -1,0 +1,164 @@
+jacks@srv1501082:~/openclaw-control$ cd ~/openclaw-control
+docker build -t openclaw-control:ci .
+[+] Building 11.4s (10/10) FINISHED                                                                      docker:default
+ => [internal] load build definition from Dockerfile                                                               0.0s
+ => => transferring dockerfile: 833B                                                                               0.0s
+ => [internal] load metadata for docker.io/library/python:3.12-slim                                                1.2s
+ => [auth] library/python:pull token for registry-1.docker.io                                                      0.0s
+ => [internal] load .dockerignore                                                                                  0.0s
+ => => transferring context: 2B                                                                                    0.0s
+ => [1/5] FROM docker.io/library/python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e459  0.0s
+ => => resolve docker.io/library/python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e459  0.0s
+ => CACHED [2/5] RUN apt-get update && apt-get install -y --no-install-recommends       openssh-client       ca-c  0.0s
+ => CACHED [3/5] RUN python -m pip install --no-cache-dir ansible                                                  0.0s
+ => CACHED [4/5] WORKDIR /work                                                                                     0.0s
+ => CACHED [5/5] RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh                                                   0.0s
+ => exporting to image                                                                                            10.1s
+ => => exporting layers                                                                                            0.0s
+ => => exporting manifest sha256:b65181be09fa640e2f62442478bb435a411450bc1963d8d194bf9ad1d5b6e8fd                  0.0s
+ => => exporting config sha256:10c0cb0daedf058eae1c81852ba98101eaaa8512dd61e32becee30a9b5f799cd                    0.0s
+ => => exporting attestation manifest sha256:8c1cbc0ca4860ccf4df3adf04b5186a6a8a7bfed21eecfd76d2d11f494766e5c      0.0s
+ => => exporting manifest list sha256:eae3a25d8cb5c489aa780db799adc512cc9785671487f2a5e6ed5e1a9b1820a7             0.0s
+ => => naming to docker.io/library/openclaw-control:ci                                                             0.0s
+ => => unpacking to docker.io/library/openclaw-control:ci                                                         10.0s
+jacks@srv1501082:~/openclaw-control$ docker run --rm \
+  -e ANSIBLE_HOST_KEY_CHECKING=True \
+  -e ANSIBLE_SSH_ARGS="-F /dev/null" \
+  -v "$PWD:/work" \
+  -v "$HOME/.ssh:/root/.ssh:ro" \
+  openclaw-control:ci \
+  -i ansible/inventory ansible/site.yml --tags status-all
+
+PLAY [vps] *********************************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [srv1501082]
+
+TASK [Docker containers] *******************************************************
+changed: [srv1501082]
+
+TASK [openclaw-agent.service] **************************************************
+changed: [srv1501082]
+
+TASK [openclaw-crypto.service] *************************************************
+changed: [srv1501082]
+
+TASK [alpaca_orb_bite_bot.service] *********************************************
+changed: [srv1501082]
+
+TASK [linkedin-news.timer] *****************************************************
+changed: [srv1501082]
+
+TASK [Show service status] *****************************************************
+ok: [srv1501082] => {
+    "msg": [
+        [
+            "● openclaw-agent.service - OpenClaw GitHub Issue Polling Agent",
+            "     Loaded: loaded (/etc/systemd/system/openclaw-agent.service; enabled; preset: enabled)",
+            "     Active: active (running) since Mon 2026-05-04 13:01:31 UTC; 1h 55min ago",
+            "   Main PID: 1344222 (python)",
+            "      Tasks: 1 (limit: 19144)",
+            "     Memory: 19.7M (peak: 20.2M)",
+            "        CPU: 5.455s",
+            "     CGroup: /system.slice/openclaw-agent.service",
+            "             └─1344222 /opt/openclaw-agent/venv/bin/python /opt/openclaw-agent/agent.py",
+            "",
+            "May 04 14:52:26 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:52:56 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:53:27 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:53:57 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:54:28 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:54:59 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:55:29 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:56:00 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:56:30 srv1501082 python[1344222]: polled queue: 0 issues",
+            "May 04 14:57:01 srv1501082 python[1344222]: polled queue: 0 issues"
+        ],
+        [
+            "● openclaw-crypto.service - Openclaw Crypto Trading Bot",
+            "     Loaded: loaded (/etc/systemd/system/openclaw-crypto.service; enabled; preset: enabled)",
+            "    Drop-In: /etc/systemd/system/openclaw-crypto.service.d",
+            "             └─override.conf",
+            "     Active: active (running) since Mon 2026-05-04 13:01:31 UTC; 1h 55min ago",
+            "       Docs: https://github.com/leeheggan-droid/openclaw-crypto",
+            "   Main PID: 1344230 (python3)",
+            "      Tasks: 2 (limit: 19144)",
+            "     Memory: 33.3M (peak: 35.9M)",
+            "        CPU: 42.897s",
+            "     CGroup: /system.slice/openclaw-crypto.service",
+            "             └─1344230 /home/jacks/openclaw-crypto/.venv/bin/python3 -u /home/jacks/openclaw-crypto/main.py",
+            "",
+            "May 04 14:56:57 srv1501082 python3[1344230]: 2026-05-04 14:56:57,379 [INFO] [moon-v2] Skipping RNBWUSD — insufficient 24h liquidity",
+            "May 04 14:57:00 srv1501082 python3[1344230]: 2026-05-04 14:57:00,037 [INFO] [moon-v2] Skipping RVVUSD — insufficient 24h liquidity",
+            "May 04 14:57:01 srv1501082 python3[1344230]: 2026-05-04 14:57:01,511 [INFO] [moon-v2] Skipping SAMOUSD — insufficient 24h liquidity",
+            "May 04 14:57:03 srv1501082 python3[1344230]: 2026-05-04 14:57:03,333 [INFO] [moon-v2] Skipping SAUCEUSD — insufficient 24h liquidity",
+            "May 04 14:57:04 srv1501082 python3[1344230]: 2026-05-04 14:57:04,084 [INFO] [moon-v2] Skipping SCAUSD — insufficient 24h liquidity",
+            "May 04 14:57:06 srv1501082 python3[1344230]: 2026-05-04 14:57:06,221 [INFO] [moon-v2] Skipping SDNUSD — insufficient 24h liquidity",
+            "May 04 14:57:09 srv1501082 python3[1344230]: 2026-05-04 14:57:09,173 [INFO] [moon-v2] Skipping SIGMAUSD — insufficient 24h liquidity",
+            "May 04 14:57:09 srv1501082 python3[1344230]: 2026-05-04 14:57:09,739 [INFO] [moon-v2] Skipping SIGNUSD — insufficient 24h liquidity",
+            "May 04 14:57:11 srv1501082 python3[1344230]: 2026-05-04 14:57:11,177 [INFO] [moon-v2] Skipping SLAYUSD — insufficient 24h liquidity",
+            "May 04 14:57:11 srv1501082 python3[1344230]: 2026-05-04 14:57:11,381 [INFO] [moon-v2] Skipping SNEKUSD — insufficient 24h liquidity"
+        ],
+        [
+            "● alpaca_orb_bite_bot.service - Alpaca ORB Bite Bot — multi-strategy ORB + CORE runner",
+            "     Loaded: loaded (/etc/systemd/system/alpaca_orb_bite_bot.service; enabled; preset: enabled)",
+            "     Active: active (running) since Fri 2026-05-01 08:14:40 UTC; 3 days ago",
+            "       Docs: https://github.com/leeheggan-droid/alpaca_orb_bite_bot",
+            "   Main PID: 788064 (python)",
+            "      Tasks: 6 (limit: 19144)",
+            "     Memory: 154.2M (peak: 170.7M)",
+            "        CPU: 7.029s",
+            "     CGroup: /system.slice/alpaca_orb_bite_bot.service",
+            "             └─788064 /home/jacks/alpaca_orb_bite_bot/venv/bin/python main.py",
+            "",
+            "May 04 13:30:02 srv1501082 python[788064]: [multi/ORB] orb_alpaca_bot.py exited (code=1)",
+            "May 04 13:30:02 srv1501082 python[788064]: [multi/ORB] Session done. Sleeping 7200s before next check.",
+            "May 04 13:35:00 srv1501082 python[788064]: [CoreScheduler] Running check 2026-05-04 09:35",
+            "May 04 13:35:02 srv1501082 python[788064]: [senator_feed] House fetch failed: Expecting value: line 1 column 1 (char 0)",
+            "May 04 13:35:02 srv1501082 python[788064]: [senator_feed] Senate fetch failed: Expecting value: line 1 column 1 (char 0)",
+            "May 04 13:35:04 srv1501082 python[788064]: [HedgeLayer] BOUGHT SPY qty=5 price≈719.74",
+            "May 04 13:35:04 srv1501082 python[788064]: [HedgeLayer] BOUGHT GLD qty=9 price≈419.55",
+            "May 04 13:35:05 srv1501082 python[788064]: [WarrenLayer] INITIAL BUY AXP qty=25 price≈319.82",
+            "May 04 13:35:05 srv1501082 python[788064]: [CoreScheduler] Check 2026-05-04 09:35 complete",
+            "May 04 13:35:05 srv1501082 python[788064]: [CoreScheduler] Next check at 2026-05-04 12:00 ET (sleep 144.9 min)"
+        ],
+        [
+            "● linkedin-news.timer - LinkedIn Data Centre News Generator — weekly timer",
+            "     Loaded: loaded (/etc/systemd/system/linkedin-news.timer; enabled; preset: enabled)",
+            "     Active: active (waiting) since Fri 2026-05-01 08:18:57 UTC; 3 days ago",
+            "    Trigger: Sun 2026-05-10 22:00:00 UTC; 6 days left",
+            "   Triggers: ● linkedin-news.service",
+            "       Docs: https://github.com/leeheggan-droid/LinkedIn_Data_Centre_News",
+            "",
+            "May 01 08:18:57 srv1501082 systemd[1]: Started linkedin-news.timer - LinkedIn Data Centre News Generator — weekly timer."
+        ]
+    ]
+}
+
+PLAY [Status — all systemd bots] ***********************************************
+
+PLAY [Restart — all systemd bots] **********************************************
+
+PLAY [Logs — all systemd bots] *************************************************
+
+PLAY [Fetch systemd service logs (journalctl)] *********************************
+
+PLAY RECAP *********************************************************************
+srv1501082                 : ok=7    changed=5    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+
+jacks@srv1501082:~/openclaw-control$ cd ~/openclaw-control
+git add Dockerfile
+git commit -m "Fix control runner Dockerfile and install ssh client"
+git push origin main
+[main c649461] Fix control runner Dockerfile and install ssh client
+ 1 file changed, 21 insertions(+), 2 deletions(-)
+Enumerating objects: 5, done.
+Counting objects: 100% (5/5), done.
+Delta compression using up to 4 threads
+Compressing objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 796 bytes | 796.00 KiB/s, done.
+Total 3 (delta 1), reused 0 (delta 0), pack-reused 0
+remote: Resolving deltas: 100% (1/1), completed with 1 local object.
+To https://github.com/leeheggan-droid/openclaw-control.git
+   c6a227e..c649461  main -> main
+jacks@srv1501082:~/openclaw-control$
