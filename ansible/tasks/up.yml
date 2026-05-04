@@ -1,8 +1,0 @@
----
-- name: Start Openclaw Docker stack
-  hosts: vps
-  tasks:
-    - name: docker compose up
-      command: docker compose up -d
-      args:
-        chdir: "{{ docker_compose_dir }}"

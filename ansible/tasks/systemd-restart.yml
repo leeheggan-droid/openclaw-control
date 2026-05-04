@@ -2,6 +2,10 @@
 - name: Restart — all systemd bots
   hosts: vps
   tasks:
+    - name: Restart openclaw-agent
+      command: systemctl restart openclaw-agent.service
+      become: true
+
     - name: Restart openclaw-crypto
       command: systemctl restart openclaw-crypto.service
       become: true

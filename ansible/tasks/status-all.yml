@@ -1,12 +1,13 @@
 ---
-- name: Full server status — Docker + systemd bots
+- name: Full server status — all systemd bots
   hosts: vps
   tasks:
-    - name: Docker containers
-      command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-      register: docker_status
+    - name: openclaw-agent systemd status
+      command: systemctl status openclaw-agent.service --no-pager
+      register: agent_status
+      ignore_errors: true
     - debug:
-        var: docker_status.stdout_lines
+        var: agent_status.stdout_lines
 
     - name: openclaw-crypto systemd status
       command: systemctl status openclaw-crypto.service --no-pager

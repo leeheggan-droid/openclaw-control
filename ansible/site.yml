@@ -5,24 +5,6 @@
 - import_playbook: tasks/status-all.yml
   tags: [status-all]
 
-- import_playbook: tasks/status.yml
-  tags: [status]
-
-- import_playbook: tasks/up.yml
-  tags: [up]
-
-- import_playbook: tasks/down.yml
-  tags: [down]
-
-- import_playbook: tasks/restart.yml
-  tags: [restart]
-
-- import_playbook: tasks/logs.yml
-  tags: [logs]
-
-- import_playbook: tasks/deploy.yml
-  tags: [deploy]
-
 - import_playbook: tasks/systemd-status.yml
   tags: [systemd-status]
 

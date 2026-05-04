@@ -37,7 +37,23 @@
 
 ---
 
-## Template for New Decisions
+## 2026-05-04 — Remove Old Openclaw Web App Docker Stack
+**Decision:** Remove all Docker Compose infrastructure for the old Openclaw web app (containers `openclaw-1ne6-openclaw-1`, `openclaw-1ne6-openclaw-cron-1`, Traefik) and its Ansible task files  
+**Rationale:**
+- The old Openclaw Wizard AI web app is abandoned technology
+- `www.leeheggan.tech` is now served from Vercel via the Link repo — Traefik is no longer needed
+- Removing the Docker stack and its 6 Ansible task files keeps the control repo focused on what it actually manages: systemd bot services
+- Ansible actions `status`, `up`, `down`, `restart`, `deploy`, `logs` all targeted `/docker/openclaw-1ne6/` and have been removed
+
+**Alternatives considered:**
+- Keep Docker task files as dead code — rejected (misleading, creates confusion)
+- Keep Traefik as standalone container — rejected (serves no purpose without the openclaw app)
+
+**Revisit if:** A new Docker service is added to the VPS that needs Compose management
+
+---
+
+
 
 ## YYYY-MM-DD — [Decision Title]
 **Decision:** [What was decided]  

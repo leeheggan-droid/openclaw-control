@@ -8,17 +8,12 @@
 
 ## Running Services
 
-### Docker (compose) — /docker/openclaw-1ne6/
-| Container | Status | Notes |
-|---|---|---|
-| openclaw-1ne6-openclaw-1 | Running | Openclaw app, port 43248 |
-| openclaw-1ne6-openclaw-cron-1 | Running | supercronic, shares /data volume |
-| traefik | Running | SSL + routing for www.leeheggan.tech |
-
 ### systemd
 | Unit | Status | Notes |
 |---|---|---|
+| openclaw-agent.service | Running | GitHub Issue Polling Agent — /opt/openclaw-agent/agent.py |
 | openclaw-crypto.service | Running | Kraken crypto bot — REAL GBP |
+| openclaw-vibe-gateway.service | Exited (bridge) | Vibe gateway |
 | alpaca_orb_bite_bot.service | Running | Alpaca paper trading bot |
 | linkedin-news.timer | Waiting | Fires Sun 22:00 UTC weekly |
 
@@ -26,8 +21,8 @@
 - No Telegram bot
 - No SSH-to-Claude proxy
 - No link container
-- No /etc/openclaw/ config directory
+- No openclaw Docker web app (removed 2026-05-04 — replaced by Vercel/Link app)
 
 ## Domain
-- leeheggan.tech → Vercel (static site)
-- www.leeheggan.tech → Traefik → openclaw container (port 43248)
+- leeheggan.tech → Vercel (Link app)
+- www.leeheggan.tech → Vercel (Link app)

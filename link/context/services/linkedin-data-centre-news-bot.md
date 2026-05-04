@@ -1,66 +1,64 @@
 # Service: LinkedIn Data Centre News Bot
 
-> Persistent memory for the `linkedin_data_centre_news` Docker container.
+> Persistent memory for the `linkedin-news` systemd timer.
 > For the full host context (all bots), see `link/context/services/host-overview.md`.
 
 ---
 
 ## Service Identity
 
-| Field             | Value                                               |
-|-------------------|-----------------------------------------------------|
-| Container name    | `linkedin_data_centre_news-linkedin-cron-1`         |
-| Execution model   | Docker container (NOT systemd-managed directly)     |
-| Scheduler         | `supercronic` (runs inside the container)           |
-| VPS               | `srv1501082` / `72.61.123.4`                        |
-| VPS user          | `jacks`                                             |
-| Logs              | Docker container logs                               |
+| Field             | Value                                          |
+|-------------------|------------------------------------------------|
+| systemd unit      | `linkedin-news.timer` + `linkedin-news.service`|
+| Execution model   | systemd timer — fires Sun 22:00 UTC            |
+| Working directory | `/home/jacks/LinkedIn_Data_Centre_News/`       |
+| VPS               | `srv1501082` / `72.61.123.4`                   |
+| VPS user          | `jacks`                                        |
+| Logs              | journald                                       |
 
 ---
 
 ## Authoritative Commands
 
-### Check container is running (safe — run freely)
+### Check timer status (safe — run freely)
 
 ```bash
-docker ps
+systemctl status linkedin-news.timer
 ```
 
-### Stream live logs (safe — run freely)
+### View recent logs (safe — run freely)
 
 ```bash
-docker logs -f linkedin_data_centre_news-linkedin-cron-1
+journalctl -u linkedin-news.service --no-pager -n 50
 ```
 
-### Open a shell inside the container (safe — read-only intent)
+### Inspect the timer/service unit files (safe — run freely)
 
 ```bash
-docker exec -it linkedin_data_centre_news-linkedin-cron-1 sh
+systemctl cat linkedin-news.timer
+systemctl cat linkedin-news.service
 ```
 
-### Restart container (confirm intent before running)
+### Manually trigger the service (outside of schedule)
 
 ```bash
-docker restart linkedin_data_centre_news-linkedin-cron-1
+sudo systemctl start linkedin-news.service
 ```
 
-### Stop container ⚠️ destructive — require explicit user confirmation
+### Stop/disable timer ⚠️ — require explicit user confirmation
 
 ```bash
-docker stop linkedin_data_centre_news-linkedin-cron-1
+sudo systemctl stop linkedin-news.timer
 ```
 
 ---
 
 ## Notes
 
-- systemd only ensures the Docker daemon is running — it does **not** manage
-  this container directly.
-- Scheduling (cron jobs) and all runtime logs live inside the container;
-  `journalctl` will **not** show application logs for this bot.
-- If uniformity with systemd-managed bots is needed in future, this container
-  could be wrapped with a systemd service unit.
+- Runs weekly via systemd timer (`linkedin-news.timer`), not on-demand.
+- All log output goes to journald; use `journalctl -u linkedin-news.service`.
+- The `systemd-logs` action in Link Control includes this service.
 
 ---
 
-*Last updated: 2026-05-03*
+*Last updated: 2026-05-04*

@@ -10,17 +10,11 @@ on:
         type: choice
         options:
           - status-all
-          - status
           - systemd-status
-          - logs
           - systemd-logs
-          - restart
           - systemd-restart
-          - up
-          - down
-          - deploy
       tail_lines:
-        description: 'Number of log lines to fetch (logs and systemd-logs actions only)'
+        description: 'Number of log lines to fetch (systemd-logs action only)'
         required: false
         default: '50'
 
