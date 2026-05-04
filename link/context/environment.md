@@ -11,9 +11,9 @@
 | Field        | Value |
 |--------------|-------|
 | Context      | `GITHUB_ACTIONS` |
-| Last updated | 2026-05-04 13:18 UTC |
-| Updated by   | Lee |
-| Notes        | Triggered via GitHub Actions workflow_dispatch. Secrets: `VPS_SSH_KEY`, `ANSIBLE_INVENTORY`. |
+| Last updated | 2026-05-04 22:40 UTC |
+| Updated by   | Copilot |
+| Notes        | Triggered via GitHub Actions workflow_dispatch. Workflow input: `action`. Secrets: `VPS_SSH_KEY`, `ANSIBLE_INVENTORY`. Token requires `Actions: write` — see `link/context/github-token.md`. |
 
 ---
 
@@ -21,34 +21,42 @@
 
 Go to **GitHub UI → Actions → Link Control → Run workflow** and select an action.
 
-Or via GitHub API (for Link):
+Or via GitHub API (for Link) — the workflow input is named **`action`**:
 ```
 POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatches
+Authorization: Bearer <GITHUB_TOKEN>   ← requires Actions: write (fine-grained) or workflow scope (classic PAT)
+Content-Type: application/json
+
 { "ref": "main", "inputs": { "action": "<action>", "tail_lines": "10" } }
 ```
 
-### Available Actions
+> See `link/context/github-token.md` for token setup and verification steps.
 
-| Action           | Effect                                                             | Destructive? |
-|------------------|--------------------------------------------------------------------|--------------|
-| `status-all`     | Full server status — all systemd bots                              | No (default) |
-| `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)| No |
-| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)   | No |
-| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
+### Available Actions & Inputs
 
-### The `tail_lines` Input
+| Input        | Type   | Required | Values / Notes                                                                   |
+|--------------|--------|----------|----------------------------------------------------------------------------------|
+| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `logs-systemd` |
+| `service`    | string | No       | Systemd service name for `logs-systemd` (default: `crypto-bot`)                  |
+| `tail_lines` | string | No       | Log lines to fetch — `systemd-logs` and `logs-systemd` only (default: `50`)      |
 
-Only applies to `systemd-logs`. Defaults to `50`.
-Set to `10` for a quick last-10-lines check.
+| Action           | Effect                                                               | Destructive? |
+|------------------|----------------------------------------------------------------------|--------------|
+| `status-all`     | Full server status — all systemd bots                                | No (default) |
+| `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
+| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)     | No |
+| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)    | No |
+| `logs-systemd`   | Fetch logs from one specific service (set `service` + `tail_lines`)  | No |
 
 ### Quick reference — most common requests
 
-| What Link is asked                                  | Action to use    | tail_lines |
-|-----------------------------------------------------|------------------|------------|
-| "Last 10 lines of the crypto bot logs"              | `systemd-logs`   | `10`       |
-| "Show me the status of all bots"                    | `status-all`     | —          |
-| "Is the crypto bot running?"                        | `systemd-status` | —          |
-| "Restart the agent after a code push"               | `systemd-restart`| —          |
+| What Link is asked                                  | `action`         | `service`                  | `tail_lines` |
+|-----------------------------------------------------|------------------|----------------------------|--------------|
+| "Last 10 lines of the crypto bot logs"              | `systemd-logs`   | —                          | `10`         |
+| "Last 30 lines of the agent only"                   | `logs-systemd`   | `openclaw-agent.service`   | `30`         |
+| "Show me the status of all bots"                    | `status-all`     | —                          | —            |
+| "Is the crypto bot running?"                        | `systemd-status` | —                          | —            |
+| "Restart the agent after a code push"               | `systemd-restart`| —                          | —            |
 
 ---
 

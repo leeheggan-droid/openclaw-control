@@ -62,14 +62,32 @@ logs.
 
 ---
 
+## GitHub Token Requirements
+
+Link needs a GitHub API token with permission to trigger workflow runs on this
+repository.  **Without the correct token, every dispatch will return 401 or 403
+and the workflow will never start.**
+
+| Token type            | Required permission / scope                              |
+|-----------------------|----------------------------------------------------------|
+| Fine-grained PAT      | **Actions: Read and Write** on `leeheggan-droid/openclaw-control` |
+| Classic PAT           | **`workflow`** scope                                     |
+
+> See `link/context/github-token.md` for a step-by-step guide on verifying the
+> token works before making operational calls.
+
+---
+
 ## How Link Calls the GitHub API
 
-Link uses the GitHub API `workflow_dispatch` endpoint.  The required inputs are:
+Link uses the GitHub API `workflow_dispatch` endpoint.  The workflow input is
+named **`action`** (not `task`).
 
-| Input        | Type   | Required | Values                                          |
-|--------------|--------|----------|-------------------------------------------------|
-| `action`     | choice | Yes      | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart` |
-| `tail_lines` | string | No       | Number of log lines (default `50`)              |
+| Input        | Type   | Required | Values                                                                   |
+|--------------|--------|----------|--------------------------------------------------------------------------|
+| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `logs-systemd` |
+| `service`    | string | No       | Systemd service name used by `logs-systemd` (default: `crypto-bot`)      |
+| `tail_lines` | string | No       | Number of log lines — applies to `systemd-logs` and `logs-systemd` (default: `50`) |
 
 **Example — restart all systemd bots:**
 ```
@@ -80,13 +98,12 @@ Content-Type: application/json
 {
   "ref": "main",
   "inputs": {
-    "action": "systemd-restart",
-    "tail_lines": "50"
+    "action": "systemd-restart"
   }
 }
 ```
 
-**Example — fetch last 20 lines of logs:**
+**Example — fetch last 20 lines of logs from all bots:**
 ```
 POST …/dispatches
 {
@@ -98,29 +115,53 @@ POST …/dispatches
 }
 ```
 
-> The API returns `HTTP 204 No Content` immediately.  The workflow run starts
-> asynchronously.  To check results, Link must poll the GitHub API for the run
-> status and logs.
+**Example — fetch logs from a specific service (`logs-systemd`):**
+```
+POST …/dispatches
+{
+  "ref": "main",
+  "inputs": {
+    "action": "logs-systemd",
+    "service": "openclaw-crypto.service",
+    "tail_lines": "30"
+  }
+}
+```
+
+> The API returns **`HTTP 204 No Content`** immediately — this means *accepted*,
+> not *completed*.  The workflow run starts asynchronously.  Link must poll the
+> GitHub API to know whether it succeeded (see below).
 
 ---
 
 ## How Link Reads Results
 
-After triggering a workflow, Link can check the outcome via:
+After triggering a workflow, poll the GitHub API using these exact steps:
 
+**Step 1 — get the latest run ID:**
 ```
-GET /repos/leeheggan-droid/openclaw-control/actions/runs?event=workflow_dispatch
+GET /repos/leeheggan-droid/openclaw-control/actions/runs?event=workflow_dispatch&per_page=1
 ```
+Parse `workflow_runs[0].id` from the response.
 
-This returns the list of workflow runs.  Link takes the most recent one and reads
-its logs once the `status` is `completed`.
+**Step 2 — poll until the run finishes:**
+```
+GET /repos/leeheggan-droid/openclaw-control/actions/runs/{run_id}
+```
+Repeat every ~10 seconds until `status == "completed"`.
+Then check `conclusion`:
+- `"success"` — playbook ran without errors
+- `"failure"` — playbook failed (SSH error, Ansible error, etc.)
+- `"cancelled"` / `"timed_out"` — runner issue
 
+**Step 3 — fetch the log output:**
 ```
 GET /repos/leeheggan-droid/openclaw-control/actions/runs/{run_id}/logs
 ```
+Returns a ZIP archive containing the Ansible output (systemctl status lines,
+journald entries, etc.) printed by the `debug:` tasks in each playbook.
 
-The logs contain the Ansible output (systemctl status lines, journald entries,
-etc.) printed by the `debug:` tasks in each playbook.
+> Note: Log download requires the same token with **Actions: Read** permission.
 
 ---
 
@@ -143,14 +184,17 @@ up the changes is:
 
 ## Secrets Required
 
-| Secret             | Used for                                           |
-|--------------------|----------------------------------------------------|
-| `VPS_SSH_KEY`      | Private RSA key — SSHes into the VPS as `jacks`    |
-| `ANSIBLE_INVENTORY`| Full Ansible inventory file content (injected at runtime) |
-| GitHub API token   | Link's own GitHub token — used to POST workflow_dispatch |
+| Secret             | Used for                                                        |
+|--------------------|-----------------------------------------------------------------|
+| `VPS_SSH_KEY`      | Private RSA key — SSHes into the VPS as `jacks`                 |
+| `ANSIBLE_INVENTORY`| Full Ansible inventory file content (injected at runtime)       |
+| GitHub API token   | Link's own token — used to POST `workflow_dispatch`             |
 
-The GitHub API token used by Link must have `actions:write` permission on the
-`leeheggan-droid/openclaw-control` repository.
+The GitHub API token used by Link must have:
+- **Fine-grained PAT:** `Actions: Read and Write` on `leeheggan-droid/openclaw-control`
+- **Classic PAT:** `workflow` scope
+
+> See `link/context/github-token.md` for verification steps and troubleshooting.
 
 ---
 
@@ -168,4 +212,4 @@ The GitHub API token used by Link must have `actions:write` permission on the
 
 ---
 
-*Last updated: 2026-05-04*
+*Last updated: 2026-05-04 — input renamed `task`→`action`, added `service`/`logs-systemd`, token permissions, polling steps*
