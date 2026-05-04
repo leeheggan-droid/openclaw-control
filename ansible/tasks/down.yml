@@ -1,22 +1,8 @@
-# =============================================================================
-# tasks/down.yml — Stop and remove Docker containers
-# =============================================================================
-# Called by site.yml when action=down.
-# Runs `docker compose down` which stops and removes containers, networks,
-# and (optionally) volumes.
-#
-# NOTE: This does NOT remove named volumes or images by default.
-#       Add --volumes or --rmi all to the command if you need that.
-# =============================================================================
-
 ---
-- name: Stop and remove containers with docker compose down
-  ansible.builtin.command:
-    cmd: docker compose down
-    chdir: "{{ docker_compose_dir }}"
-  register: compose_down
-  changed_when: "'Removed' in compose_down.stdout or 'Stopped' in compose_down.stdout"
-
-- name: Show docker compose down output
-  ansible.builtin.debug:
-    msg: "{{ compose_down.stdout_lines }}"
+- name: Stop Openclaw Docker stack
+  hosts: vps
+  tasks:
+    - name: docker compose down
+      command: docker compose down
+      args:
+        chdir: "{{ docker_compose_dir }}"

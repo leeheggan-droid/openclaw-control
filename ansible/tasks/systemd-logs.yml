@@ -1,18 +1,21 @@
-# =============================================================================
-# tasks/systemd-logs.yml — Fetch recent logs for a systemd-managed service
-# =============================================================================
-# Called by site.yml when service != "docker" and action=logs.
-# Requires the `systemd_unit` variable to be set by site.yml.
-# Returns the last 100 lines from journald (matches the Docker logs default).
-# =============================================================================
-
 ---
-- name: Fetch recent logs via journalctl
-  ansible.builtin.command:
-    cmd: journalctl -u {{ systemd_unit | quote }} --no-pager -n 100
-  register: journal_logs
-  changed_when: false
+- name: Logs — all systemd bots (last 50 lines each)
+  hosts: vps
+  tasks:
+    - name: openclaw-crypto logs
+      command: journalctl -u openclaw-crypto.service --no-pager -n 50
+      register: r1
+    - debug:
+        var: r1.stdout_lines
 
-- name: Display journal logs
-  ansible.builtin.debug:
-    msg: "{{ journal_logs.stdout_lines }}"
+    - name: alpaca_orb_bite_bot logs
+      command: journalctl -u alpaca_orb_bite_bot.service --no-pager -n 50
+      register: r2
+    - debug:
+        var: r2.stdout_lines
+
+    - name: linkedin-news logs
+      command: journalctl -u linkedin-news.service --no-pager -n 50
+      register: r3
+    - debug:
+        var: r3.stdout_lines

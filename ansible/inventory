@@ -1,51 +1,6 @@
-# =============================================================================
-# Ansible Inventory — openclaw-control
-# =============================================================================
-# This file tells Ansible which hosts to manage.
-#
-# Documentation: https://docs.ansible.com/ansible/latest/inventory_guide/
-# =============================================================================
-
 [vps]
-# ---- srv1501082 (72.61.123.4) — Ubuntu 24.04.4 LTS --------------------------
-# ansible_user         — SSH user on the remote server
-# ansible_ssh_private_key_file — path to your LOCAL private key that
-#                                matches the public key installed for 'jacks'
-#                                on the VPS (e.g. ~/.ssh/id_ed25519)
-# ansible_python_interpreter   — use python3 on the remote host
-# ansible_host                 — explicit IP; keeps the friendly alias
-#                                (srv1501082) as the inventory name
-# -----------------------------------------------------------------------------
-srv1501082 ansible_host=72.61.123.4 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_ed25519 ansible_python_interpreter=/usr/bin/python3
+srv1501082 ansible_host=72.61.123.4 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_rsa
 
-# =============================================================================
-# Adding more hosts
-# =============================================================================
-# To add a second VPS, staging server, or any other host, add another line
-# under [vps] following the same pattern, for example:
-#
-#   srv2 ansible_host=203.0.113.55 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_ed25519
-#
-# You can also create new host groups for different environments:
-#
-# [staging]
-# staging ansible_host=203.0.113.10 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_ed25519
-#
-# [production]
-# prod ansible_host=203.0.113.20 ansible_user=jacks ansible_ssh_private_key_file=~/.ssh/id_ed25519
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# Group variables (optional — applied to all hosts in [vps])
-# You can override these per-host inline (as shown above) or in
-# group_vars/vps.yml once your setup grows.
-# -----------------------------------------------------------------------------
 [vps:vars]
-# Remote path where your docker-compose.yml lives on the VPS.
-# Update this if your compose file is in a different location.
-docker_compose_dir=/opt/openclaw
-
-# Docker Compose project name (used for filtering container status output).
-# Change to match the 'name:' field in your docker-compose.yml, or leave
-# blank to let Docker Compose infer it from the directory name.
-docker_compose_project=openclaw
+ansible_python_interpreter=/usr/bin/python3
+docker_compose_dir=/docker/openclaw-1ne6

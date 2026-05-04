@@ -1,73 +1,41 @@
-# Link Context
+# openclaw-control — Server Context
 
-> Persistent memory file for Link, the operational AI assistant.
-> Read at conversation start. Updated as we go.
-> **Before taking any operational action, read `link/context/environment.md`
-> to determine the active execution context and correct trigger method.**
+**Server:** srv1501082.hstgr.cloud / 72.61.123.4
+**SSH user:** jacks
+**Updated:** 2026-05-04
 
----
+## Docker Stack — /docker/openclaw-1ne6/
 
-## System Overview
+| Container | Role | Port |
+|---|---|---|
+| openclaw-1ne6-openclaw-1 | Openclaw app (Wizard AI agent) | 43248 |
+| openclaw-1ne6-openclaw-cron-1 | supercronic cron runner | — |
+| traefik | Reverse proxy, SSL | 80/443 |
 
-**openclaw-control** is an Ansible-based control layer for managing Dockerised bots on an Ubuntu VPS (`srv1501082` / `72.61.123.4`). Operations are triggered via GitHub Actions `workflow_dispatch`, which runs the corresponding Ansible playbook.
+- Domain: www.leeheggan.tech → Traefik → openclaw container
+- Volumes: ./data:/data, /opt/openclaw/config, /opt/openclaw/skills, /opt/openclaw/cache, /opt/openclaw/logs
+- Env: /docker/openclaw-1ne6/.env
 
-### Available Tasks
-| Task | Description | Destructive? |
-|------|-------------|--------------|
-| `up` | Start containers | No |
-| `down` | Stop containers | **Yes** |
-| `restart` | Restart containers | No |
-| `status` | Check container health | No |
-| `deploy` | Pull latest images + recreate | **Yes** |
-| `logs` | Fetch recent container logs | No |
+## systemd Services
 
-### Key Paths
-- **Workflow file**: `.github/workflows/link.yml`
-- **Ansible inventory**: `ansible/inventory`
-- **Compose dir on VPS**: `/opt/openclaw`
-- **VPS user**: `jacks`
+| Service | Description | Location |
+|---|---|---|
+| openclaw-crypto.service | Kraken crypto trading bot (REAL GBP) | /home/jacks/openclaw-crypto/ |
+| alpaca_orb_bite_bot.service | Alpaca stock bot (paper trading) | /home/jacks/alpaca_orb_bite_bot/ |
+| linkedin-news.timer | LinkedIn DC news bot — fires Sun 22:00 UTC | /home/jacks/LinkedIn_Data_Centre_News/ |
 
----
+## Key Paths
 
-## Active Projects
+| Path | Purpose |
+|---|---|
+| /docker/openclaw-1ne6/ | Docker compose project |
+| /home/jacks/openclaw-crypto/ | Crypto bot source + secrets |
+| /home/jacks/alpaca_orb_bite_bot/ | Alpaca bot source + venv |
+| /home/jacks/LinkedIn_Data_Centre_News/ | LinkedIn bot source |
+| /opt/openclaw/ | Openclaw config, skills, cache, logs (mounted into container) |
 
-*(None yet — will populate as work begins)*
-
----
-
-## Decisions Log
-
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2025-01-21 | Created `context.md` for persistent memory | Low overhead, immediate benefit — can upgrade to structured JSON or DB later |
-
----
-
-## Technical Debt / Known Issues
-
-*(None logged yet)*
-
----
-
-## API Notes & Quirks
-
-*(Document platform-specific behaviours as discovered)*
-
----
-
-## Conventions
-
-- **Commit messages**: Imperative mood, concise (`Add feature X`, not `Added feature X`)
-- **Branch naming**: `feature/<name>`, `fix/<name>`, `chore/<name>`
-- **Destructive ops**: Always require explicit user confirmation
-
----
-
-## Open Questions
-
-- What bots/services are currently defined in the VPS docker-compose.yml?
-- Is the GitHub Actions workflow (`link.yml`) already created, or do we need to bootstrap it?
-
----
-
-*Last updated: 2025-01-21*
+## Notes
+- leeheggan.tech is hosted on Vercel — Traefik only handles www.leeheggan.tech → openclaw app
+- Crypto bot uses Kraken API (real money — do not restart without checking open positions)
+- Alpaca bot is paper trading only
+- LinkedIn bot runs weekly via systemd timer (not Docker cron)

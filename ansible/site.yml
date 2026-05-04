@@ -1,221 +1,33 @@
-# =============================================================================
-# site.yml — Root Ansible Playbook for openclaw-control
-# =============================================================================
-# Controls the Docker Compose stack (your bots) on the target Ubuntu VPS via
-# SSH.  All operations are idempotent and safe to run repeatedly.
-#
-# Usage (from the repo root):
-#
-#   # Start all containers
-#   ansible-playbook -i ansible/inventory ansible/site.yml -e "action=up"
-#
-#   # Stop all containers
-#   ansible-playbook -i ansible/inventory ansible/site.yml -e "action=down"
-#
-#   # Restart all containers
-#   ansible-playbook -i ansible/inventory ansible/site.yml -e "action=restart"
-#
-#   # Show running container status
-#   ansible-playbook -i ansible/inventory ansible/site.yml -e "action=status"
-#
-#   # Pull the latest images and recreate containers (deploy)
-#   ansible-playbook -i ansible/inventory ansible/site.yml -e "action=deploy"
-#
-# The `action` variable defaults to "status" if not supplied, so a plain
-# `ansible-playbook` run is always read-only.
-#
-# Prerequisites on the CONTROL machine (your laptop / CI server):
-#   - Ansible >= 2.12       (pip install ansible)
-#   - SSH access to the VPS using the key in ansible/inventory
-#
-# Prerequisites on the VPS:
-#   - Ubuntu 24.04.4 LTS (Noble Numbat) — confirmed target OS
-#   - Docker and Docker Compose v2 installed
-#   - A docker-compose.yml at the path defined by `docker_compose_dir`
-#     in ansible/inventory (default: /opt/openclaw)
-# =============================================================================
-
 ---
-- name: Manage Docker Compose stack on VPS
-  hosts: vps                        # matches [vps] group in ansible/inventory
-  gather_facts: true                # collects OS info — useful for debugging
+# openclaw-control — main site playbook
+# Usage: ansible-playbook -i ansible/inventory ansible/site.yml --tags <tag>
 
-  # ---------------------------------------------------------------------------
-  # Variables
-  # ---------------------------------------------------------------------------
-  vars:
-    # Default action when none is passed via -e "action=..."
-    action: status
+- import_playbook: tasks/status-all.yml
+  tags: [status-all]
 
-    # Target service layer.  Accepted values:
-    #   docker             — Docker Compose stack (LinkedIn bot)
-    #   openclaw-crypto    — openclaw-crypto.service (systemd, native)
-    #   alpaca-orb-bite-bot — alpaca_orb_bite_bot.service (systemd, native)
-    service: docker
+- import_playbook: tasks/status.yml
+  tags: [status]
 
-    # Maps the human-friendly service input to its actual systemd unit name.
-    systemd_unit_map:
-      openclaw-crypto: openclaw-crypto.service
-      alpaca-orb-bite-bot: alpaca_orb_bite_bot.service
+- import_playbook: tasks/up.yml
+  tags: [up]
 
-    # docker_compose_dir and docker_compose_project are defined in
-    # ansible/inventory [vps:vars] — they can be overridden here or per-host.
+- import_playbook: tasks/down.yml
+  tags: [down]
 
-  # ---------------------------------------------------------------------------
-  # Pre-flight checks
-  # ---------------------------------------------------------------------------
-  pre_tasks:
+- import_playbook: tasks/restart.yml
+  tags: [restart]
 
-    - name: Confirm target OS is Ubuntu
-      ansible.builtin.assert:
-        that:
-          - ansible_distribution == "Ubuntu"
-          - ansible_distribution_version is version("24.04", ">=")
-        fail_msg: >-
-          This playbook targets Ubuntu 24.04+. Detected: {{ ansible_distribution }} {{ ansible_distribution_version }}.
-          Override or adapt the playbook for other distros/versions.
-        success_msg: "Target OS confirmed: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+- import_playbook: tasks/logs.yml
+  tags: [logs]
 
-    # Resolve the systemd unit name early so all task files can reference it.
-    - name: Validate service name for non-Docker services
-      ansible.builtin.assert:
-        that:
-          - service in systemd_unit_map
-        fail_msg: >-
-          Unknown service '{{ service }}'. Valid non-Docker services: {{ systemd_unit_map.keys() | list | join(', ') }}.
-      when: service not in ["docker", "all"]
+- import_playbook: tasks/deploy.yml
+  tags: [deploy]
 
-    - name: Set systemd_unit fact for non-Docker services
-      ansible.builtin.set_fact:
-        systemd_unit: "{{ systemd_unit_map[service] }}"
-      when: service not in ["docker", "all"]
+- import_playbook: tasks/systemd-status.yml
+  tags: [systemd-status]
 
-    - name: Check docker is available on the VPS
-      ansible.builtin.command: docker --version
-      register: docker_version_check
-      changed_when: false           # this task never changes state
-      when: service == "docker"
+- import_playbook: tasks/systemd-restart.yml
+  tags: [systemd-restart]
 
-    - name: Show Docker version
-      ansible.builtin.debug:
-        msg: "{{ docker_version_check.stdout }}"
-      when: service == "docker"
-
-    - name: Check docker compose is available on the VPS
-      ansible.builtin.command: docker compose version
-      register: compose_version_check
-      changed_when: false
-      when: service == "docker"
-
-    - name: Show Docker Compose version
-      ansible.builtin.debug:
-        msg: "{{ compose_version_check.stdout }}"
-      when: service == "docker"
-
-    - name: Confirm docker-compose.yml exists at docker_compose_dir
-      ansible.builtin.stat:
-        path: "{{ docker_compose_dir }}/docker-compose.yml"
-      register: compose_file_stat
-      when: service == "docker"
-
-    - name: Fail if docker-compose.yml is missing
-      ansible.builtin.fail:
-        msg: >-
-          docker-compose.yml not found at {{ docker_compose_dir }}/docker-compose.yml.
-          Check the `docker_compose_dir` variable in ansible/inventory or
-          copy/create your compose file on the VPS first.
-      when: service == "docker" and not compose_file_stat.stat.exists
-
-  # ---------------------------------------------------------------------------
-  # Main tasks — delegate to the appropriate include based on `action`
-  # ---------------------------------------------------------------------------
-  tasks:
-
-    # =========================================================================
-    # Docker Compose tasks (service == "docker")
-    # =========================================================================
-
-    # ---- status (default, read-only) ----------------------------------------
-    - name: Show container status
-      ansible.builtin.include_tasks: tasks/status.yml
-      when: service == "docker" and action == "status"
-
-    # ---- up -----------------------------------------------------------------
-    - name: Start containers (up)
-      ansible.builtin.include_tasks: tasks/up.yml
-      when: service == "docker" and action == "up"
-
-    # ---- down ---------------------------------------------------------------
-    - name: Stop containers (down)
-      ansible.builtin.include_tasks: tasks/down.yml
-      when: service == "docker" and action == "down"
-
-    # ---- restart ------------------------------------------------------------
-    - name: Restart containers
-      ansible.builtin.include_tasks: tasks/restart.yml
-      when: service == "docker" and action == "restart"
-
-    # ---- deploy (pull latest images + recreate) -----------------------------
-    - name: Deploy (pull + recreate containers)
-      ansible.builtin.include_tasks: tasks/deploy.yml
-      when: service == "docker" and action == "deploy"
-
-    # ---- logs ---------------------------------------------------------------
-    - name: Fetch recent container logs
-      ansible.builtin.include_tasks: tasks/logs.yml
-      when: service == "docker" and action == "logs"
-
-    # =========================================================================
-    # All-bots tasks (service == "all")
-    # =========================================================================
-
-    # ---- status (all three bots in one pass) --------------------------------
-    - name: Show status of all bots
-      ansible.builtin.include_tasks: tasks/status-all.yml
-      when: service == "all" and action == "status"
-
-    # ---- warn: unsupported action for service=all ---------------------------
-    - name: Warn — only status is supported for service=all
-      ansible.builtin.debug:
-        msg: >-
-          Action '{{ action }}' is not supported for service='all'.
-          Use service='all' with action='status' only.
-          For '{{ action }}', target a specific service instead.
-      when: service == "all" and action != "status"
-
-    # =========================================================================
-    # systemd service tasks (service == "openclaw-crypto" | "alpaca-orb-bite-bot")
-    # =========================================================================
-
-    # ---- status -------------------------------------------------------------
-    - name: Show systemd service status
-      ansible.builtin.include_tasks: tasks/systemd-status.yml
-      when: service not in ["docker", "all"] and action == "status"
-
-    # ---- restart ------------------------------------------------------------
-    - name: Restart systemd service
-      ansible.builtin.include_tasks: tasks/systemd-restart.yml
-      when: service not in ["docker", "all"] and action == "restart"
-
-    # ---- logs ---------------------------------------------------------------
-    - name: Fetch systemd service logs
-      ansible.builtin.include_tasks: tasks/systemd-logs.yml
-      when: service not in ["docker", "all"] and action == "logs"
-
-    # ---- unsupported action for systemd -------------------------------------
-    - name: Warn — action not supported for systemd services
-      ansible.builtin.debug:
-        msg: >-
-          Action '{{ action }}' is not supported for systemd service '{{ service }}'.
-          Supported actions for systemd services: status, restart, logs.
-      when: service not in ["docker", "all"] and action not in ["status", "restart", "logs"]
-
-    # =========================================================================
-    # Guard: unknown action for Docker
-    # =========================================================================
-    - name: Warn about unknown action
-      ansible.builtin.debug:
-        msg: >-
-          Unknown action '{{ action }}'.
-          Valid actions: status, up, down, restart, deploy, logs.
-      when: service == "docker" and action not in ["status", "up", "down", "restart", "deploy", "logs"]
+- import_playbook: tasks/systemd-logs.yml
+  tags: [systemd-logs]

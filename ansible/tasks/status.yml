@@ -1,19 +1,9 @@
-# =============================================================================
-# tasks/status.yml — Show Docker container status
-# =============================================================================
-# Called by site.yml when action=status (the default).
-# Runs `docker compose ps` on the VPS and prints the output so you can see
-# which containers are running, stopped, or unhealthy.
-# =============================================================================
-
 ---
-- name: Run docker compose ps
-  ansible.builtin.command:
-    cmd: docker compose ps
-    chdir: "{{ docker_compose_dir }}"
-  register: compose_ps
-  changed_when: false               # purely informational — no state change
-
-- name: Display container status
-  ansible.builtin.debug:
-    msg: "{{ compose_ps.stdout_lines }}"
+- name: Status — Openclaw Docker containers
+  hosts: vps
+  tasks:
+    - name: Show running containers
+      command: docker ps --filter name=openclaw-1ne6 --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: result
+    - debug:
+        msg: "{{ result.stdout }}"
