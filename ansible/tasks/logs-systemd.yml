@@ -1,0 +1,21 @@
+---
+- name: List systemd services matching pattern
+  ansible.builtin.shell:
+    cmd: "systemctl list-units --type=service --state=loaded --no-pager --no-legend | grep -i '{{ service_pattern | default(\"crypto\") }}'"
+  register: service_list
+  changed_when: false
+  failed_when: false
+
+- name: Show matching services
+  ansible.builtin.debug:
+    msg: "{{ service_list.stdout }}"
+
+- name: Fetch journalctl logs for service
+  ansible.builtin.command:
+    cmd: "journalctl -u {{ service | default('crypto-bot') }} --no-pager -n {{ lines | default('100') }}"
+  register: journal_output
+  changed_when: false
+
+- name: Show logs
+  ansible.builtin.debug:
+    msg: "{{ journal_output.stdout }}"

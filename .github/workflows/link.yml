@@ -3,8 +3,8 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      action:
-        description: 'Action to run'
+      task:
+        description: 'Ansible task'
         required: true
         default: 'status-all'
         type: choice
@@ -13,8 +13,13 @@ on:
           - systemd-status
           - systemd-logs
           - systemd-restart
+          - logs-systemd
+      service:
+        description: 'Systemd service name (for logs-systemd task)'
+        required: false
+        default: 'crypto-bot'
       tail_lines:
-        description: 'Number of log lines to fetch (systemd-logs action only)'
+        description: 'Number of log lines to fetch (systemd-logs task only)'
         required: false
         default: '50'
 
@@ -37,8 +42,9 @@ jobs:
       - name: Write inventory
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
-      - name: Run playbook — ${{ inputs.action }}
+      - name: Run playbook — ${{ inputs.task }}
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/site.yml \
-            --tags "${{ inputs.action }}" \
+            --tags "${{ inputs.task }}" \
+            -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"

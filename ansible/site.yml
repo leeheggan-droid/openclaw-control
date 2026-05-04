@@ -13,3 +13,9 @@
 
 - import_playbook: tasks/systemd-logs.yml
   tags: [systemd-logs]
+
+- name: Fetch systemd service logs (journalctl)
+  hosts: vps
+  tasks:
+    - ansible.builtin.import_tasks: tasks/logs-systemd.yml
+  tags: [logs-systemd]
