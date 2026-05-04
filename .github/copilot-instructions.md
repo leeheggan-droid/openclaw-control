@@ -16,4 +16,4 @@
 - [ ] No secrets or credentials added to source code
 - [ ] No destructive operations introduced
 - [ ] Changes limited to the minimum required by the issue
-- [ ] Local test passed: `git pull; uvicorn web_app:app --reload;` then verified in browser
+- [ ] Ansible playbook validated (no web app server in this repo)

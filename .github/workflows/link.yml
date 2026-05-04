@@ -3,8 +3,8 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      task:
-        description: 'Ansible task'
+      action:
+        description: 'Action to run'
         required: true
         default: 'status-all'
         type: choice
@@ -42,9 +42,9 @@ jobs:
       - name: Write inventory
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
-      - name: Run playbook — ${{ inputs.task }}
+      - name: Run playbook — ${{ inputs.action }}
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/site.yml \
-            --tags "${{ inputs.task }}" \
+            --tags "${{ inputs.action }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
