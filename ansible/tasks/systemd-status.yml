@@ -1,20 +1,24 @@
-# =============================================================================
-# tasks/systemd-status.yml — Show status of a systemd-managed service
-# =============================================================================
-# Called by site.yml when service != "docker" and action=status.
-# Requires the `systemd_unit` variable to be set by site.yml.
-# =============================================================================
-
 ---
-- name: Show systemd service status
-  ansible.builtin.command:
-    cmd: systemctl status {{ systemd_unit | quote }} --no-pager
-  register: service_status
-  changed_when: false
-  # systemctl status returns non-zero if the unit is stopped/failed, so we
-  # capture that output rather than letting Ansible abort the play.
-  failed_when: false
+- name: Status — all systemd bots
+  hosts: vps
+  tasks:
+    - name: openclaw-crypto
+      command: systemctl status openclaw-crypto.service --no-pager
+      register: r1
+      ignore_errors: true
+    - debug:
+        var: r1.stdout_lines
 
-- name: Display service status
-  ansible.builtin.debug:
-    msg: "{{ service_status.stdout_lines }}"
+    - name: alpaca_orb_bite_bot
+      command: systemctl status alpaca_orb_bite_bot.service --no-pager
+      register: r2
+      ignore_errors: true
+    - debug:
+        var: r2.stdout_lines
+
+    - name: linkedin-news timer
+      command: systemctl status linkedin-news.timer --no-pager
+      register: r3
+      ignore_errors: true
+    - debug:
+        var: r3.stdout_lines
