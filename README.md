@@ -1,14 +1,11 @@
 # openclaw-control
 
-An Ansible-based control layer for remotely managing the OpenClaw stack on
+An Ansible-based control layer for remotely managing the OpenClaw bot stack on
 an Ubuntu VPS.  Operations are triggered either directly via `ansible-playbook`
 from a local machine or automatically through a GitHub Actions
-`workflow_dispatch` event ("Link Control").  The stack is a **hybrid system**:
-the main OpenClaw web app and its cron runner are Docker containers, while the
-GitHub Issue Polling Agent (`openclaw-agent`) and the supporting trading bots
-run as native systemd services.  All application / UI code lives elsewhere;
-this repository contains only the automation needed to operate the stack over
-SSH.
+`workflow_dispatch` event ("Link Control").  All bots run as **native systemd
+services** on the host.  The web UI (`www.leeheggan.tech`) is a separate Vercel
+app (the Link repo) and is not managed here.
 
 ---
 
@@ -46,11 +43,6 @@ SSH.
          ┌───────────────────────────────────────────┐
          │  Ubuntu VPS — srv1501082 / 72.61.123.4    │
          │                                           │
-         │  Docker Compose — /docker/openclaw-1ne6/  │
-         │  ├─ openclaw-1ne6-openclaw-1  (app:43248) │
-         │  ├─ openclaw-1ne6-openclaw-cron-1         │
-         │  └─ traefik  (80/443)                     │
-         │                                           │
          │  systemd services (native host)           │
          │  ├─ openclaw-agent.service                │
          │  │    /opt/openclaw-agent/agent.py        │
@@ -62,17 +54,22 @@ SSH.
          └───────────────────────────────────────────┘
 ```
 
+> **Note:** `www.leeheggan.tech` is served by Vercel (the Link app repo).
+> There is no Docker web app or Traefik proxy on the VPS.
+
 ### How it works end-to-end
 
-1. **Trigger** — a human (or the Link AI assistant) selects an action
-   (`up`, `down`, `restart`, `status`, `deploy`, `logs`, `systemd-status`,
-   `systemd-restart`, `systemd-logs`, `status-all`) and runs the playbook.
+1. **Trigger** — Link (the Vercel AI assistant) or a human selects an action
+   (`status-all`, `systemd-status`, `systemd-restart`, `systemd-logs`) via the
+   GitHub API or GitHub UI.
 2. **Task dispatch** — `site.yml` selects the matching task file from
    `ansible/tasks/` using Ansible tags.
-3. **Execution** — Docker actions run `docker compose` commands at
-   `docker_compose_dir` on the VPS; `systemd-*` actions call `systemctl`
-   or `journalctl` directly on the host.
+3. **Execution** — the task file runs `systemctl` or `journalctl` directly on
+   the VPS host.
 4. **Output** — results are printed to the Ansible console or GitHub Actions log.
+
+See `link/context/how-link-interacts.md` for the full end-to-end interaction
+diagram including the GitHub API call format.
 
 ### "Link" persistent memory
 
@@ -96,7 +93,7 @@ execution environment changes.
 | Runtime for Ansible | Python | ≥ 3.9 |
 | CI / remote trigger | GitHub Actions | — |
 | Container runtime | Docker CE | latest stable |
-| Container orchestration | Docker Compose v2 (`docker compose` plugin) | v2+ |
+| Container orchestration | Docker Compose v2 (`docker compose` plugin) | v2+ (LinkedIn bot only) |
 | Target OS | Ubuntu | 24.04.4 LTS (Noble Numbat) |
 | SSH key type | RSA (`id_rsa`) | — |
 
@@ -124,15 +121,13 @@ python3 --version
 | Requirement | Notes |
 |---|---|
 | Ubuntu | 24.04.4 LTS (Noble Numbat) — confirmed target OS |
-| Docker CE | [Install guide](https://docs.docker.com/engine/install/ubuntu/) |
-| Docker Compose v2 | Ships with Docker CE as the `docker compose` plugin |
-| `docker-compose.yml` | Must exist at the path defined by `docker_compose_dir` (default: `/opt/openclaw`) |
+| systemd | Standard Ubuntu install |
 
 ### For GitHub Actions (CI path)
 
 | Requirement | Notes |
 |---|---|
-| `VPS_SSH_KEY` secret | The **private** ed25519 key whose public half is installed on the VPS for user `jacks` |
+| `VPS_SSH_KEY` secret | The **private** RSA key whose public half is installed on the VPS for user `jacks` |
 | `ANSIBLE_INVENTORY` secret | Full content of a valid Ansible inventory file (same format as `ansible/inventory`) |
 
 ---
@@ -213,7 +208,6 @@ The single inventory file that tells Ansible which host(s) to manage.
 | `ansible_user` | `jacks` | SSH user on the remote server |
 | `ansible_ssh_private_key_file` | `~/.ssh/id_rsa` | Path to the local private key |
 | `ansible_python_interpreter` | `/usr/bin/python3` | Python binary on the remote host |
-| `docker_compose_dir` | `/docker/openclaw-1ne6` | Directory on the VPS containing `docker-compose.yml` |
 
 ### `action` (tag) variable
 
@@ -222,15 +216,9 @@ command line.  Defaults to `status-all` in the GitHub Actions workflow.
 
 | Tag | Effect | Destructive? |
 |---|---|---|
-| `status-all` | Docker `ps` + all systemd bot statuses | No (default) |
-| `status` | `docker compose ps` — show running containers | No |
-| `systemd-status` | Status of all 4 systemd bots | No |
-| `up` | `docker compose up -d` — start all services | No |
-| `down` | `docker compose down` — stop and remove containers | **Yes** |
-| `restart` | `docker compose restart` — restart without image change | No |
+| `status-all` | Status of all systemd bots | No (default) |
+| `systemd-status` | Detailed status of all 4 systemd bots | No |
 | `systemd-restart` | Restart all 4 systemd bots | No |
-| `deploy` | `git pull` + `docker compose build` + `up -d` | **Yes** |
-| `logs` | Docker container logs (`tail_lines` lines) | No |
 | `systemd-logs` | journald logs for all 4 systemd bots (`tail_lines` lines) | No |
 
 ### GitHub Actions secrets
@@ -240,44 +228,21 @@ command line.  Defaults to `status-all` in the GitHub Actions workflow.
 | `VPS_SSH_KEY` | Contents of the private SSH key (written to `~/.ssh/id_rsa` on the runner) |
 | `ANSIBLE_INVENTORY` | Full content of a valid Ansible inventory file (written to `ansible/inventory.ini` at runtime) |
 
-> **Note:** No secrets or credentials are ever committed to the repository.
-> The `ansible/inventory` file contains only the public connectivity details
-> (IP address and username).
-
 ---
 
 ## Operator Guide — How OpenClaw Is Started
 
-OpenClaw runs as a **hybrid stack** on a single Ubuntu VPS (`srv1501082`).
-The main web application and its scheduled-task runner are managed by **Docker
-Compose** at `/docker/openclaw-1ne6/` (containers `openclaw-1ne6-openclaw-1`,
-`openclaw-1ne6-openclaw-cron-1`, and the Traefik reverse proxy).  Separately,
-the **GitHub Issue Polling Agent** (`openclaw-agent.service`) and the trading
-bots (`openclaw-crypto.service`, `alpaca_orb_bite_bot.service`) run as
-**native systemd services** directly on the host — there is no Docker involved
-for those processes.  A `linkedin-news.timer` systemd unit fires the LinkedIn
-news bot on a weekly schedule.  There is **no** `docker-compose` CLI binary
-(the stack uses the `docker compose` plugin), no standalone Dockerfile in this
-control repo, and Ansible is not responsible for initial installation — it only
-operates an already-running stack over SSH.
+All bots run as **native systemd services** on the VPS (`srv1501082`).  There
+is no Docker web app.  The web UI (`www.leeheggan.tech`) runs entirely on
+Vercel via the Link repo.  Ansible only manages systemd service operations
+over SSH — it is not responsible for initial installation.
 
 ### After a code change — restart checklist
 
-Use this checklist every time you do a `git pull` (or push new code) and need
-the running system to pick up the changes.
+Use this checklist every time you push new code and need the running service
+to pick it up.
 
-#### Openclaw web app (Docker)
-
-- [ ] SSH into the VPS: `ssh jacks@72.61.123.4`
-- [ ] `cd /docker/openclaw-1ne6`
-- [ ] `git pull` (if the compose project tracks a repo; otherwise skip)
-- [ ] `docker compose build` — rebuild the image with new code
-- [ ] `docker compose up -d` — recreate containers from the new image
-- [ ] Verify: `docker ps` and `docker compose logs --tail=20`
-
-Or via GitHub Actions: **Actions → Link Control → Run workflow → `deploy`**
-
-#### openclaw-agent (systemd — GitHub Issue Polling Agent)
+#### openclaw-agent (GitHub Issue Polling Agent)
 
 - [ ] SSH into the VPS: `ssh jacks@72.61.123.4`
 - [ ] `cd /opt/openclaw-agent && git pull`
@@ -289,7 +254,7 @@ Or via GitHub Actions: **Actions → Link Control → Run workflow → `deploy`*
 service's environment — a missing variable will cause the service to fail.
 Run `systemctl cat openclaw-agent.service` to see what env vars are expected.
 
-#### openclaw-crypto (systemd — Kraken trading bot, REAL GBP)
+#### openclaw-crypto (Kraken trading bot — REAL GBP)
 
 - [ ] **Check open positions before restarting**: verify no active trades in Kraken
 - [ ] SSH into the VPS
@@ -297,18 +262,17 @@ Run `systemctl cat openclaw-agent.service` to see what env vars are expected.
 - [ ] `sudo systemctl restart openclaw-crypto.service`
 - [ ] Verify: `systemctl status openclaw-crypto.service`
 
-#### alpaca_orb_bite_bot (systemd — paper trading)
+#### alpaca_orb_bite_bot (paper trading)
 
 - [ ] SSH into the VPS
 - [ ] `cd /home/jacks/alpaca_orb_bite_bot && git pull`
 - [ ] `sudo systemctl restart alpaca_orb_bite_bot.service`
 - [ ] Verify: `systemctl status alpaca_orb_bite_bot.service`
 
-#### Or restart everything via GitHub Actions
+#### Or restart everything via GitHub Actions / Link
 
 1. Go to **Actions → Link Control → Run workflow**
-2. Select `systemd-restart` to restart all 4 systemd bots, or `deploy` to
-   rebuild and restart the Docker stack.
+2. Select `systemd-restart`
 
 ---
 
@@ -316,34 +280,16 @@ Run `systemctl cat openclaw-agent.service` to see what env vars are expected.
 
 All commands below are run from the **repository root** on your local machine.
 
-### Check full server status (Docker + all systemd bots)
+### Check status of all systemd bots
 
 ```bash
 ansible-playbook -i ansible/inventory ansible/site.yml --tags status-all
 ```
 
-### Check Docker container status only
+### Detailed status of individual bots
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags status
-```
-
-### Start Docker containers
-
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags up
-```
-
-### Stop Docker containers
-
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags down
-```
-
-### Restart Docker containers
-
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags restart
+ansible-playbook -i ansible/inventory ansible/site.yml --tags systemd-status
 ```
 
 ### Restart all systemd bots
@@ -352,19 +298,7 @@ ansible-playbook -i ansible/inventory ansible/site.yml --tags restart
 ansible-playbook -i ansible/inventory ansible/site.yml --tags systemd-restart
 ```
 
-### Deploy — rebuild Docker image and recreate containers
-
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags deploy
-```
-
-### View recent Docker container logs
-
-```bash
-ansible-playbook -i ansible/inventory ansible/site.yml --tags logs -e "tail_lines=50"
-```
-
-### View recent systemd bot logs
+### View recent bot logs
 
 ```bash
 ansible-playbook -i ansible/inventory ansible/site.yml --tags systemd-logs -e "tail_lines=50"
@@ -382,12 +316,21 @@ ansible-playbook -i ansible/inventory ansible/site.yml --tags status-all -v
 1. Navigate to **Actions → Link Control** in the GitHub UI.
 2. Click **Run workflow**.
 3. Select the desired action from the dropdown.
-4. Optionally set `tail_lines` (applies to `logs` and `systemd-logs` only).
+4. Optionally set `tail_lines` (applies to `systemd-logs` only).
 5. Click **Run workflow** to execute.
 
 The runner installs Ansible, writes the SSH key from the `VPS_SSH_KEY` secret
 to `~/.ssh/id_rsa`, writes the inventory from the `ANSIBLE_INVENTORY` secret
 to `ansible/inventory.ini`, and runs `ansible/site.yml` with the selected tag.
+
+### Via GitHub API (for Link)
+
+```
+POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatches
+{ "ref": "main", "inputs": { "action": "systemd-restart", "tail_lines": "50" } }
+```
+
+See `link/context/how-link-interacts.md` for the full API interaction guide.
 
 ---
 
@@ -399,19 +342,11 @@ openclaw-control/
 ├── ansible/
 │   ├── inventory              # Ansible host/SSH configuration — edit this first
 │   ├── site.yml               # Root playbook; dispatches to task files based on Ansible tags
-│   ├── tasks/
-│   │   ├── status-all.yml     # Docker ps + all systemd bot statuses
-│   │   ├── status.yml         # docker compose ps
-│   │   ├── up.yml             # docker compose up -d
-│   │   ├── down.yml           # docker compose down
-│   │   ├── restart.yml        # docker compose restart
-│   │   ├── deploy.yml         # git pull + docker compose build + up -d
-│   │   ├── logs.yml           # docker compose logs
-│   │   ├── systemd-status.yml # systemctl status for all 4 systemd bots
-│   │   ├── systemd-restart.yml# systemctl restart for all 4 systemd bots
-│   │   └── systemd-logs.yml   # journalctl logs for all 4 systemd bots
-│   └── roles/
-│       └── README.md          # Guide for scaffolding future Ansible roles
+│   └── tasks/
+│       ├── status-all.yml     # systemctl status for all 4 systemd bots
+│       ├── systemd-status.yml # Detailed systemctl status for all 4 systemd bots
+│       ├── systemd-restart.yml# systemctl restart for all 4 systemd bots
+│       └── systemd-logs.yml   # journalctl logs for all 4 systemd bots
 │
 ├── link/
 │   └── context/               # Persistent memory store for the Link AI assistant
@@ -419,12 +354,13 @@ openclaw-control/
 │       ├── decisions.md       # Architectural and operational decisions log
 │       ├── projects.md        # Active projects and their status
 │       ├── quirks.md          # API quirks, platform-specific gotchas, technical debt
+│       ├── how-link-interacts.md  # Full Link → GitHub API → Ansible → VPS flow
 │       └── services/
-│           ├── host-overview.md          # Master list of all running services
-│           ├── openclaw-agent.md         # GitHub Issue Polling Agent (systemd)
-│           ├── openclaw-crypto.md        # Kraken crypto bot (systemd)
-│           ├── alpaca-orb-bite-bot.md    # Alpaca paper trading bot (systemd)
-│           └── linkedin-data-centre-news-bot.md  # LinkedIn news bot (Docker)
+│           ├── host-overview.md             # Master list of all running services
+│           ├── openclaw-agent.md            # GitHub Issue Polling Agent (systemd)
+│           ├── openclaw-crypto.md           # Kraken crypto bot (systemd)
+│           ├── alpaca-orb-bite-bot.md       # Alpaca paper trading bot (systemd)
+│           └── linkedin-data-centre-news-bot.md  # LinkedIn news bot (systemd timer)
 │
 ├── .github/
 │   ├── workflows/
@@ -465,15 +401,13 @@ Use the imperative mood and keep the subject line concise:
 
 ### Targeting a single service
 
-Pass the service name as an extra variable:
+To restart only one bot, SSH into the VPS and run:
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml \
-  -e "action=restart" -e "service=bot-alpha"
+sudo systemctl restart openclaw-agent.service
 ```
 
-Then update the relevant task file to use `{{ service | default('') }}` in the
-`docker compose` command.
+Or add a targeted playbook task and call it with `--tags`.
 
 ### Adding a new VPS or environment
 
@@ -484,7 +418,7 @@ Then update the relevant task file to use `{{ service | default('') }}` in the
 3. Use the `-l` (limit) flag to target only that host or group:
 
 ```bash
-ansible-playbook -i ansible/inventory ansible/site.yml -e "action=status" -l staging
+ansible-playbook -i ansible/inventory ansible/site.yml --tags status-all -l staging
 ```
 
 ### Ansible roles
@@ -496,8 +430,6 @@ using the standard scaffolding tool:
 cd ansible/
 ansible-galaxy role init roles/<role-name>
 ```
-
-See `ansible/roles/README.md` for a full walkthrough and example role ideas.
 
 ### Safety checklist for pull requests
 

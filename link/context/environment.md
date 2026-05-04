@@ -11,7 +11,7 @@
 | Field        | Value |
 |--------------|-------|
 | Context      | `GITHUB_ACTIONS` |
-| Last updated | 2026-05-04 12:45 UTC |
+| Last updated | 2026-05-04 13:18 UTC |
 | Updated by   | Lee |
 | Notes        | Triggered via GitHub Actions workflow_dispatch. Secrets: `VPS_SSH_KEY`, `ANSIBLE_INVENTORY`. |
 
@@ -29,22 +29,16 @@ POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatch
 
 ### Available Actions
 
-| Action           | Effect                                                          | Destructive? |
-|------------------|-----------------------------------------------------------------|--------------|
-| `status-all`     | Full server status — Docker containers + all systemd bots       | No (default) |
-| `status`         | Show Openclaw Docker container status                           | No |
+| Action           | Effect                                                            | Destructive? |
+|------------------|-------------------------------------------------------------------|--------------|
+| `status-all`     | Full server status — all systemd bots                             | No (default) |
 | `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)| No |
-| `logs`           | Fetch logs from Openclaw Docker containers                      | No |
-| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)| No |
-| `restart`        | Restart Openclaw Docker stack                                   | No |
-| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
-| `up`             | `docker compose up -d` — start Docker stack                    | No |
-| `down`           | `docker compose down` — stop and remove Docker stack            | **Yes** |
-| `deploy`         | `docker compose pull` + `up -d --remove-orphans`               | **Yes** |
+| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)  | No |
+| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news) | No |
 
 ### The `tail_lines` Input
 
-Only applies to `logs` and `systemd-logs` actions. Defaults to `50`.
+Only applies to `systemd-logs`. Defaults to `50`.
 Set to `10` for a quick last-10-lines check.
 
 ### Quick reference — most common requests
@@ -54,7 +48,20 @@ Set to `10` for a quick last-10-lines check.
 | "Last 10 lines of the crypto bot logs"              | `systemd-logs`   | `10`       |
 | "Show me the status of all bots"                    | `status-all`     | —          |
 | "Is the crypto bot running?"                        | `systemd-status` | —          |
-| "Show me the openclaw app logs"                     | `logs`           | `50`       |
+| "Restart the agent after a code push"               | `systemd-restart`| —          |
+
+---
+
+## How Link Triggers Actions — Full Flow
+
+See `link/context/how-link-interacts.md` for the complete end-to-end diagram.
+
+Short version:
+1. Link calls the GitHub API (`workflow_dispatch`)
+2. `link.yml` GitHub Actions workflow runs on `ubuntu-latest`
+3. Ansible SSHes into the VPS using `VPS_SSH_KEY`
+4. Ansible runs the appropriate `systemctl` or `journalctl` command
+5. Output appears in the GitHub Actions run log
 
 ---
 
@@ -64,12 +71,12 @@ Set to `10` for a quick last-10-lines check.
 
 - Link or the operator is running on a **local machine** with direct SSH access to the VPS.
 - Ansible is installed and available on `PATH` (`ansible --version` confirms).
-- SSH key `~/.ssh/id_ed25519` is present locally and its public half is authorised on the VPS for user `jacks`.
+- SSH key `~/.ssh/id_rsa` is present locally and its public half is authorised on the VPS for user `jacks`.
 - Inventory is `ansible/inventory` (committed to the repo; no secrets).
 - **Trigger method:**
 
   ```bash
-  ansible-playbook -i ansible/inventory ansible/site.yml -e "action=<action>"
+  ansible-playbook -i ansible/inventory ansible/site.yml --tags <action>
   ```
 
 ### `GITHUB_ACTIONS`
