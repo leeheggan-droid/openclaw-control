@@ -18,7 +18,9 @@
 ### systemd
 | Unit | Status | Notes |
 |---|---|---|
+| openclaw-agent.service | Running | GitHub Issue Polling Agent — /opt/openclaw-agent/agent.py |
 | openclaw-crypto.service | Running | Kraken crypto bot — REAL GBP |
+| openclaw-vibe-gateway.service | Exited (bridge) | Ensures Docker image is current before openclaw-vibe starts |
 | alpaca_orb_bite_bot.service | Running | Alpaca paper trading bot |
 | linkedin-news.timer | Waiting | Fires Sun 22:00 UTC weekly |
 

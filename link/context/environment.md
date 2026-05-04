@@ -33,11 +33,11 @@ POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatch
 |------------------|-----------------------------------------------------------------|--------------|
 | `status-all`     | Full server status — Docker containers + all systemd bots       | No (default) |
 | `status`         | Show Openclaw Docker container status                           | No |
-| `systemd-status` | Status of all 3 systemd bots (crypto, alpaca, linkedin-news)   | No |
+| `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)| No |
 | `logs`           | Fetch logs from Openclaw Docker containers                      | No |
-| `systemd-logs`   | Fetch logs from all 3 systemd bots (`tail_lines` controls count)| No |
+| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)| No |
 | `restart`        | Restart Openclaw Docker stack                                   | No |
-| `systemd-restart`| Restart all 3 systemd bots                                      | No |
+| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
 | `up`             | `docker compose up -d` — start Docker stack                    | No |
 | `down`           | `docker compose down` — stop and remove Docker stack            | **Yes** |
 | `deploy`         | `docker compose pull` + `up -d --remove-orphans`               | **Yes** |

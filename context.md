@@ -20,7 +20,9 @@
 
 | Service | Description | Location |
 |---|---|---|
+| openclaw-agent.service | GitHub Issue Polling Agent | /opt/openclaw-agent/ |
 | openclaw-crypto.service | Kraken crypto trading bot (REAL GBP) | /home/jacks/openclaw-crypto/ |
+| openclaw-vibe-gateway.service | Vibe gateway — ensures Docker image is current | (wraps Docker) |
 | alpaca_orb_bite_bot.service | Alpaca stock bot (paper trading) | /home/jacks/alpaca_orb_bite_bot/ |
 | linkedin-news.timer | LinkedIn DC news bot — fires Sun 22:00 UTC | /home/jacks/LinkedIn_Data_Centre_News/ |
 
@@ -29,6 +31,7 @@
 | Path | Purpose |
 |---|---|
 | /docker/openclaw-1ne6/ | Docker compose project |
+| /opt/openclaw-agent/ | GitHub Issue Polling Agent source + venv |
 | /home/jacks/openclaw-crypto/ | Crypto bot source + secrets |
 | /home/jacks/alpaca_orb_bite_bot/ | Alpaca bot source + venv |
 | /home/jacks/LinkedIn_Data_Centre_News/ | LinkedIn bot source |

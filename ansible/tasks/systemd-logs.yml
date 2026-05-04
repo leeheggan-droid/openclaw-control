@@ -2,6 +2,12 @@
 - name: Logs — all systemd bots
   hosts: vps
   tasks:
+    - name: openclaw-agent logs
+      command: journalctl -u openclaw-agent.service --no-pager -n {{ tail_lines | default(50) }}
+      register: r0
+    - debug:
+        var: r0.stdout_lines
+
     - name: openclaw-crypto logs
       command: journalctl -u openclaw-crypto.service --no-pager -n {{ tail_lines | default(50) }}
       register: r1

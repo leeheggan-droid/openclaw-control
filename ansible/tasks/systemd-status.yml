@@ -2,6 +2,13 @@
 - name: Status — all systemd bots
   hosts: vps
   tasks:
+    - name: openclaw-agent
+      command: systemctl status openclaw-agent.service --no-pager
+      register: r0
+      ignore_errors: true
+    - debug:
+        var: r0.stdout_lines
+
     - name: openclaw-crypto
       command: systemctl status openclaw-crypto.service --no-pager
       register: r1
