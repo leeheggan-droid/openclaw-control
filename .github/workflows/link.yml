@@ -25,26 +25,13 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ansible
-        run: pip install ansible
-
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 72.61.123.4 >> ~/.ssh/known_hosts
-
-      - name: Write inventory
-        run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
-
       - name: Run playbook — ${{ inputs.action }}
         run: |
-          ansible-playbook -i ansible/inventory.ini ansible/site.yml \
+          ansible-playbook -i ansible/inventory ansible/site.yml \
             --tags "${{ inputs.action }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
