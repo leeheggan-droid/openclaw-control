@@ -1,10 +1,5 @@
 - hosts: vps
   tasks:
-    - name: Docker containers
-      command: >
-        docker ps --format
-        "table {{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}"
-
     - name: openclaw-agent.service
       command: systemctl status openclaw-agent.service --no-pager
       register: agent_status
