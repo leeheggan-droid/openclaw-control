@@ -1,3 +1,11 @@
+---
+# status-all.yml — one-line systemctl status for every systemd bot on the VPS.
+# Safe read-only check; this is the default action (no tag required).
+# Services covered:
+#   openclaw-agent.service   — GitHub Issue Polling Agent (NOT Docker)
+#   openclaw-crypto.service  — Kraken crypto trading bot (REAL GBP)
+#   alpaca_orb_bite_bot      — Alpaca paper trading bot
+#   linkedin-news.timer      — LinkedIn DC news bot (systemd timer)
 - hosts: vps
   tasks:
     - name: openclaw-agent.service

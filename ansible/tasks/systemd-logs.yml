@@ -1,4 +1,12 @@
 ---
+# systemd-logs.yml — fetch recent journald logs for all systemd bots.
+# tail_lines variable controls how many lines to fetch (default: 50).
+# Pass via -e "tail_lines=N" or the GitHub Actions tail_lines input.
+# Services covered:
+#   openclaw-agent.service   — GitHub Issue Polling Agent (NOT Docker)
+#   openclaw-crypto.service  — Kraken crypto bot (REAL GBP)
+#   alpaca_orb_bite_bot      — Alpaca paper trading bot
+#   linkedin-news.service    — LinkedIn DC news bot (the service unit, not the timer)
 - name: Logs — all systemd bots
   hosts: vps
   tasks:

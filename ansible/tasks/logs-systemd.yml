@@ -1,4 +1,12 @@
 ---
+# logs-systemd.yml — fetch journald logs for a single specified service.
+# Variables:
+#   service      — systemd unit name, e.g. "openclaw-agent.service" (default: crypto-bot)
+#   tail_lines   — number of log lines to fetch (default: 50)
+# Triggered by the "logs-systemd" tag. Pass via:
+#   -e "service=openclaw-agent.service" -e "tail_lines=30"
+# or via the GitHub Actions `service` and `tail_lines` workflow inputs.
+
 - name: List systemd services matching pattern
   ansible.builtin.shell:
     cmd: "systemctl list-units --type=service --state=loaded --no-pager --no-legend | grep -i '{{ service_pattern | default(\"crypto\") }}'"
