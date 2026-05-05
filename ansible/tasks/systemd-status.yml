@@ -1,4 +1,11 @@
 ---
+# systemd-status.yml — detailed systemctl status for all systemd bots.
+# Safe read-only. Shows active state, PID, recent log lines, and resource usage.
+# Services covered:
+#   openclaw-agent   — GitHub Issue Polling Agent (NOT Docker)
+#   openclaw-crypto  — Kraken crypto bot (REAL GBP)
+#   alpaca_orb_bite_bot — Alpaca paper trading bot
+#   linkedin-news timer — LinkedIn DC news bot (systemd timer)
 - name: Status — all systemd bots
   hosts: vps
   tasks:

@@ -1,4 +1,11 @@
 ---
+# systemd-restart.yml — restart all systemd bot services.
+# ⚠️  Before running, confirm openclaw-crypto.service has no open Kraken positions.
+# Services restarted (in order):
+#   openclaw-agent.service   — GitHub Issue Polling Agent (safe to restart)
+#   openclaw-crypto.service  — Kraken crypto bot (REAL GBP — check positions first)
+#   alpaca_orb_bite_bot      — Alpaca paper trading bot (safe to restart)
+#   linkedin-news.timer      — LinkedIn DC news bot timer (safe to restart)
 - name: Restart — all systemd bots
   hosts: vps
   tasks:
