@@ -3,7 +3,7 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      action:
+      task:
         description: 'Action to run'
         required: true
         default: 'status-all'
@@ -29,9 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run playbook — ${{ inputs.action }}
+      - name: Run playbook — ${{ inputs.task }}
         run: |
           ansible-playbook -i ansible/inventory ansible/site.yml \
-            --tags "${{ inputs.action }}" \
+            --tags "${{ inputs.task }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
