@@ -12,7 +12,7 @@
 
 - name: Fetch journalctl logs for service
   ansible.builtin.command:
-    cmd: "journalctl -u {{ service | default('crypto-bot') }} --no-pager -n {{ lines | default('100') }}"
+    cmd: "journalctl -u {{ service | default('crypto-bot') }} --no-pager -n {{ tail_lines | default('50') }}"
   register: journal_output
   changed_when: false
 

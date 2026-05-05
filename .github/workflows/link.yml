@@ -3,7 +3,7 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      task:
+      action:
         description: 'Action to run'
         required: true
         default: 'status-all'
@@ -15,23 +15,42 @@ on:
           - systemd-restart
           - logs-systemd
       service:
-        description: 'Systemd service name (for logs-systemd task)'
+        description: 'Systemd service name (for logs-systemd action)'
         required: false
         default: 'crypto-bot'
       tail_lines:
-        description: 'Number of log lines to fetch (systemd-logs task only)'
+        description: 'Number of log lines to fetch (systemd-logs and logs-systemd actions only)'
         required: false
         default: '50'
 
+permissions:
+  contents: read
+
+env:
+  VPS_IP: '72.61.123.4'
+
 jobs:
   run:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run playbook — ${{ inputs.task }}
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Set up SSH
         run: |
-          ansible-playbook -i ansible/inventory ansible/site.yml \
-            --tags "${{ inputs.task }}" \
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$VPS_IP" >> ~/.ssh/known_hosts
+
+      - name: Write inventory
+        run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
+
+      - name: Run playbook — ${{ inputs.action }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/site.yml \
+            --tags "${{ inputs.action }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
