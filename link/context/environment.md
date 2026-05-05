@@ -34,29 +34,46 @@ Content-Type: application/json
 
 ### Available Actions & Inputs
 
-| Input        | Type   | Required | Values / Notes                                                                   |
-|--------------|--------|----------|----------------------------------------------------------------------------------|
-| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `logs-systemd` |
-| `service`    | string | No       | Systemd service name for `logs-systemd` (default: `crypto-bot`)                  |
-| `tail_lines` | string | No       | Log lines to fetch — `systemd-logs` and `logs-systemd` only (default: `50`)      |
+| Input        | Type   | Required | Values / Notes                                                                                     |
+|--------------|--------|----------|----------------------------------------------------------------------------------------------------|
+| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd` |
+| `service`    | string | No       | Exact systemd unit name — **required** for `systemd-stop`, `systemd-start`, and `logs-systemd`    |
+| `tail_lines` | string | No       | Log lines to fetch — `systemd-logs` and `logs-systemd` only (default: `50`)                        |
 
-| Action           | Effect                                                               | Destructive? |
-|------------------|----------------------------------------------------------------------|--------------|
-| `status-all`     | Full server status — all systemd bots                                | No (default) |
-| `systemd-status` | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
-| `systemd-logs`   | Fetch logs from all 4 systemd bots (`tail_lines` controls count)     | No |
-| `systemd-restart`| Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)    | No |
-| `logs-systemd`   | Fetch logs from one specific service (set `service` + `tail_lines`)  | No |
+| Action            | Effect                                                               | Destructive? |
+|-------------------|----------------------------------------------------------------------|--------------|
+| `status-all`      | Full server status — all systemd bots                                | No (default) |
+| `systemd-status`  | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
+| `systemd-logs`    | Fetch logs from all 4 systemd bots (`tail_lines` controls count)     | No |
+| `systemd-restart` | Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)    | No |
+| `systemd-stop`    | Stop one specific service — **requires `service`**                   | Yes — stops the bot |
+| `systemd-start`   | Start one specific service — **requires `service`**                  | No |
+| `logs-systemd`    | Fetch logs from one specific service (set `service` + `tail_lines`)  | No |
+
+### Service names (use exact values for `systemd-stop` / `systemd-start` / `logs-systemd`)
+
+| Bot                  | Exact `service` value              | Notes                                       |
+|----------------------|------------------------------------|---------------------------------------------|
+| GitHub Agent         | `openclaw-agent.service`           | Safe to stop/start                          |
+| Crypto bot           | `openclaw-crypto.service`          | ⚠️ REAL GBP — check Kraken positions first  |
+| Alpaca bot           | `alpaca_orb_bite_bot.service`      | Safe — paper trading only                   |
+| LinkedIn news (run)  | `linkedin-news.service`            | Use this to run the bot immediately          |
+| LinkedIn timer       | `linkedin-news.timer`              | Use this to stop/start the weekly schedule  |
 
 ### Quick reference — most common requests
 
-| What Link is asked                                  | `action`         | `service`                  | `tail_lines` |
-|-----------------------------------------------------|------------------|----------------------------|--------------|
-| "Last 10 lines of the crypto bot logs"              | `systemd-logs`   | —                          | `10`         |
-| "Last 30 lines of the agent only"                   | `logs-systemd`   | `openclaw-agent.service`   | `30`         |
-| "Show me the status of all bots"                    | `status-all`     | —                          | —            |
-| "Is the crypto bot running?"                        | `systemd-status` | —                          | —            |
-| "Restart the agent after a code push"               | `systemd-restart`| —                          | —            |
+| What Link is asked                                  | `action`          | `service`                      | `tail_lines` |
+|-----------------------------------------------------|-------------------|--------------------------------|--------------|
+| "Last 10 lines of the crypto bot logs"              | `systemd-logs`    | —                              | `10`         |
+| "Last 30 lines of the agent only"                   | `logs-systemd`    | `openclaw-agent.service`       | `30`         |
+| "Show me the status of all bots"                    | `status-all`      | —                              | —            |
+| "Is the crypto bot running?"                        | `systemd-status`  | —                              | —            |
+| "Restart the agent after a code push"               | `systemd-restart` | —                              | —            |
+| "Stop the alpaca bot"                               | `systemd-stop`    | `alpaca_orb_bite_bot.service`  | —            |
+| "Start / run the alpaca bot"                        | `systemd-start`   | `alpaca_orb_bite_bot.service`  | —            |
+| "Run the LinkedIn news bot now"                     | `systemd-start`   | `linkedin-news.service`        | —            |
+| "Stop the LinkedIn news bot"                        | `systemd-stop`    | `linkedin-news.service`        | —            |
+| "Stop the crypto bot" ⚠️ check positions first     | `systemd-stop`    | `openclaw-crypto.service`      | —            |
 
 ---
 

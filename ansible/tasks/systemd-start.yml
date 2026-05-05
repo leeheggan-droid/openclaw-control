@@ -1,0 +1,38 @@
+---
+# systemd-start.yml — start a single named systemd service.
+# Variables:
+#   service — exact systemd unit name, e.g. "alpaca_orb_bite_bot.service"
+# Pass via: -e "service=alpaca_orb_bite_bot.service"
+# or via the GitHub Actions `service` workflow input.
+#
+# Note: To run the LinkedIn news bot immediately, use "linkedin-news.service"
+#       (not "linkedin-news.timer" — the timer controls the schedule, not a one-off run).
+- name: Start — {{ service | default('(no service specified)') }}
+  hosts: vps
+  tasks:
+    - name: Validate service variable
+      ansible.builtin.fail:
+        msg: "The 'service' variable is required. Provide -e service=<unit_name> (e.g. alpaca_orb_bite_bot.service)"
+      when: service is not defined or service == ''
+
+    - name: Start {{ service }}
+      ansible.builtin.command:
+        cmd: "systemctl start {{ service }}"
+      become: true
+      register: start_result
+
+    - name: Show start result
+      ansible.builtin.debug:
+        msg: "Started {{ service }}. Return code: {{ start_result.rc }}"
+
+    - name: Show post-start status
+      ansible.builtin.command:
+        cmd: "systemctl status {{ service }} --no-pager"
+      become: true
+      register: post_status
+      failed_when: false
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        msg: "{{ post_status.stdout }}"
