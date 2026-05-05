@@ -1,0 +1,37 @@
+---
+# systemd-stop.yml — stop a single named systemd service.
+# Variables:
+#   service — exact systemd unit name, e.g. "alpaca_orb_bite_bot.service"
+# Pass via: -e "service=alpaca_orb_bite_bot.service"
+# or via the GitHub Actions `service` workflow input.
+#
+# ⚠️  For openclaw-crypto.service — check for open Kraken positions before stopping.
+- name: Stop — {{ service | default('(no service specified)') }}
+  hosts: vps
+  tasks:
+    - name: Validate service variable
+      ansible.builtin.fail:
+        msg: "The 'service' variable is required. Provide -e service=<unit_name> (e.g. alpaca_orb_bite_bot.service)"
+      when: service is not defined or service == ''
+
+    - name: Stop {{ service }}
+      ansible.builtin.command:
+        cmd: "systemctl stop {{ service }}"
+      become: true
+      register: stop_result
+
+    - name: Show stop result
+      ansible.builtin.debug:
+        msg: "Stopped {{ service }}. Return code: {{ stop_result.rc }}"
+
+    - name: Show post-stop status
+      ansible.builtin.command:
+        cmd: "systemctl status {{ service }} --no-pager"
+      become: true
+      register: post_status
+      failed_when: false
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        msg: "{{ post_status.stdout }}"

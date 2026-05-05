@@ -11,6 +11,12 @@
 - import_playbook: tasks/systemd-restart.yml
   tags: [systemd-restart]
 
+- import_playbook: tasks/systemd-stop.yml
+  tags: [systemd-stop]
+
+- import_playbook: tasks/systemd-start.yml
+  tags: [systemd-start]
+
 - import_playbook: tasks/systemd-logs.yml
   tags: [systemd-logs]
 

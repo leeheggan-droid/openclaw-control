@@ -83,11 +83,11 @@ and the workflow will never start.**
 Link uses the GitHub API `workflow_dispatch` endpoint.  The workflow input is
 named **`action`** (not `task`).
 
-| Input        | Type   | Required | Values                                                                   |
-|--------------|--------|----------|--------------------------------------------------------------------------|
-| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `logs-systemd` |
-| `service`    | string | No       | Systemd service name used by `logs-systemd` (default: `crypto-bot`)      |
-| `tail_lines` | string | No       | Number of log lines — applies to `systemd-logs` and `logs-systemd` (default: `50`) |
+| Input        | Type   | Required | Values                                                                                                       |
+|--------------|--------|----------|--------------------------------------------------------------------------------------------------------------|
+| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd` |
+| `service`    | string | No       | Exact unit name — **required** for `systemd-stop`, `systemd-start`, `logs-systemd` (default: `crypto-bot`)  |
+| `tail_lines` | string | No       | Number of log lines — applies to `systemd-logs` and `logs-systemd` (default: `50`)                          |
 
 **Example — restart all systemd bots:**
 ```

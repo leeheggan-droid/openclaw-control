@@ -3,8 +3,8 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      task:
-        description: 'Task to run'
+      action:
+        description: 'Action to run'
         required: true
         default: 'status-all'
         type: choice
@@ -13,11 +13,13 @@ on:
           - systemd-status
           - systemd-logs
           - systemd-restart
+          - systemd-stop
+          - systemd-start
           - logs-systemd
       service:
-        description: 'Systemd service name (for logs-systemd action)'
+        description: 'Systemd unit name — required for systemd-stop, systemd-start, logs-systemd (e.g. alpaca_orb_bite_bot.service)'
         required: false
-        default: 'crypto-bot'
+        default: ''
       tail_lines:
         description: 'Number of log lines to fetch (systemd-logs and logs-systemd only)'
         required: false
@@ -36,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Ansible
-        run: pip install ansible
+        run: pip install --break-system-packages ansible
 
       - name: Set up SSH
         run: |
@@ -48,9 +50,9 @@ jobs:
       - name: Write inventory
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
-      - name: Run playbook — ${{ inputs.task }}
+      - name: Run playbook — ${{ inputs.action }}
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/site.yml \
-            --tags "${{ inputs.task }}" \
+            --tags "${{ inputs.action }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
