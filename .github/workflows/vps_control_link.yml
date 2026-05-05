@@ -1,0 +1,56 @@
+name: VPS Control — Link
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to run'
+        required: true
+        default: 'status-all'
+        type: choice
+        options:
+          - status-all
+          - status
+          - up
+          - down
+          - restart
+          - logs
+          - deploy
+          - systemd-status
+          - systemd-logs
+          - systemd-restart
+          - logs-systemd
+      service:
+        description: 'Systemd service name (for logs-systemd task)'
+        required: false
+        default: 'crypto-bot'
+      tail_lines:
+        description: 'Number of log lines to fetch (systemd-logs / logs-systemd tasks)'
+        required: false
+        default: '50'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 72.61.123.4 >> ~/.ssh/known_hosts
+
+      - name: Write inventory
+        run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
+
+      - name: Run playbook — ${{ inputs.action }}
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/site.yml \
+            --tags "${{ inputs.action }}" \
+            -e "service=${{ inputs.service }}" \
+            -e "tail_lines=${{ inputs.tail_lines }}"

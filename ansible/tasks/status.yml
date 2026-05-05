@@ -1,0 +1,9 @@
+---
+- name: Status — Openclaw Docker containers
+  hosts: vps
+  tasks:
+    - name: Show running containers
+      command: docker ps --filter name=openclaw-1ne6 --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: result
+    - debug:
+        msg: "{{ result.stdout }}"
