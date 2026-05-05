@@ -1,0 +1,8 @@
+---
+- name: Restart Openclaw Docker stack
+  hosts: vps
+  tasks:
+    - name: docker compose restart
+      command: docker compose restart
+      args:
+        chdir: "{{ docker_compose_dir }}"

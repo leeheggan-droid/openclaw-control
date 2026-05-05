@@ -3,3 +3,4 @@ srv1501082 ansible_host=72.61.123.4 ansible_user=jacks ansible_ssh_private_key_f
 
 [vps:vars]
 ansible_python_interpreter=/usr/bin/python3
+docker_compose_dir=/docker/openclaw-1ne6
