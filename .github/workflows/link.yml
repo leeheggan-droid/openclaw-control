@@ -3,7 +3,7 @@ name: Link Control
 on:
   workflow_dispatch:
     inputs:
-      Task:
+      task:
         description: 'Task to run'
         required: true
         default: 'status-all'
@@ -19,7 +19,7 @@ on:
         required: false
         default: 'crypto-bot'
       tail_lines:
-        description: 'Number of log lines to fetch (systemd-logs and logs-systemd actions only)'
+        description: 'Number of log lines to fetch (systemd-logs and logs-systemd only)'
         required: false
         default: '50'
 
@@ -31,7 +31,7 @@ env:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -48,9 +48,9 @@ jobs:
       - name: Write inventory
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
-      - name: Run playbook — ${{ inputs.action }}
+      - name: Run playbook — ${{ inputs.task }}
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/site.yml \
-            --tags "${{ inputs.action }}" \
+            --tags "${{ inputs.task }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
