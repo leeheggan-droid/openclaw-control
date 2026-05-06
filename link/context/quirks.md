@@ -38,6 +38,28 @@
 
 ---
 
+## VPS Control API
+
+### Link must use `VPS_CONTROL_API_URL` + `VPS_CONTROL_API_KEY` (not GitHub Actions) as primary path
+**Discovered:** 2026-05-06
+**Issue:** `environment.md` sets context to `VPS_CONTROL_API`. If Link falls back to GitHub Actions for every request the response is 30–90 s slower and the API monitoring gap goes unnoticed.
+**Workaround:** Always attempt the direct API first. Only use GitHub Actions if the API returns a connection error, timeout, or 401. Tell the user when the fallback is used.
+**Status:** Active (by design)
+
+### `/health` is unauthenticated; all other endpoints require `Authorization: Bearer`
+**Discovered:** 2026-05-06
+**Issue:** Omitting the `Authorization` header on any endpoint other than `/health` returns `403 Forbidden` (FastAPI security auto-error), not `401`. This can look like a configuration error.
+**Workaround:** Always include `Authorization: Bearer <VPS_CONTROL_API_KEY>` on `/status`, `/logs`, `/restart`, and `/deploy`. Use `/health` as a no-auth liveness probe before attempting authenticated calls.
+**Status:** Active (by design)
+
+### `VPS_CONTROL_API_KEY` must be set in both Vercel and GitHub Secrets
+**Discovered:** 2026-05-06
+**Issue:** The `verify-vps-api.yml` workflow reads `VPS_CONTROL_API_KEY` from GitHub Secrets. Link reads it from Vercel env vars. If only one is set, the other path silently fails.
+**Workaround:** Ensure the same key value is stored as `VPS_CONTROL_API_KEY` in both Vercel project settings and as a GitHub repository secret.
+**Status:** Active — operator must keep both in sync when rotating the key
+
+---
+
 ## Technical Debt
 
 *(None logged yet)*
