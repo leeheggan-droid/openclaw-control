@@ -69,11 +69,57 @@ linkedin-news.service
 ```
 
 ### POST /deploy/{service}
+Performs a full deployment: `git fetch`, `git pull`, then `systemctl restart`.
+
+**Success response:**
 ```json
 {
   "service": "openclaw-agent.service",
   "action": "deployed",
+  "success": true,
+  "repo_path": "/opt/openclaw-agent",
+  "commit_before": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
+  "commit_after": "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1",
+  "fetch_output": "From https://github.com/...\n   a1b2c3d..b2c3d4e  main -> origin/main",
+  "pull_output": "Updating a1b2c3d..b2c3d4e\nFast-forward\n agent.py | 5 +++--\n 1 file changed, 3 insertions(+), 2 deletions(-)",
+  "restart_result": {
+    "success": true,
+    "stdout": "",
+    "stderr": ""
+  },
+  "status_summary": {
+    "active": true,
+    "state": "active"
+  },
+  "log_tail": [
+    "2026-05-06T09:00:01+0000 srv1 openclaw-agent[1234]: Starting...",
+    "2026-05-06T09:00:02+0000 srv1 openclaw-agent[1234]: Ready"
+  ],
+  "ok": true
+}
+```
+
+**When no update is available (commit hashes match):**
+```json
+{
+  "service": "openclaw-agent.service",
+  "action": "deployed",
+  "success": true,
+  "repo_path": "/opt/openclaw-agent",
+  "commit_before": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
+  "commit_after": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
+  "fetch_output": "",
   "pull_output": "Already up to date.",
+  "restart_result": {
+    "success": true,
+    "stdout": "",
+    "stderr": ""
+  },
+  "status_summary": {
+    "active": true,
+    "state": "active"
+  },
+  "log_tail": [...],
   "ok": true
 }
 ```
@@ -107,7 +153,20 @@ Authorization: Bearer ••••
 
 POST /deploy/openclaw-agent.service
 Authorization: Bearer ••••
-→ { "service": "...", "action": "deployed", "pull_output": "...", "ok": true }
+→ {
+  "service": "openclaw-agent.service",
+  "action": "deployed",
+  "success": true,
+  "repo_path": "/opt/openclaw-agent",
+  "commit_before": "abc123...",
+  "commit_after": "def456...",
+  "fetch_output": "...",
+  "pull_output": "Already up to date.",
+  "restart_result": {"success": true, "stdout": "", "stderr": ""},
+  "status_summary": {"active": true, "state": "active"},
+  "log_tail": [...],
+  "ok": true
+}
 ```
 
 ---

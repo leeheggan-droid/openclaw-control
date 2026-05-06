@@ -180,7 +180,10 @@ def restart(service: str, api_key: str = Security(_api_key_header)):
 
 @app.post("/deploy/{service}")
 def deploy(service: str, api_key: str = Security(_api_key_header)):
-    """Run git pull in the service repo directory, then restart the unit."""
+    """
+    Run git fetch + git pull in the service repo directory, then restart the unit.
+    Returns detailed information about the deployment including before/after commit hashes.
+    """
     _auth(api_key)
     _validate_service(service)
 
@@ -190,6 +193,21 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
             detail=f"Deployment not configured for service '{service}'.",
         )
 
+    repo_path = _DEPLOY_PATHS[service]
+
+    # Get commit hash before deployment
+    commit_before_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_before = commit_before_result["stdout"] if commit_before_result["returncode"] == 0 else "unknown"
+
+    # Run git fetch to update remote refs
+    fetch = _run(["git", "-C", repo_path, "fetch"], timeout=60)
+    if fetch["returncode"] != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"git fetch failed: {fetch['stderr'] or fetch['stdout']}",
+        )
+
+    # Run git pull to update working directory
     pull = _run(_DEPLOY_CMDS[service], timeout=60)
     if pull["returncode"] != 0:
         raise HTTPException(
@@ -197,17 +215,47 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
             detail=f"git pull failed: {pull['stderr'] or pull['stdout']}",
         )
 
+    # Get commit hash after deployment
+    commit_after_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_after = commit_after_result["stdout"] if commit_after_result["returncode"] == 0 else "unknown"
+
+    # Restart the service
     restart_result = _run(_RESTART_CMDS[service], timeout=60)
-    if restart_result["returncode"] != 0:
+    restart_success = restart_result["returncode"] == 0
+    if not restart_success:
         raise HTTPException(
             status_code=500,
             detail=f"git pull succeeded but restart failed: {restart_result['stderr']}",
         )
 
+    # Get service status after restart
+    status_result = _run(_STATUS_CMDS[service], timeout=10)
+    status_summary = {
+        "active": status_result["returncode"] == 0,
+        "state": status_result["stdout"] or status_result["stderr"],
+    }
+
+    # Get recent logs (last 20 lines)
+    base_cmd = _LOGS_CMDS[service]
+    logs_result = _run(base_cmd + ["-n", "20"], timeout=15)  # noqa: S603
+    log_tail = logs_result["stdout"].splitlines() if logs_result["returncode"] == 0 else []
+
     return {
         "service": service,
         "action": "deployed",
+        "success": True,
+        "repo_path": repo_path,
+        "commit_before": commit_before,
+        "commit_after": commit_after,
+        "fetch_output": fetch["stdout"],
         "pull_output": pull["stdout"],
+        "restart_result": {
+            "success": restart_success,
+            "stdout": restart_result["stdout"],
+            "stderr": restart_result["stderr"],
+        },
+        "status_summary": status_summary,
+        "log_tail": log_tail,
         "ok": True,
     }
 
