@@ -78,6 +78,22 @@
 
 ---
 
+## 2026-05-06 — Intelligent Model Router (Cost Optimisation)
+**Decision:** Replace the single-model Claude call in `src/app/api/chat/route.ts` with an intelligent router (`src/lib/modelRouter.ts`) that selects Groq, Gemini Flash, or Claude Sonnet per turn  
+**Rationale:**
+- All Claude was costing ~$27/month; ~70% of turns are simple reads that need no reasoning
+- Groq is free for simple lookups; Gemini Flash is ~40× cheaper than Claude for code generation
+- Claude is still used for all tool calls and complex decisions — no quality regression in those cases
+- Estimated saving: ~$24/month (89%)  
+
+**Alternatives considered:**
+- Caching frequent reads — partial saving, more complexity, stale-context risk
+- Moving to a cheaper Claude tier — less saving, no free tier option  
+
+**Revisit if:** Tool call volume rises significantly (Claude cost increases); Groq/Gemini reliability degrades; a new model offers better cost/quality
+
+---
+
 ## YYYY-MM-DD — [Decision Title]
 **Decision:** [What was decided]  
 **Rationale:** [Why this choice]  
