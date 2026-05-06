@@ -1,0 +1,19 @@
+[Unit]
+Description=VPS Control API
+Documentation=https://github.com/leeheggan-droid/openclaw-control/tree/main/vps-control-api
+After=network.target
+
+[Service]
+Type=simple
+User=jacks
+WorkingDirectory=/opt/openclaw-control-api/vps-control-api
+EnvironmentFile=/etc/openclaw-control-api.env
+ExecStart=/opt/openclaw-control-api/venv/bin/uvicorn api:app --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-control-api
+
+[Install]
+WantedBy=multi-user.target
