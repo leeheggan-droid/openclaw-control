@@ -9,14 +9,17 @@
 ## Overview
 
 Link uses the **direct VPS Control API** (HTTP on port 8765) as the primary
-control path.  This gives sub-second responses without waiting 30–90 s for a
+control path **when `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` are set in
+Vercel**.  This gives sub-second responses without waiting 30–90 s for a
 GitHub Actions runner.
 
 Link does **not** SSH directly into the VPS.  If the VPS Control API is
-unreachable, Link falls back to triggering a `workflow_dispatch` event on
-`link.yml` via the GitHub API, which then SSHes in through an Ansible runner.
+unreachable (or the Vercel env vars are not yet configured), Link falls back to
+triggering a `workflow_dispatch` event on `link.yml` via the GitHub API, which
+then SSHes in through an Ansible runner.
 
-See `link/context/environment.md` for the currently active context.
+See `link/context/environment.md` (Production Readiness Checklist) for the
+current confirmed state of the direct API integration.
 
 ---
 
@@ -54,10 +57,14 @@ See `link/context/environment.md` for the currently active context.
 
 ### Vercel environment variables required
 
-| Variable              | Description                                      |
-|-----------------------|--------------------------------------------------|
-| `VPS_CONTROL_API_URL` | `http://72.61.123.4:8765`                        |
-| `VPS_CONTROL_API_KEY` | Shared secret matching `/etc/openclaw-control-api.env` on the VPS |
+| Variable              | Description                                      | Status |
+|-----------------------|--------------------------------------------------|--------|
+| `VPS_CONTROL_API_URL` | `http://72.61.123.4:8765`                        | Must be set in Vercel project settings |
+| `VPS_CONTROL_API_KEY` | Shared secret matching `/etc/openclaw-control-api.env` on the VPS | Must be set in Vercel project settings |
+
+> **If either variable is missing or wrong**, Link cannot reach the VPS API and must fall back
+> to GitHub Actions. Link should detect this by attempting `GET /health` first; if that fails,
+> it should tell the user and offer the GitHub Actions fallback.
 
 ### Endpoints
 

@@ -13,7 +13,21 @@
 | Context      | `VPS_CONTROL_API` |
 | Last updated | 2026-05-06 06:20 UTC |
 | Updated by   | Copilot |
-| Notes        | Direct VPS HTTP control API is now live at `http://72.61.123.4:8765`. Auth header: `Authorization: Bearer <VPS_CONTROL_API_KEY>`. Vercel env vars: `VPS_CONTROL_API_URL`, `VPS_CONTROL_API_KEY`. GitHub Actions remains available as fallback. |
+| Notes        | Direct VPS HTTP control API is deployed and running at `http://72.61.123.4:8765`. Link uses it as primary path **once** `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` are set in Vercel. GitHub Actions remains available as fallback. |
+
+### Production Readiness Checklist
+
+Before treating `VPS_CONTROL_API` as fully active in production, confirm all items:
+
+- [x] `openclaw-control-api.service` deployed to VPS at `/opt/openclaw-control-api/` (done 2026-05-06)
+- [x] `/etc/openclaw-control-api.env` contains `VPS_CONTROL_API_KEY=<secret>` on the VPS
+- [ ] Vercel project settings: `VPS_CONTROL_API_URL` = `http://72.61.123.4:8765`
+- [ ] Vercel project settings: `VPS_CONTROL_API_KEY` = same value as VPS env file
+- [ ] GitHub Secret `VPS_CONTROL_API_KEY` set (needed for `verify-vps-api.yml` proof run)
+- [ ] `verify-vps-api.yml` workflow run passes (merge this PR first, then trigger from Actions tab)
+
+> Until the Vercel env vars are set, Link continues to use GitHub Actions (`link.yml`) as its
+> control path. The fallback is safe and produces full audit logs.
 
 ---
 

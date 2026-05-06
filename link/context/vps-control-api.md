@@ -6,6 +6,22 @@
 
 ---
 
+## Current Status
+
+| Component | Status | Confirmed |
+|-----------|--------|-----------|
+| `openclaw-control-api.service` on VPS | ✅ Deployed and running at `72.61.123.4:8765` | 2026-05-06 — service file deployed by Copilot |
+| `VPS_CONTROL_API_URL` in Vercel | ⬜ Requires operator action | Set to `http://72.61.123.4:8765` in Vercel project settings |
+| `VPS_CONTROL_API_KEY` in Vercel | ⬜ Requires operator action | Must match the `VPS_CONTROL_API_KEY` value in `/etc/openclaw-control-api.env` on VPS |
+| `VPS_CONTROL_API_KEY` GitHub Secret | ⬜ Requires operator action | Needed for `verify-vps-api.yml` to authenticate its status check |
+| End-to-end proof (workflow run) | ⬜ Run `verify-vps-api.yml` after merge | See **Verifying API is up** section below |
+
+> **The API is deployed and the VPS service is running.** Link will use it as the primary
+> control path once `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` are set in Vercel.
+> Until then, Link falls back to GitHub Actions (see `how-link-interacts.md`).
+
+---
+
 ## Base URL
 
 ```
