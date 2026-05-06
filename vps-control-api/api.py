@@ -12,6 +12,7 @@ Run:
 """
 
 import os
+import secrets
 import subprocess
 from typing import Optional
 
@@ -28,25 +29,53 @@ if not _raw_key:
 
 API_KEY: str = _raw_key
 
-# Exact systemd unit names that this API is permitted to manage.
-ALLOWED_SERVICES: set[str] = {
-    "openclaw-agent.service",
-    "openclaw-crypto.service",
-    "openclaw-vibe-gateway.service",
-    "alpaca_orb_bite_bot.service",
-    "linkedin-news.timer",
-    "linkedin-news.service",
-}
-
 # Map unit name → git repo root for the /deploy endpoint.
-# Set the path for any unit that supports git-pull-based deployment.
-# Run `systemctl cat <unit>` on the VPS to confirm working directories.
-DEPLOY_MAP: dict[str, str] = {
+# Run `systemctl cat <unit>` on the VPS to confirm the working directories.
+_DEPLOY_PATHS: dict[str, str] = {
     "openclaw-agent.service": "/opt/openclaw-agent",
     "openclaw-crypto.service": "/home/jacks/openclaw-crypto",
     # alpaca_orb_bite_bot — confirm path via `systemctl cat alpaca_orb_bite_bot.service`
     # "alpaca_orb_bite_bot.service": "/home/jacks/alpaca_orb_bite_bot",
 }
+
+# ---------------------------------------------------------------------------
+# Pre-built command tables — all subprocess args are Python literals.
+# User input is ONLY used as a dict key; it never flows into these lists.
+# ---------------------------------------------------------------------------
+
+_STATUS_CMDS: dict[str, list[str]] = {
+    "openclaw-agent.service":       ["systemctl", "is-active", "openclaw-agent.service"],
+    "openclaw-crypto.service":      ["systemctl", "is-active", "openclaw-crypto.service"],
+    "openclaw-vibe-gateway.service":["systemctl", "is-active", "openclaw-vibe-gateway.service"],
+    "alpaca_orb_bite_bot.service":  ["systemctl", "is-active", "alpaca_orb_bite_bot.service"],
+    "linkedin-news.timer":          ["systemctl", "is-active", "linkedin-news.timer"],
+    "linkedin-news.service":        ["systemctl", "is-active", "linkedin-news.service"],
+}
+
+_LOGS_CMDS: dict[str, list[str]] = {
+    "openclaw-agent.service":       ["sudo", "journalctl", "-u", "openclaw-agent.service",       "--no-pager", "--output=short-iso"],
+    "openclaw-crypto.service":      ["sudo", "journalctl", "-u", "openclaw-crypto.service",      "--no-pager", "--output=short-iso"],
+    "openclaw-vibe-gateway.service":["sudo", "journalctl", "-u", "openclaw-vibe-gateway.service","--no-pager", "--output=short-iso"],
+    "alpaca_orb_bite_bot.service":  ["sudo", "journalctl", "-u", "alpaca_orb_bite_bot.service",  "--no-pager", "--output=short-iso"],
+    "linkedin-news.timer":          ["sudo", "journalctl", "-u", "linkedin-news.timer",          "--no-pager", "--output=short-iso"],
+    "linkedin-news.service":        ["sudo", "journalctl", "-u", "linkedin-news.service",        "--no-pager", "--output=short-iso"],
+}
+
+_RESTART_CMDS: dict[str, list[str]] = {
+    "openclaw-agent.service":       ["sudo", "systemctl", "restart", "openclaw-agent.service"],
+    "openclaw-crypto.service":      ["sudo", "systemctl", "restart", "openclaw-crypto.service"],
+    "openclaw-vibe-gateway.service":["sudo", "systemctl", "restart", "openclaw-vibe-gateway.service"],
+    "alpaca_orb_bite_bot.service":  ["sudo", "systemctl", "restart", "alpaca_orb_bite_bot.service"],
+    "linkedin-news.timer":          ["sudo", "systemctl", "restart", "linkedin-news.timer"],
+    "linkedin-news.service":        ["sudo", "systemctl", "restart", "linkedin-news.service"],
+}
+
+_DEPLOY_CMDS: dict[str, list[str]] = {
+    svc: ["git", "-C", path, "pull"]
+    for svc, path in _DEPLOY_PATHS.items()
+}
+
+ALLOWED_SERVICES: set[str] = set(_STATUS_CMDS)
 
 # ---------------------------------------------------------------------------
 # App
@@ -63,20 +92,16 @@ _api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
 def _auth(api_key: Optional[str]) -> None:
     token = (api_key or "").removeprefix("Bearer ").strip()
-    if token != API_KEY:
+    if not secrets.compare_digest(token.encode(), API_KEY.encode()):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _get_service(service: str) -> str:
-    """Validate service against the allowlist and return the canonical name from
-    our own controlled set — never passing raw user input to subprocess."""
+def _validate_service(service: str) -> None:
     if service not in ALLOWED_SERVICES:
         raise HTTPException(
             status_code=400,
             detail=f"Service '{service}' is not in the allowed list",
         )
-    # Return from our constant set so the value never originates from user input.
-    return next(s for s in ALLOWED_SERVICES if s == service)
 
 
 def _run(cmd: list[str], timeout: int = 30) -> dict:
@@ -110,10 +135,10 @@ def health():
 def status(service: str, api_key: str = Security(_api_key_header)):
     """Return whether the systemd unit is active."""
     _auth(api_key)
-    svc = _get_service(service)
-    result = _run(["systemctl", "is-active", svc])
+    _validate_service(service)
+    result = _run(_STATUS_CMDS[service])
     return {
-        "service": svc,
+        "service": service,
         "active": result["returncode"] == 0,
         "state": result["stdout"] or result["stderr"],
     }
@@ -127,13 +152,11 @@ def logs(
 ):
     """Return the last N lines of journald logs for the service."""
     _auth(api_key)
-    svc = _get_service(service)
-    result = _run(
-        ["sudo", "journalctl", "-u", svc, f"-n{n}", "--no-pager", "--output=short-iso"],
-        timeout=15,
-    )
+    _validate_service(service)
+    base_cmd = _LOGS_CMDS[service]
+    result = _run(base_cmd + [f"-n{n}"], timeout=15)
     return {
-        "service": svc,
+        "service": service,
         "lines": result["stdout"].splitlines(),
         "returncode": result["returncode"],
     }
@@ -143,37 +166,36 @@ def logs(
 def restart(service: str, api_key: str = Security(_api_key_header)):
     """Restart the systemd unit."""
     _auth(api_key)
-    svc = _get_service(service)
-    result = _run(["sudo", "systemctl", "restart", svc], timeout=60)
+    _validate_service(service)
+    result = _run(_RESTART_CMDS[service], timeout=60)
     if result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=result["stderr"] or "Restart failed",
         )
-    return {"service": svc, "action": "restarted", "ok": True}
+    return {"service": service, "action": "restarted", "ok": True}
 
 
 @app.post("/deploy/{service}")
 def deploy(service: str, api_key: str = Security(_api_key_header)):
     """Run git pull in the service repo directory, then restart the unit."""
     _auth(api_key)
-    svc = _get_service(service)
+    _validate_service(service)
 
-    repo_path = DEPLOY_MAP.get(svc)
-    if not repo_path:
+    if service not in _DEPLOY_CMDS:
         raise HTTPException(
             status_code=400,
-            detail=f"No deploy path configured for '{svc}'. Add it to DEPLOY_MAP in api.py.",
+            detail=f"No deploy path configured for '{service}'. Add it to _DEPLOY_PATHS in api.py.",
         )
 
-    pull = _run(["git", "-C", repo_path, "pull"], timeout=60)
+    pull = _run(_DEPLOY_CMDS[service], timeout=60)
     if pull["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=f"git pull failed: {pull['stderr'] or pull['stdout']}",
         )
 
-    restart_result = _run(["sudo", "systemctl", "restart", svc], timeout=60)
+    restart_result = _run(_RESTART_CMDS[service], timeout=60)
     if restart_result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
@@ -181,8 +203,9 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
         )
 
     return {
-        "service": svc,
+        "service": service,
         "action": "deployed",
         "pull_output": pull["stdout"],
         "ok": True,
     }
+
