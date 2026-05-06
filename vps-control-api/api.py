@@ -67,12 +67,16 @@ def _auth(api_key: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-def _validate_service(service: str) -> None:
+def _get_service(service: str) -> str:
+    """Validate service against the allowlist and return the canonical name from
+    our own controlled set — never passing raw user input to subprocess."""
     if service not in ALLOWED_SERVICES:
         raise HTTPException(
             status_code=400,
             detail=f"Service '{service}' is not in the allowed list",
         )
+    # Return from our constant set so the value never originates from user input.
+    return next(s for s in ALLOWED_SERVICES if s == service)
 
 
 def _run(cmd: list[str], timeout: int = 30) -> dict:
@@ -106,10 +110,10 @@ def health():
 def status(service: str, api_key: str = Security(_api_key_header)):
     """Return whether the systemd unit is active."""
     _auth(api_key)
-    _validate_service(service)
-    result = _run(["systemctl", "is-active", service])
+    svc = _get_service(service)
+    result = _run(["systemctl", "is-active", svc])
     return {
-        "service": service,
+        "service": svc,
         "active": result["returncode"] == 0,
         "state": result["stdout"] or result["stderr"],
     }
@@ -123,13 +127,13 @@ def logs(
 ):
     """Return the last N lines of journald logs for the service."""
     _auth(api_key)
-    _validate_service(service)
+    svc = _get_service(service)
     result = _run(
-        ["sudo", "journalctl", "-u", service, f"-n{n}", "--no-pager", "--output=short-iso"],
+        ["sudo", "journalctl", "-u", svc, f"-n{n}", "--no-pager", "--output=short-iso"],
         timeout=15,
     )
     return {
-        "service": service,
+        "service": svc,
         "lines": result["stdout"].splitlines(),
         "returncode": result["returncode"],
     }
@@ -139,27 +143,27 @@ def logs(
 def restart(service: str, api_key: str = Security(_api_key_header)):
     """Restart the systemd unit."""
     _auth(api_key)
-    _validate_service(service)
-    result = _run(["sudo", "systemctl", "restart", service], timeout=60)
+    svc = _get_service(service)
+    result = _run(["sudo", "systemctl", "restart", svc], timeout=60)
     if result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=result["stderr"] or "Restart failed",
         )
-    return {"service": service, "action": "restarted", "ok": True}
+    return {"service": svc, "action": "restarted", "ok": True}
 
 
 @app.post("/deploy/{service}")
 def deploy(service: str, api_key: str = Security(_api_key_header)):
     """Run git pull in the service repo directory, then restart the unit."""
     _auth(api_key)
-    _validate_service(service)
+    svc = _get_service(service)
 
-    repo_path = DEPLOY_MAP.get(service)
+    repo_path = DEPLOY_MAP.get(svc)
     if not repo_path:
         raise HTTPException(
             status_code=400,
-            detail=f"No deploy path configured for '{service}'. Add it to DEPLOY_MAP in api.py.",
+            detail=f"No deploy path configured for '{svc}'. Add it to DEPLOY_MAP in api.py.",
         )
 
     pull = _run(["git", "-C", repo_path, "pull"], timeout=60)
@@ -169,7 +173,7 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
             detail=f"git pull failed: {pull['stderr'] or pull['stdout']}",
         )
 
-    restart_result = _run(["sudo", "systemctl", "restart", service], timeout=60)
+    restart_result = _run(["sudo", "systemctl", "restart", svc], timeout=60)
     if restart_result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
@@ -177,7 +181,7 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
         )
 
     return {
-        "service": service,
+        "service": svc,
         "action": "deployed",
         "pull_output": pull["stdout"],
         "ok": True,
