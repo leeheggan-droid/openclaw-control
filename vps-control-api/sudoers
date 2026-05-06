@@ -1,0 +1,40 @@
+# /etc/sudoers.d/openclaw-control-api
+#
+# Allow the 'jacks' user to manage specific systemd services and read journald
+# logs without a password prompt.  This is required by the VPS Control API
+# (openclaw-control-api.service).
+#
+# Install:
+#   sudo cp vps-control-api/sudoers /etc/sudoers.d/openclaw-control-api
+#   sudo chmod 440 /etc/sudoers.d/openclaw-control-api
+#   sudo visudo -c  # verify syntax before logging out
+
+Cmnd_Alias OPENCLAW_SYSTEMCTL = \
+    /usr/bin/systemctl restart openclaw-agent.service, \
+    /usr/bin/systemctl restart openclaw-crypto.service, \
+    /usr/bin/systemctl restart openclaw-vibe-gateway.service, \
+    /usr/bin/systemctl restart alpaca_orb_bite_bot.service, \
+    /usr/bin/systemctl restart linkedin-news.timer, \
+    /usr/bin/systemctl restart linkedin-news.service, \
+    /usr/bin/systemctl start openclaw-agent.service, \
+    /usr/bin/systemctl start openclaw-crypto.service, \
+    /usr/bin/systemctl start openclaw-vibe-gateway.service, \
+    /usr/bin/systemctl start alpaca_orb_bite_bot.service, \
+    /usr/bin/systemctl start linkedin-news.timer, \
+    /usr/bin/systemctl start linkedin-news.service, \
+    /usr/bin/systemctl stop openclaw-agent.service, \
+    /usr/bin/systemctl stop openclaw-crypto.service, \
+    /usr/bin/systemctl stop openclaw-vibe-gateway.service, \
+    /usr/bin/systemctl stop alpaca_orb_bite_bot.service, \
+    /usr/bin/systemctl stop linkedin-news.timer, \
+    /usr/bin/systemctl stop linkedin-news.service
+
+Cmnd_Alias OPENCLAW_JOURNALCTL = \
+    /usr/bin/journalctl -u openclaw-agent.service *, \
+    /usr/bin/journalctl -u openclaw-crypto.service *, \
+    /usr/bin/journalctl -u openclaw-vibe-gateway.service *, \
+    /usr/bin/journalctl -u alpaca_orb_bite_bot.service *, \
+    /usr/bin/journalctl -u linkedin-news.timer *, \
+    /usr/bin/journalctl -u linkedin-news.service *
+
+jacks ALL=(ALL) NOPASSWD: OPENCLAW_SYSTEMCTL, OPENCLAW_JOURNALCTL
