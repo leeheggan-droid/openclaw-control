@@ -28,6 +28,7 @@
 - Tool integrations: GitHub, Kraken, Alpaca, Telegram, Brave Search
 - Context system established in `link/context/`
 - Interacts with this repo to trigger VPS operations (see `link/context/how-link-interacts.md`)
+- **Intelligent model router active** — routes turns to Groq / Gemini Flash / Claude based on task type; see `link/context/model-router.md`
 
 ### Next Steps
 - [ ] Establish memory refresh patterns
