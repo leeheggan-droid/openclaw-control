@@ -25,7 +25,7 @@ from fastapi.security.api_key import APIKeyHeader
 
 _raw_key = os.environ.get("VPS_CONTROL_API_KEY", "")
 if not _raw_key:
-    raise RuntimeError("VPS_CONTROL_API_KEY environment variable must be set")
+    raise RuntimeError("VPS_CONTROL_API_KEY environment variable is required but not set")
 
 API_KEY: str = _raw_key
 
@@ -153,9 +153,10 @@ def logs(
     """Return the last N lines of journald logs for the service (1–1000)."""
     _auth(api_key)
     _validate_service(service)
-    # n is a validated int in [1, 1000]; passed as a separate arg (no shell expansion).
+    # n is a FastAPI-validated int in [1, 1000]; shell=False; journalctl accepts
+    # integer -n args safely.  CodeQL py/command-line-injection is a false positive here.
     base_cmd = _LOGS_CMDS[service]
-    result = _run(base_cmd + ["-n", str(n)], timeout=15)
+    result = _run(base_cmd + ["-n", str(n)], timeout=15)  # noqa: S603
     return {
         "service": service,
         "lines": result["stdout"].splitlines(),
@@ -186,7 +187,7 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
     if service not in _DEPLOY_CMDS:
         raise HTTPException(
             status_code=400,
-            detail=f"No deploy path configured for '{service}'. Add it to _DEPLOY_PATHS in api.py.",
+            detail=f"Deployment not configured for service '{service}'.",
         )
 
     pull = _run(_DEPLOY_CMDS[service], timeout=60)
