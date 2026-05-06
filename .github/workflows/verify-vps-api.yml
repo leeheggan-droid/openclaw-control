@@ -1,0 +1,49 @@
+name: Verify VPS Control API
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VPS_CONTROL_API_URL: 'http://72.61.123.4:8765'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check (unauthenticated)
+        run: |
+          echo "=== GET /health ==="
+          curl -sf --max-time 10 "$VPS_CONTROL_API_URL/health" | tee /tmp/health.json
+          echo ""
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/health.json'))
+          assert d.get('status') == 'ok', f'Unexpected /health response: {d}'
+          print('PASS: /health returned {\"status\": \"ok\"}')"
+
+      - name: Status check — openclaw-agent.service (authenticated)
+        env:
+          VPS_CONTROL_API_KEY: ${{ secrets.VPS_CONTROL_API_KEY }}
+        run: |
+          echo "=== GET /status/openclaw-agent.service ==="
+          curl -sf --max-time 10 \
+            -H "Authorization: Bearer $VPS_CONTROL_API_KEY" \
+            "$VPS_CONTROL_API_URL/status/openclaw-agent.service" | tee /tmp/status.json
+          echo ""
+          python3 -c "
+          import json, sys
+          d = json.load(open('/tmp/status.json'))
+          assert 'active' in d, f'Missing \"active\" field: {d}'
+          assert 'state'  in d, f'Missing \"state\" field: {d}'
+          print(f'PASS: openclaw-agent.service active={d[\"active\"]} state={d[\"state\"]}')"
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "=== Connectivity Verification Complete ==="
+          echo "API base URL : $VPS_CONTROL_API_URL"
+          echo "Health       : $(cat /tmp/health.json)"
+          echo "Agent status : $(cat /tmp/status.json)"
