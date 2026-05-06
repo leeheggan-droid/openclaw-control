@@ -1,6 +1,6 @@
 # Model Router — Cost Optimisation
 
-> **Status:** Active (deployed 2026-05-06)  
+> **Status:** Live — code merged in Link repo, awaiting Vercel auto-deploy (triggered on push to main).  
 > Link is aware that its chat API automatically routes requests to cheaper models.
 > Claude is still used whenever tools are invoked or the task is complex.
 
@@ -11,6 +11,27 @@
 The Link chat route (`src/app/api/chat/route.ts`) uses an intelligent model router
 (`src/lib/modelRouter.ts`) to select the cheapest capable model for each turn.
 No manual action is required — routing is automatic.
+
+## Implementation
+
+The router lives in `src/lib/modelRouter.ts` and is fully integrated into
+`src/app/api/chat/route.ts`. The key functions are:
+
+| Function | Purpose |
+|---|---|
+| `classifyTask` | Analyses the user message and classifies it as `simple`, `code`, or `complex` |
+| `buildRoutingDecision` | Combines task classification + tool presence into a final model choice |
+| `callGroq` | Executes the turn against Groq (free tier) |
+| `callGemini` | Executes the turn against Gemini Flash |
+| `callClaude` | Executes the turn against Claude Sonnet |
+| `callOpenAI` | Executes the turn against OpenAI (available as an alternative) |
+| `runSimpleCall` | Orchestration loop for non-tool turns (Groq or Gemini) |
+| `runAnthropicLoop` | Orchestration loop for tool-bearing turns (Claude) |
+| `runOpenAILoop` | Orchestration loop for OpenAI-routed turns |
+
+The chat route (`src/app/api/chat/route.ts`) calls `classifyTask` and
+`buildRoutingDecision`, then dispatches to the appropriate loop. The `@google/generative-ai`
+package (`^0.21.0`) is installed and in `package.json`.
 
 ---
 
@@ -96,10 +117,12 @@ No VPS action is needed — Link runs on Vercel.
 
 ---
 
-## Files Changed (Link Repo)
+## Files in Link Repo
 
-| File | Change |
+| File | Status |
 |---|---|
-| `src/lib/modelRouter.ts` | New file — routing logic |
-| `src/app/api/chat/route.ts` | Replaced `anthropic.messages.stream` block with `routeToModel` call |
-| `package.json` | Added `@google/generative-ai` dependency |
+| `src/lib/modelRouter.ts` | Present — full routing logic |
+| `src/app/api/chat/route.ts` | Updated — uses `classifyTask` / `buildRoutingDecision` / call functions |
+| `package.json` | Updated — `@google/generative-ai ^0.21.0` |
+
+No further code changes are needed in the Link repo. Push to `main` → Vercel auto-deploys.
