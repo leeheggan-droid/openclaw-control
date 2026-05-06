@@ -16,7 +16,7 @@ import secrets
 import subprocess
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Security
+from fastapi import FastAPI, HTTPException, Query, Security
 from fastapi.security.api_key import APIKeyHeader
 
 # ---------------------------------------------------------------------------
@@ -147,14 +147,15 @@ def status(service: str, api_key: str = Security(_api_key_header)):
 @app.get("/logs/{service}")
 def logs(
     service: str,
-    n: int = 50,
+    n: int = Query(default=50, ge=1, le=1000),
     api_key: str = Security(_api_key_header),
 ):
-    """Return the last N lines of journald logs for the service."""
+    """Return the last N lines of journald logs for the service (1–1000)."""
     _auth(api_key)
     _validate_service(service)
+    # n is a validated int in [1, 1000]; passed as a separate arg (no shell expansion).
     base_cmd = _LOGS_CMDS[service]
-    result = _run(base_cmd + [f"-n{n}"], timeout=15)
+    result = _run(base_cmd + ["-n", str(n)], timeout=15)
     return {
         "service": service,
         "lines": result["stdout"].splitlines(),
