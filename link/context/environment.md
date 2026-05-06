@@ -10,87 +10,87 @@
 
 | Field        | Value |
 |--------------|-------|
-| Context      | `GITHUB_ACTIONS` |
-| Last updated | 2026-05-04 22:40 UTC |
+| Context      | `VPS_CONTROL_API` |
+| Last updated | 2026-05-06 06:20 UTC |
 | Updated by   | Copilot |
-| Notes        | Triggered via GitHub Actions workflow_dispatch. Workflow input: `action`. Secrets: `VPS_SSH_KEY`, `ANSIBLE_INVENTORY`. Token requires `Actions: write` — see `link/context/github-token.md`. |
+| Notes        | Direct VPS HTTP control API is now live at `http://72.61.123.4:8765`. Auth header: `Authorization: Bearer <VPS_CONTROL_API_KEY>`. Vercel env vars: `VPS_CONTROL_API_URL`, `VPS_CONTROL_API_KEY`. GitHub Actions remains available as fallback. |
 
 ---
 
-## How to Trigger an Action (GITHUB_ACTIONS)
+## How to Trigger an Action (VPS_CONTROL_API)
 
-Go to **GitHub UI → Actions → Link Control → Run workflow** and select an action.
+Link now talks directly to the VPS control API instead of waiting for a GitHub Actions runner.
 
-Or via GitHub API (for Link) — the workflow input is named **`action`**:
+Base URL:
 ```
-POST /repos/leeheggan-droid/openclaw-control/actions/workflows/link.yml/dispatches
-Authorization: Bearer <GITHUB_TOKEN>   ← requires Actions: write (fine-grained) or workflow scope (classic PAT)
-Content-Type: application/json
-
-{ "ref": "main", "inputs": { "action": "<action>", "tail_lines": "10" } }
+http://72.61.123.4:8765
 ```
 
-> See `link/context/github-token.md` for token setup and verification steps.
+Auth for every request except `/health`:
+```
+Authorization: Bearer <VPS_CONTROL_API_KEY>
+```
 
-### Available Actions & Inputs
+> The key is stored in Vercel as `VPS_CONTROL_API_KEY`.
+> See `link/context/vps-control-api.md` for the full endpoint reference.
 
-| Input        | Type   | Required | Values / Notes                                                                                     |
-|--------------|--------|----------|----------------------------------------------------------------------------------------------------|
-| `action`     | choice | **Yes**  | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd` |
-| `service`    | string | No       | Exact systemd unit name — **required** for `systemd-stop`, `systemd-start`, and `logs-systemd`    |
-| `tail_lines` | string | No       | Log lines to fetch — `systemd-logs` and `logs-systemd` only (default: `50`)                        |
+### Direct endpoints
 
-| Action            | Effect                                                               | Destructive? |
-|-------------------|----------------------------------------------------------------------|--------------|
-| `status-all`      | Full server status — all systemd bots                                | No (default) |
-| `systemd-status`  | Status of all 4 systemd bots (agent, crypto, alpaca, linkedin-news)  | No |
-| `systemd-logs`    | Fetch logs from all 4 systemd bots (`tail_lines` controls count)     | No |
-| `systemd-restart` | Restart all 4 systemd bots (agent, crypto, alpaca, linkedin-news)    | No |
-| `systemd-stop`    | Stop one specific service — **requires `service`**                   | Yes — stops the bot |
-| `systemd-start`   | Start one specific service — **requires `service`**                  | No |
-| `logs-systemd`    | Fetch logs from one specific service (set `service` + `tail_lines`)  | No |
+| Action needed by Link | Method | Path pattern |
+|-----------------------|--------|--------------|
+| Health check | `GET` | `/health` |
+| Service status | `GET` | `/status/{service}` |
+| Recent logs | `GET` | `/logs/{service}?n=<lines>` |
+| Restart service | `POST` | `/restart/{service}` |
+| Deploy service | `POST` | `/deploy/{service}` |
 
-### Service names (use exact values for `systemd-stop` / `systemd-start` / `logs-systemd`)
+### Service names
 
 | Bot                  | Exact `service` value              | Notes                                       |
 |----------------------|------------------------------------|---------------------------------------------|
-| GitHub Agent         | `openclaw-agent.service`           | Safe to stop/start                          |
+| GitHub Agent         | `openclaw-agent.service`           | Safe to restart                             |
 | Crypto bot           | `openclaw-crypto.service`          | ⚠️ REAL GBP — check Kraken positions first  |
+| Vibe gateway         | `openclaw-vibe-gateway.service`    | Use exact service name                      |
 | Alpaca bot           | `alpaca_orb_bite_bot.service`      | Safe — paper trading only                   |
-| LinkedIn news (run)  | `linkedin-news.service`            | Use this to run the bot immediately          |
+| LinkedIn news (run)  | `linkedin-news.service`            | Use this to run the bot immediately         |
 | LinkedIn timer       | `linkedin-news.timer`              | Use this to stop/start the weekly schedule  |
 
 ### Quick reference — most common requests
 
-| What Link is asked                                  | `action`          | `service`                      | `tail_lines` |
-|-----------------------------------------------------|-------------------|--------------------------------|--------------|
-| "Last 10 lines of the crypto bot logs"              | `systemd-logs`    | —                              | `10`         |
-| "Last 30 lines of the agent only"                   | `logs-systemd`    | `openclaw-agent.service`       | `30`         |
-| "Show me the status of all bots"                    | `status-all`      | —                              | —            |
-| "Is the crypto bot running?"                        | `systemd-status`  | —                              | —            |
-| "Restart the agent after a code push"               | `systemd-restart` | —                              | —            |
-| "Stop the alpaca bot"                               | `systemd-stop`    | `alpaca_orb_bite_bot.service`  | —            |
-| "Start / run the alpaca bot"                        | `systemd-start`   | `alpaca_orb_bite_bot.service`  | —            |
-| "Run the LinkedIn news bot now"                     | `systemd-start`   | `linkedin-news.service`        | —            |
-| "Stop the LinkedIn news bot"                        | `systemd-stop`    | `linkedin-news.service`        | —            |
-| "Stop the crypto bot" ⚠️ check positions first     | `systemd-stop`    | `openclaw-crypto.service`      | —            |
+| What Link is asked                                  | Method | Path |
+|-----------------------------------------------------|--------|------|
+| "Is the agent running?"                            | `GET`  | `/status/openclaw-agent.service` |
+| "Last 10 lines of the agent log"                   | `GET`  | `/logs/openclaw-agent.service?n=10` |
+| "Restart the agent"                                | `POST` | `/restart/openclaw-agent.service` |
+| "Deploy the agent"                                 | `POST` | `/deploy/openclaw-agent.service` |
+| "Is the crypto bot running?"                       | `GET`  | `/status/openclaw-crypto.service` |
+| "Last 30 lines of the crypto bot logs"             | `GET`  | `/logs/openclaw-crypto.service?n=30` |
+| "Restart the LinkedIn timer"                       | `POST` | `/restart/linkedin-news.timer` |
 
 ---
 
 ## How Link Triggers Actions — Full Flow
 
-See `link/context/how-link-interacts.md` for the complete end-to-end diagram.
+See `link/context/how-link-interacts.md` for the complete end-to-end description.
 
 Short version:
-1. Link calls the GitHub API (`workflow_dispatch`)
-2. `link.yml` GitHub Actions workflow runs on `ubuntu-latest`
-3. Ansible SSHes into the VPS using `VPS_SSH_KEY`
-4. Ansible runs the appropriate `systemctl` or `journalctl` command
-5. Output appears in the GitHub Actions run log
+1. Link reads `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` from Vercel env vars
+2. Link sends an authenticated HTTP request to the VPS control API
+3. The API validates the service name against the allow-list
+4. The API runs `systemctl`, `journalctl`, or deploy logic on the VPS
+5. JSON response returns immediately to Link
 
 ---
 
 ## Context Definitions
+
+### `VPS_CONTROL_API`
+
+- Link runs on Vercel and talks directly to the VPS over HTTP.
+- Control API listens on `72.61.123.4:8765`.
+- Auth uses `Authorization: Bearer <VPS_CONTROL_API_KEY>`.
+- Fast path for status, logs, restart, and deploy operations.
+- GitHub Actions is no longer the primary control path for these operations.
 
 ### `LOCAL_SSH`
 
@@ -131,10 +131,11 @@ Short version:
 - Ansible runs on a `ubuntu-latest` GitHub Actions runner.
 - SSH key is injected at runtime from the `VPS_SSH_KEY` repository secret.
 - Inventory is injected at runtime from the `ANSIBLE_INVENTORY` repository secret.
+- Use this as a fallback path if the direct control API is unavailable.
 - **Trigger method:** GitHub UI → Actions → Link Control → Run workflow → select action.
 
 ---
 
 ## Updating This File
 
-When the execution environment changes (e.g. switching from local to CI, rotating SSH keys, changing VPS IP), update the **Active Environment** table above and record the change date and your name.
+When the execution environment changes (e.g. switching from local to CI, rotating SSH keys, changing VPS IP, or moving between GitHub Actions and the direct control API), update the **Active Environment** table above and record the change date and your name.
