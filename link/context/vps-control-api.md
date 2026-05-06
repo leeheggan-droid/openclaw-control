@@ -54,6 +54,10 @@ linkedin-news.service
 { "service": "openclaw-agent.service", "active": true, "state": "active" }
 ```
 
+`state` is always one of `"active"`, `"inactive"`, `"failed"`, or `"unknown"`.
+`raw_status` is included when the raw `systemctl is-active` output differs from
+the normalised state (e.g. `"activating"` → `state: "active"`, `raw_status: "activating"`).
+
 ### GET /logs/{service}?n=20
 ```json
 {
@@ -71,6 +75,16 @@ linkedin-news.service
 ### POST /deploy/{service}
 Performs a full deployment: `git fetch`, `git pull`, then `systemctl restart`.
 
+Only services with a verified git repo on the VPS are deployable:
+
+| Service | Deployable | Notes |
+|---|---|---|
+| `openclaw-agent.service` | ✅ | `/opt/openclaw-agent` |
+| `openclaw-crypto.service` | ✅ | `/home/jacks/openclaw-crypto` — check positions before deploying |
+| `openclaw-vibe-gateway.service` | ❌ | wraps an external Docker image; no local repo |
+| `alpaca_orb_bite_bot.service` | ❌ | path unverified — enable once confirmed |
+| `linkedin-news.timer/service` | ❌ | no standalone git repo |
+
 **Success response:**
 ```json
 {
@@ -78,8 +92,8 @@ Performs a full deployment: `git fetch`, `git pull`, then `systemctl restart`.
   "action": "deployed",
   "success": true,
   "repo_path": "/opt/openclaw-agent",
-  "commit_before": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
-  "commit_after": "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0a1",
+  "commit_before": "a1b2c3d4e5f6...",
+  "commit_after": "b2c3d4e5f6g7...",
   "fetch_output": "From https://github.com/...\n   a1b2c3d..b2c3d4e  main -> origin/main",
   "pull_output": "Updating a1b2c3d..b2c3d4e\nFast-forward\n agent.py | 5 +++--\n 1 file changed, 3 insertions(+), 2 deletions(-)",
   "restart_result": {
@@ -95,9 +109,14 @@ Performs a full deployment: `git fetch`, `git pull`, then `systemctl restart`.
     "2026-05-06T09:00:01+0000 srv1 openclaw-agent[1234]: Starting...",
     "2026-05-06T09:00:02+0000 srv1 openclaw-agent[1234]: Ready"
   ],
+  "log_error": null,
   "ok": true
 }
 ```
+
+`status_summary.state` is always one of `"active"`, `"inactive"`, `"failed"`, or `"unknown"`.
+`raw_status` is included in `status_summary` only when the raw output differs from the normalised state.
+`log_error` is `null` on success; contains an error string when log collection fails (deploy still succeeds).
 
 **When no update is available (commit hashes match):**
 ```json
@@ -106,20 +125,14 @@ Performs a full deployment: `git fetch`, `git pull`, then `systemctl restart`.
   "action": "deployed",
   "success": true,
   "repo_path": "/opt/openclaw-agent",
-  "commit_before": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
-  "commit_after": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
+  "commit_before": "a1b2c3d4e5f6...",
+  "commit_after": "a1b2c3d4e5f6...",
   "fetch_output": "",
   "pull_output": "Already up to date.",
-  "restart_result": {
-    "success": true,
-    "stdout": "",
-    "stderr": ""
-  },
-  "status_summary": {
-    "active": true,
-    "state": "active"
-  },
-  "log_tail": [...],
+  "restart_result": { "success": true, "stdout": "", "stderr": "" },
+  "status_summary": { "active": true, "state": "active" },
+  "log_tail": ["..."],
+  "log_error": null,
   "ok": true
 }
 ```
@@ -165,6 +178,7 @@ Authorization: Bearer ••••
   "restart_result": {"success": true, "stdout": "", "stderr": ""},
   "status_summary": {"active": true, "state": "active"},
   "log_tail": [...],
+  "log_error": null,
   "ok": true
 }
 ```

@@ -30,12 +30,17 @@ if not _raw_key:
 API_KEY: str = _raw_key
 
 # Map unit name → git repo root for the /deploy endpoint.
-# Run `systemctl cat <unit>` on the VPS to confirm the working directories.
+# Only services that (a) own a dedicated git repo on the VPS and (b) are safe
+# to deploy without a manual position-check are listed here.
+# • openclaw-vibe-gateway.service — wraps an external Docker image; no local repo.
+# • alpaca_orb_bite_bot.service  — confirm path via `systemctl cat alpaca_orb_bite_bot.service`
+#                                  before enabling (path below is unverified).
+# • linkedin-news.timer/service  — deploys via the timer unit; no standalone repo.
+# Requesting /deploy on an unlisted service returns HTTP 400.
 _DEPLOY_PATHS: dict[str, str] = {
     "openclaw-agent.service": "/opt/openclaw-agent",
     "openclaw-crypto.service": "/home/jacks/openclaw-crypto",
-    # alpaca_orb_bite_bot — confirm path via `systemctl cat alpaca_orb_bite_bot.service`
-    # "alpaca_orb_bite_bot.service": "/home/jacks/alpaca_orb_bite_bot",
+    # "alpaca_orb_bite_bot.service": "/home/jacks/alpaca_orb_bite_bot",  # path unverified
 }
 
 # ---------------------------------------------------------------------------
@@ -121,6 +126,37 @@ def _run(cmd: list[str], timeout: int = 30) -> dict:
         raise HTTPException(status_code=504, detail="Command timed out")
 
 
+# Stable states returned by `systemctl is-active`.
+_STABLE_STATES: frozenset[str] = frozenset({"active", "inactive", "failed"})
+
+
+def _normalize_state(result: dict) -> dict[str, object]:
+    """Return a normalised service-state dict from a `systemctl is-active` result.
+
+    `state` is always one of: `"active"`, `"inactive"`, `"failed"`, or
+    `"unknown"`.  `raw_status` is included only when the raw output differs
+    from the normalised state (e.g. `"activating"` → state `"active"` with
+    `raw_status: "activating"`).
+    """
+    raw = result["stdout"].strip() or result["stderr"].strip()
+    if raw in _STABLE_STATES:
+        normalized = raw
+    elif raw in ("activating", "reloading"):
+        normalized = "active"
+    elif raw == "deactivating":
+        normalized = "inactive"
+    else:
+        normalized = "unknown"
+
+    out: dict[str, object] = {
+        "active": result["returncode"] == 0,
+        "state": normalized,
+    }
+    if raw != normalized:
+        out["raw_status"] = raw
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -137,11 +173,7 @@ def status(service: str, api_key: str = Security(_api_key_header)):
     _auth(api_key)
     _validate_service(service)
     result = _run(_STATUS_CMDS[service])
-    return {
-        "service": service,
-        "active": result["returncode"] == 0,
-        "state": result["stdout"] or result["stderr"],
-    }
+    return {"service": service, **_normalize_state(result)}
 
 
 @app.get("/logs/{service}")
@@ -230,15 +262,17 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
 
     # Get service status after restart
     status_result = _run(_STATUS_CMDS[service], timeout=10)
-    status_summary = {
-        "active": status_result["returncode"] == 0,
-        "state": status_result["stdout"] or status_result["stderr"],
-    }
+    status_summary = _normalize_state(status_result)
 
-    # Get recent logs (last 20 lines)
+    # Get recent logs (last 20 lines); surface failure explicitly
     base_cmd = _LOGS_CMDS[service]
     logs_result = _run(base_cmd + ["-n", "20"], timeout=15)  # noqa: S603
     log_tail = logs_result["stdout"].splitlines() if logs_result["returncode"] == 0 else []
+    log_error = (
+        None
+        if logs_result["returncode"] == 0
+        else (logs_result["stderr"] or "log collection failed")
+    )
 
     return {
         "service": service,
@@ -256,6 +290,7 @@ def deploy(service: str, api_key: str = Security(_api_key_header)):
         },
         "status_summary": status_summary,
         "log_tail": log_tail,
+        "log_error": log_error,
         "ok": True,
     }
 
