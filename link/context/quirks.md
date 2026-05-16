@@ -6,11 +6,11 @@
 
 ## GitHub API
 
-### workflow_dispatch input must be `action` (not `task`)
+### workflow_dispatch canonical input is `action`; `task` is legacy-compatible
 **Discovered:** 2026-05-05
-**Issue:** The workflow input is named `action`. If Link sends `task` the input is silently ignored and the default (`status-all`) runs instead.
-**Workaround:** Always use `"inputs": { "action": "<value>" }` in the dispatch payload. See `environment.md` for all valid values.
-**Status:** Fixed in link.yml (2026-05-05)
+**Issue:** Fallback dispatches previously broke when callers sent only `task`.
+**Workaround:** Prefer `"inputs": { "action": "<value>" }`; `task` is accepted as a compatibility alias in `link.yml`.
+**Status:** Active (canonical `action` retained; alias support added)
 
 ### `systemd-stop` / `systemd-start` require explicit `service`
 **Discovered:** 2026-05-05

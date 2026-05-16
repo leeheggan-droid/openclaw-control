@@ -69,11 +69,11 @@ managed here.
 
 1. **Trigger** — Link (the Vercel AI assistant) or a human selects an action
    (`status-all`, `systemd-status`, `systemd-restart`, `systemd-logs`,
-   `logs-systemd`) via the GitHub API or GitHub UI.
+   `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy`) via the GitHub API or GitHub UI.
 2. **Task dispatch** — `site.yml` selects the matching task file from
    `ansible/tasks/` using Ansible tags.
-3. **Execution** — the task file runs `systemctl` or `journalctl` directly on
-   the VPS host.
+3. **Execution** — the task file runs `systemctl`, `journalctl`, and for
+   deploy actions `git fetch`/`git pull` on the VPS host.
 4. **Output** — results are printed to the Ansible console or GitHub Actions log.
 
 See `link/context/how-link-interacts.md` for the full end-to-end interaction
@@ -322,18 +322,22 @@ The single inventory file that tells Ansible which host(s) to manage.
 | `ansible_ssh_private_key_file` | `~/.ssh/id_rsa` | Path to the local private key |
 | `ansible_python_interpreter` | `/usr/bin/python3` | Python binary on the remote host |
 
-### `action` (tag) variable
+### Workflow action input and Ansible tag
 
-Selected at runtime via the workflow dropdown or `--tags <value>` on the
-command line.  Defaults to `status-all` in the GitHub Actions workflow.
+The canonical workflow input key is `action`. For compatibility, `task` is also
+accepted by `link.yml` as a legacy alias. The selected value is used as the
+Ansible `--tags` target.
 
 | Tag | Effect | Destructive? |
 |---|---|---|
-| `status-all` | One-line systemctl status of all systemd bots | No (default) |
+| `status-all` | One-line systemctl status of all systemd bots | No |
 | `systemd-status` | Detailed status of all 4 systemd bots | No |
 | `systemd-restart` | Restart all 4 systemd bots | No |
+| `systemd-stop` | Stop a single service (`service` required) | Yes |
+| `systemd-start` | Start a single service (`service` required) | Yes |
 | `systemd-logs` | journald logs for all 4 systemd bots (`tail_lines` lines each) | No |
 | `logs-systemd` | journald logs for one specific service (`service` + `tail_lines`) | No |
+| `deploy` | `git fetch` + `git pull` + restart for one deployable service (`service` required) | Yes |
 
 ### GitHub Actions secrets
 
@@ -438,7 +442,7 @@ ansible-playbook -i ansible/inventory ansible/site.yml --tags status-all -v
 2. Click **Run workflow**.
 3. Select the desired action from the dropdown.
 4. Optionally set `tail_lines` (for `systemd-logs` and `logs-systemd`)
-   and `service` (for `logs-systemd` only).
+   and `service` (required for `systemd-stop`, `systemd-start`, `logs-systemd`, and `deploy`).
 5. Click **Run workflow** to execute.
 
 The runner installs Ansible, writes the SSH key from the `VPS_SSH_KEY` secret
@@ -453,6 +457,12 @@ Authorization: Bearer <GITHUB_TOKEN>
 Content-Type: application/json
 
 { "ref": "main", "inputs": { "action": "systemd-restart", "tail_lines": "50" } }
+```
+
+Legacy compatibility payload (accepted, but prefer `action`):
+
+```json
+{ "ref": "main", "inputs": { "task": "systemd-restart", "tail_lines": "50" } }
 ```
 
 See `link/context/how-link-interacts.md` for the full API interaction guide.
@@ -511,6 +521,7 @@ openclaw-control/
 │       ├── status-all.yml     # systemctl status for all 4 systemd bots
 │       ├── systemd-status.yml # Detailed systemctl status for all 4 systemd bots
 │       ├── systemd-restart.yml# systemctl restart for all 4 systemd bots
+│       ├── deploy.yml         # git fetch/pull + restart for a deployable service
 │       ├── systemd-logs.yml   # journalctl logs for all 4 systemd bots
 │       └── logs-systemd.yml   # journalctl logs for one specific service
 │

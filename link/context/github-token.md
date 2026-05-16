@@ -80,7 +80,7 @@ You should see a run appear with `status: "queued"` or `"in_progress"`.
 | `403`       | Token exists but lacks `Actions: write` / `workflow` scope                | Re-generate with the correct permission (see table above)       |
 | `404` on dispatch | Wrong workflow filename in URL — must be exactly `link.yml`        | Check `.github/workflows/` directory; confirm file is on `main` |
 | `404` on GET workflows | Token cannot read the repo (e.g. private repo, wrong account) | Confirm the token belongs to `leeheggan-droid` or a collaborator with read access |
-| `422`       | `ref` does not exist, or `inputs` contains a key the workflow doesn't define | Use `"ref": "main"` and only send `action`, `service`, `tail_lines` |
+| `422`       | `ref` does not exist, or `inputs` contains a key the workflow doesn't define | Use `"ref": "main"` and send supported keys only (`action` preferred; `task` legacy alias, plus `service`, `tail_lines`) |
 
 ---
 
