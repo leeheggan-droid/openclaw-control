@@ -85,7 +85,7 @@
           - "Deploy changed code: {{ deploy_changed }}"
           - "Fetch rc: {{ fetch_result.rc }}"
           - "Pull rc: {{ pull_result.rc }}"
-          - "Restart rc: {{ restart_result.rc | default('skipped (no code change)') }}"
+          - "Restart rc: {{ restart_result.rc if restart_result is defined else 'skipped (no code change)' }}"
 
     - name: Display status output
       ansible.builtin.debug:
