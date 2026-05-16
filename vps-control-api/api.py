@@ -613,12 +613,28 @@ def _contract_snapshot() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
-def health() -> dict[str, str]:
+@app.get("/api/health", include_in_schema=False)
+@app.get("/v1/health", include_in_schema=False)
+@app.get("/api/v1/health", include_in_schema=False)
+def health() -> dict[str, Any]:
     """Unauthenticated liveness probe."""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "service": "vps-control-api",
+        "api_version": CONTROL_CONTRACT["api_version"],
+        "contract_version": CONTROL_CONTRACT["contract_version"],
+        "capabilities": {
+            "discovery": ["/contract", "/capabilities", "/actions", "/services", "/operators"],
+            "execution": ["/jobs", "/jobs/{job_id}"],
+        },
+        "links": {"contract": "/contract", "jobs": "/jobs"},
+    }
 
 
 @app.get("/contract")
+@app.get("/api/contract", include_in_schema=False)
+@app.get("/v1/contract", include_in_schema=False)
+@app.get("/api/v1/contract", include_in_schema=False)
 def contract(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
     """Machine-readable control contract for Link and other LLM managers."""
     _auth(api_key)
@@ -799,6 +815,9 @@ def deploy(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
 
 
 @app.post("/jobs")
+@app.post("/api/jobs", include_in_schema=False)
+@app.post("/v1/jobs", include_in_schema=False)
+@app.post("/api/v1/jobs", include_in_schema=False)
 def create_job(
     request: JobRequest,
     api_key: str = Security(_api_key_header),
@@ -885,6 +904,9 @@ def create_job(
 
 
 @app.get("/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}", include_in_schema=False)
+@app.get("/v1/jobs/{job_id}", include_in_schema=False)
+@app.get("/api/v1/jobs/{job_id}", include_in_schema=False)
 def get_job(job_id: str, api_key: str = Security(_api_key_header)) -> dict[str, Any]:
     """Fetch a previously submitted job from the in-memory control room ledger."""
     _auth(api_key)

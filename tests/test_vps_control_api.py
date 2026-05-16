@@ -24,6 +24,32 @@ class VpsControlApiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.api = load_api_module()
 
+    def _route_paths_for_method(self, method: str) -> set[str]:
+        paths = set()
+        for route in self.api.app.routes:
+            methods = getattr(route, "methods", set())
+            if method in methods:
+                paths.add(route.path)
+        return paths
+
+    def test_health_route_aliases_are_registered(self):
+        paths = self._route_paths_for_method("GET")
+        self.assertTrue(
+            {"/health", "/api/health", "/v1/health", "/api/v1/health"}.issubset(paths)
+        )
+
+    def test_contract_route_aliases_are_registered(self):
+        paths = self._route_paths_for_method("GET")
+        self.assertTrue(
+            {"/contract", "/api/contract", "/v1/contract", "/api/v1/contract"}.issubset(paths)
+        )
+
+    def test_jobs_route_aliases_are_registered(self):
+        paths = self._route_paths_for_method("POST")
+        self.assertTrue(
+            {"/jobs", "/api/jobs", "/v1/jobs", "/api/v1/jobs"}.issubset(paths)
+        )
+
     def test_contract_endpoint_exposes_control_room_metadata(self):
         payload = self.api.contract(api_key="Bearer test-key")
         self.assertEqual(payload["contract_version"], "2026-05-16.1")
@@ -31,6 +57,15 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertIn("operators", payload)
         self.assertIn("services", payload)
         self.assertIn("actions", payload)
+
+    def test_health_endpoint_exposes_metadata(self):
+        payload = self.api.health()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["service"], "vps-control-api")
+        self.assertIn("api_version", payload)
+        self.assertIn("contract_version", payload)
+        self.assertIn("contract", payload["links"])
+        self.assertIn("jobs", payload["links"])
 
     def test_capability_endpoints_are_available(self):
         services = self.api.services(api_key="Bearer test-key")
