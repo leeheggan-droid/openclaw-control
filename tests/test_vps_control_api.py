@@ -41,11 +41,16 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(operators["operators"]), 1)
 
     def test_diagnostics_endpoint_returns_standardized_bundle(self):
-        with patch.object(self.api, "_run") as run_mock:
-            run_mock.side_effect = [
-                {"stdout": "active", "stderr": "", "returncode": 0},
-                {"stdout": "line one\nline two", "stderr": "", "returncode": 0},
-            ]
+        with (
+            patch.object(self.api, "_run_status_command") as status_mock,
+            patch.object(self.api, "_run_logs_command") as logs_mock,
+        ):
+            status_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
+            logs_mock.return_value = {
+                "stdout": "line one\nline two",
+                "stderr": "",
+                "returncode": 0,
+            }
             payload = self.api.diagnostics(
                 "openclaw-agent.service",
                 n=2,
@@ -92,8 +97,8 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertIn("Parameter 'n' must be an integer", payload["result"]["reason"])
 
     def test_job_executes_status_action_and_records_job(self):
-        with patch.object(self.api, "_run") as run_mock:
-            run_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
+        with patch.object(self.api, "_run_status_command") as status_mock:
+            status_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
             created = self.api.create_job(
                 self.api.JobRequest(action="status", service="openclaw-agent.service"),
                 api_key="Bearer test-key",

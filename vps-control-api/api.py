@@ -11,8 +11,6 @@ Run:
     uvicorn api:app --host 0.0.0.0 --port 8765
 """
 
-from __future__ import annotations
-
 import json
 import os
 import secrets
@@ -117,9 +115,6 @@ class JobRequest(BaseModel):
     operator: Optional[str] = None
 
 
-JobRequest.model_rebuild()
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -155,22 +150,12 @@ def _service_summary(service: str) -> str:
     return SERVICE_METADATA[service]["display_name"]
 
 
-def _run(cmd: list[str], timeout: int = 30) -> dict[str, Any]:
-    _assert_allowed_command(cmd)
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return {
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "returncode": result.returncode,
-        }
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(status_code=504, detail="Command timed out") from exc
+def _result_dict(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+        "returncode": result.returncode,
+    }
 
 
 def _normalize_state(result: dict[str, Any]) -> dict[str, object]:
@@ -194,25 +179,85 @@ def _normalize_state(result: dict[str, Any]) -> dict[str, object]:
     return out
 
 
-def _assert_allowed_command(cmd: list[str]) -> None:
-    exact_commands = {
-        tuple(command)
-        for command in (
-            list(_STATUS_CMDS.values())
-            + list(_RESTART_CMDS.values())
-            + list(_DEPLOY_CMDS.values())
-            + [["git", "-C", path, "fetch"] for path in DEPLOY_PATHS.values()]
-            + [["git", "-C", path, "rev-parse", "HEAD"] for path in DEPLOY_PATHS.values()]
+def _run_status_command(service: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            _STATUS_CMDS[service],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-    }
-    if tuple(cmd) in exact_commands:
-        return
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
 
-    if len(cmd) == 8 and tuple(cmd[:-2]) in {tuple(command) for command in _LOGS_CMDS.values()}:
-        if cmd[-2] == "-n" and cmd[-1].isdigit():
-            return
 
-    raise HTTPException(status_code=400, detail="Command is not in the allowed control set")
+def _run_logs_command(service: str, n: int) -> dict[str, Any]:
+    command = _LOGS_CMDS[service] + ["-n", str(n)]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
+
+
+def _run_restart_command(service: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            _RESTART_CMDS[service],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
+
+
+def _run_git_rev_parse(service: str) -> dict[str, Any]:
+    command = ["git", "-C", DEPLOY_PATHS[service], "rev-parse", "HEAD"]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
+
+
+def _run_git_fetch(service: str) -> dict[str, Any]:
+    command = ["git", "-C", DEPLOY_PATHS[service], "fetch"]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
+
+
+def _run_git_pull(service: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            _DEPLOY_CMDS[service],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return _result_dict(result)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail="Command timed out") from exc
 
 
 def _parse_log_lines(value: Any, *, default: int = _DEFAULT_LOG_LINES) -> int:
@@ -306,14 +351,14 @@ def _confirmation_failure_job(
 
 
 def _get_status_summary(service: str) -> dict[str, Any]:
-    result = _run(_STATUS_CMDS[service])
+    result = _run_status_command(service)
     return {"service": service, **_normalize_state(result)}
 
 
 def _get_log_snapshot(service: str, n: int) -> dict[str, Any]:
     # n is validated in FastAPI or `_parse_log_lines`; shell=False; journalctl accepts
-    # integer -n args safely. CodeQL py/command-line-injection is a false positive here.
-    result = _run(_LOGS_CMDS[service] + ["-n", str(n)], timeout=15)  # noqa: S603
+    # integer -n args safely.
+    result = _run_logs_command(service, n)
     return {
         "service": service,
         "lines": result["stdout"].splitlines(),
@@ -393,7 +438,7 @@ def _execute_diagnostics(
 
 
 def _execute_restart(service: str, *, operator: Optional[str] = None) -> dict[str, Any]:
-    result = _run(_RESTART_CMDS[service], timeout=60)
+    result = _run_restart_command(service)
     if result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
@@ -425,31 +470,31 @@ def _execute_deploy(service: str, *, operator: Optional[str] = None) -> dict[str
 
     repo_path = DEPLOY_PATHS[service]
 
-    commit_before_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_before_result = _run_git_rev_parse(service)
     commit_before = (
         commit_before_result["stdout"] if commit_before_result["returncode"] == 0 else "unknown"
     )
 
-    fetch = _run(["git", "-C", repo_path, "fetch"], timeout=60)
+    fetch = _run_git_fetch(service)
     if fetch["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=f"git fetch failed: {fetch['stderr'] or fetch['stdout']}",
         )
 
-    pull = _run(_DEPLOY_CMDS[service], timeout=60)
+    pull = _run_git_pull(service)
     if pull["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=f"git pull failed: {pull['stderr'] or pull['stdout']}",
         )
 
-    commit_after_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_after_result = _run_git_rev_parse(service)
     commit_after = (
         commit_after_result["stdout"] if commit_after_result["returncode"] == 0 else "unknown"
     )
 
-    restart_result = _run(_RESTART_CMDS[service], timeout=60)
+    restart_result = _run_restart_command(service)
     if restart_result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
@@ -621,7 +666,7 @@ def status(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
     """Return whether the systemd unit is active."""
     _auth(api_key)
     _validate_service(service)
-    result = _run(_STATUS_CMDS[service])
+    result = _run_status_command(service)
     return {"service": service, **_normalize_state(result)}
 
 
@@ -659,7 +704,7 @@ def restart(service: str, api_key: str = Security(_api_key_header)) -> dict[str,
     """Legacy endpoint: restart the systemd unit."""
     _auth(api_key)
     _validate_service(service)
-    result = _run(_RESTART_CMDS[service], timeout=60)
+    result = _run_restart_command(service)
     if result["returncode"] != 0:
         raise HTTPException(
             status_code=500,
@@ -685,31 +730,31 @@ def deploy(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
 
     repo_path = DEPLOY_PATHS[service]
 
-    commit_before_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_before_result = _run_git_rev_parse(service)
     commit_before = (
         commit_before_result["stdout"] if commit_before_result["returncode"] == 0 else "unknown"
     )
 
-    fetch = _run(["git", "-C", repo_path, "fetch"], timeout=60)
+    fetch = _run_git_fetch(service)
     if fetch["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=f"git fetch failed: {fetch['stderr'] or fetch['stdout']}",
         )
 
-    pull = _run(_DEPLOY_CMDS[service], timeout=60)
+    pull = _run_git_pull(service)
     if pull["returncode"] != 0:
         raise HTTPException(
             status_code=500,
             detail=f"git pull failed: {pull['stderr'] or pull['stdout']}",
         )
 
-    commit_after_result = _run(["git", "-C", repo_path, "rev-parse", "HEAD"], timeout=10)
+    commit_after_result = _run_git_rev_parse(service)
     commit_after = (
         commit_after_result["stdout"] if commit_after_result["returncode"] == 0 else "unknown"
     )
 
-    restart_result = _run(_RESTART_CMDS[service], timeout=60)
+    restart_result = _run_restart_command(service)
     restart_success = restart_result["returncode"] == 0
     if not restart_success:
         raise HTTPException(
@@ -720,7 +765,10 @@ def deploy(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
     status_summary = _get_status_summary(service)
     logs_result = _get_log_snapshot(service, _DIAGNOSTIC_LOG_LINES)
     log_tail = logs_result["lines"] if logs_result["returncode"] == 0 else []
-    log_error = None if logs_result["returncode"] == 0 else (logs_result["stderr"] or "log collection failed")
+    if logs_result["returncode"] == 0:
+        log_error = None
+    else:
+        log_error = logs_result["stderr"] or "log collection failed"
 
     return {
         "service": service,
@@ -769,8 +817,12 @@ def create_job(
 
     if _action_requires_confirmation(request.action, request.service):
         service_name = request.service or "selected target"
-        requires_note = bool(request.service and SERVICE_METADATA[request.service].get("money_risk"))
-        if not request.confirmed or (requires_note and not request.confirmation_note):
+        requires_note = bool(
+            request.service and SERVICE_METADATA[request.service].get("money_risk")
+        )
+        missing_confirmation = not request.confirmed
+        missing_note = requires_note and not request.confirmation_note
+        if missing_confirmation or missing_note:
             reason = (
                 f"{request.action} on {service_name} requires explicit confirmation in control"
                 if not requires_note
