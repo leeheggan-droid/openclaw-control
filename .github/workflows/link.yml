@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Canonical action input (provide this or task)'
+        description: 'Canonical action input (at least one of action/task is required)'
         required: false
         type: choice
         options:
@@ -17,7 +17,7 @@ on:
           - logs-systemd
           - deploy
       task:
-        description: 'Legacy compatibility input (use action when possible; if both are provided and non-empty, values must match)'
+        description: 'Legacy alias of action; if both are provided, values must match'
         required: false
         type: string
       service:
