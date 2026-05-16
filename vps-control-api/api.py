@@ -195,6 +195,10 @@ def _run_status_command(service: str) -> dict[str, Any]:
 def _run_logs_command(service: str, n: int) -> dict[str, Any]:
     command = _LOGS_CMDS[service] + ["-n", str(n)]
     try:
+        # `service` is validated against the allow-list and `n` is clamped to an
+        # integer range before this function is called. shell=False keeps the
+        # command as literal argv, so this is an allow-listed journalctl call.
+        # lgtm [py/command-line-injection]
         result = subprocess.run(
             command,
             capture_output=True,

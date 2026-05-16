@@ -40,6 +40,16 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(actions["actions"]), 1)
         self.assertGreaterEqual(len(operators["operators"]), 1)
 
+    def test_parse_log_lines_accepts_boundary_values(self):
+        self.assertEqual(self.api._parse_log_lines(1), 1)
+        self.assertEqual(self.api._parse_log_lines(1000), 1000)
+
+    def test_parse_log_lines_rejects_out_of_range_values(self):
+        with self.assertRaises(HTTPException):
+            self.api._parse_log_lines(0)
+        with self.assertRaises(HTTPException):
+            self.api._parse_log_lines(1001)
+
     def test_diagnostics_endpoint_returns_standardized_bundle(self):
         with (
             patch.object(self.api, "_run_status_command") as status_mock,
@@ -82,6 +92,30 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["error_code"], "confirmation_required")
         self.assertIn("confirmation_note", payload["result"]["reason"])
+
+    def test_money_risk_service_forces_confirmation_for_non_read_action(self):
+        with patch.dict(
+            self.api.ACTION_METADATA,
+            {
+                "custom-control": {
+                    "requires_confirmation": False,
+                    "category": "control",
+                }
+            },
+            clear=False,
+        ):
+            self.assertTrue(
+                self.api._action_requires_confirmation(
+                    "custom-control",
+                    "openclaw-crypto.service",
+                )
+            )
+            self.assertFalse(
+                self.api._action_requires_confirmation(
+                    "custom-control",
+                    "openclaw-agent.service",
+                )
+            )
 
     def test_job_validates_log_parameter(self):
         payload = self.api.create_job(
