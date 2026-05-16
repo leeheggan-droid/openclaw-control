@@ -1,0 +1,290 @@
+{
+  "contract_version": "2026-05-16.1",
+  "api_version": "2.0.0",
+  "release": {
+    "date": "2026-05-16",
+    "summary": "Control-room contract introduced with discovery endpoints, standardized diagnostics, and a bounded job execution layer.",
+    "compatibility_notes": [
+      "Legacy /status, /logs, /restart, and /deploy endpoints remain available for existing clients.",
+      "New manager integrations should discover capabilities from /contract or /capabilities before acting.",
+      "The /jobs endpoint is the contract-governed path for confirmation-aware control actions."
+    ]
+  },
+  "manager": {
+    "id": "link-manager",
+    "name": "Link",
+    "role": "control-room-manager",
+    "responsibilities": [
+      "Clarify user intent",
+      "Read the control contract before acting",
+      "Request confirmation for risky operations",
+      "Delegate bounded tasks to control-side operators",
+      "Communicate structured results back to the user"
+    ]
+  },
+  "operators": [
+    {
+      "id": "read-only-operator",
+      "name": "Read-only Operator",
+      "scope": [
+        "status",
+        "logs",
+        "diagnostics"
+      ],
+      "execution_mode": "deterministic",
+      "llm_provider": "groq-optional",
+      "fallback": "native-system-commands",
+      "notes": "Preferred for cheap, bounded information-gathering tasks."
+    },
+    {
+      "id": "service-control-operator",
+      "name": "Service Control Operator",
+      "scope": [
+        "restart"
+      ],
+      "execution_mode": "deterministic",
+      "llm_provider": "none",
+      "fallback": "native-system-commands",
+      "notes": "Used for bounded service-control actions with explicit confirmation."
+    },
+    {
+      "id": "deploy-diagnostics-operator",
+      "name": "Deploy and Diagnostics Operator",
+      "scope": [
+        "deploy",
+        "diagnostics"
+      ],
+      "execution_mode": "deterministic",
+      "llm_provider": "groq-optional",
+      "fallback": "native-system-commands",
+      "notes": "Used for higher-context deployments and post-change verification bundles."
+    }
+  ],
+  "policies": {
+    "confirmation": {
+      "job_field": "confirmed",
+      "note_field": "confirmation_note",
+      "required_for_actions": [
+        "restart",
+        "deploy"
+      ],
+      "money_risk_services_require_note": true
+    },
+    "risk_levels": [
+      "read-only",
+      "controlled",
+      "destructive"
+    ],
+    "release_workflow": {
+      "source_of_truth": "vps-control-api/control_contract.json",
+      "publish_endpoints": [
+        "/contract",
+        "/capabilities",
+        "/actions",
+        "/services",
+        "/operators"
+      ],
+      "change_log_location": "vps-control-api/control_contract.json.release",
+      "compatibility_rule": "Link should fail safe if contract_version is unknown."
+    }
+  },
+  "services": [
+    {
+      "id": "openclaw-agent.service",
+      "display_name": "GitHub Agent",
+      "category": "systemd-service",
+      "risk_level": "controlled",
+      "money_risk": false,
+      "deployable": true,
+      "deploy_path": "/opt/openclaw-agent",
+      "preconditions": [],
+      "notes": "Safe to restart and deploy."
+    },
+    {
+      "id": "openclaw-crypto.service",
+      "display_name": "Kraken Crypto Bot",
+      "category": "systemd-service",
+      "risk_level": "destructive",
+      "money_risk": true,
+      "deployable": true,
+      "deploy_path": "/home/jacks/openclaw-crypto",
+      "preconditions": [
+        "manual_check_no_open_kraken_positions"
+      ],
+      "notes": "Real GBP exposure. Confirmation note should record the position check."
+    },
+    {
+      "id": "openclaw-vibe-gateway.service",
+      "display_name": "Vibe Gateway",
+      "category": "systemd-service",
+      "risk_level": "controlled",
+      "money_risk": false,
+      "deployable": false,
+      "preconditions": [],
+      "notes": "Wraps an external Docker image; restart only."
+    },
+    {
+      "id": "alpaca_orb_bite_bot.service",
+      "display_name": "Alpaca Orb Bite Bot",
+      "category": "systemd-service",
+      "risk_level": "controlled",
+      "money_risk": false,
+      "deployable": false,
+      "preconditions": [],
+      "notes": "Paper trading only."
+    },
+    {
+      "id": "linkedin-news.timer",
+      "display_name": "LinkedIn News Timer",
+      "category": "systemd-timer",
+      "risk_level": "controlled",
+      "money_risk": false,
+      "deployable": false,
+      "preconditions": [],
+      "notes": "Controls the weekly schedule."
+    },
+    {
+      "id": "linkedin-news.service",
+      "display_name": "LinkedIn News Runner",
+      "category": "systemd-service",
+      "risk_level": "controlled",
+      "money_risk": false,
+      "deployable": false,
+      "preconditions": [],
+      "notes": "Runs the bot immediately."
+    }
+  ],
+  "actions": [
+    {
+      "id": "status",
+      "display_name": "Service Status",
+      "category": "read",
+      "operator": "read-only-operator",
+      "risk_level": "read-only",
+      "requires_service": true,
+      "requires_confirmation": false,
+      "supports_job_execution": true,
+      "timeout_seconds": 30,
+      "http": {
+        "method": "GET",
+        "path": "/status/{service}"
+      },
+      "parameters": {},
+      "outputs": {
+        "summary": "Normalized service state",
+        "artifacts": [
+          "status_summary"
+        ]
+      }
+    },
+    {
+      "id": "logs",
+      "display_name": "Service Logs",
+      "category": "read",
+      "operator": "read-only-operator",
+      "risk_level": "read-only",
+      "requires_service": true,
+      "requires_confirmation": false,
+      "supports_job_execution": true,
+      "timeout_seconds": 15,
+      "http": {
+        "method": "GET",
+        "path": "/logs/{service}"
+      },
+      "parameters": {
+        "n": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "outputs": {
+        "summary": "Recent journald lines",
+        "artifacts": [
+          "log_lines"
+        ]
+      }
+    },
+    {
+      "id": "diagnostics",
+      "display_name": "Service Diagnostics",
+      "category": "read",
+      "operator": "read-only-operator",
+      "risk_level": "read-only",
+      "requires_service": true,
+      "requires_confirmation": false,
+      "supports_job_execution": true,
+      "timeout_seconds": 30,
+      "http": {
+        "method": "GET",
+        "path": "/diagnostics/{service}"
+      },
+      "parameters": {
+        "n": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "outputs": {
+        "summary": "Status + log bundle",
+        "artifacts": [
+          "status_summary",
+          "log_lines"
+        ]
+      }
+    },
+    {
+      "id": "restart",
+      "display_name": "Restart Service",
+      "category": "control",
+      "operator": "service-control-operator",
+      "risk_level": "destructive",
+      "requires_service": true,
+      "requires_confirmation": true,
+      "supports_job_execution": true,
+      "timeout_seconds": 60,
+      "http": {
+        "method": "POST",
+        "path": "/restart/{service}"
+      },
+      "parameters": {},
+      "outputs": {
+        "summary": "Restart result with post-action diagnostics",
+        "artifacts": [
+          "restart_result",
+          "status_summary",
+          "log_lines"
+        ]
+      }
+    },
+    {
+      "id": "deploy",
+      "display_name": "Deploy Service",
+      "category": "deploy",
+      "operator": "deploy-diagnostics-operator",
+      "risk_level": "destructive",
+      "requires_service": true,
+      "requires_confirmation": true,
+      "supports_job_execution": true,
+      "timeout_seconds": 120,
+      "http": {
+        "method": "POST",
+        "path": "/deploy/{service}"
+      },
+      "parameters": {},
+      "outputs": {
+        "summary": "Deploy result with commit metadata and post-action diagnostics",
+        "artifacts": [
+          "fetch_output",
+          "pull_output",
+          "restart_result",
+          "status_summary",
+          "log_lines"
+        ]
+      }
+    }
+  ]
+}
