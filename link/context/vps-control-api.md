@@ -24,6 +24,9 @@
 > is done, Link should read `/contract` or `/capabilities` before acting so
 > control, policy, and service metadata come from one source.
 
+> **Migration note:** existing integrations can keep using `/status`, `/logs`,
+> `/restart`, and `/deploy` while Link moves to the `/contract` + `/jobs` flow.
+
 ---
 
 ## Base URL

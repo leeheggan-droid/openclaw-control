@@ -192,13 +192,12 @@ def _run_status_command(service: str) -> dict[str, Any]:
         raise HTTPException(status_code=504, detail="Command timed out") from exc
 
 
-def _run_logs_command(service: str, n: int) -> dict[str, Any]:
-    command = _LOGS_CMDS[service] + ["-n", str(n)]
+def _run_logs_command(service: str) -> dict[str, Any]:
+    command = _LOGS_CMDS[service] + ["-n", str(_MAX_LOG_LINES)]
     try:
-        # `service` is validated against the allow-list and `n` is clamped to an
-        # integer range before this function is called. shell=False keeps the
-        # command as literal argv, so this is an allow-listed journalctl call.
-        # lgtm [py/command-line-injection]
+        # `service` is validated against the allow-list and the subprocess call
+        # uses a fixed argv shape. The caller's requested `n` is applied in
+        # Python after the bounded journalctl read returns.
         result = subprocess.run(
             command,
             capture_output=True,
@@ -314,6 +313,8 @@ def _action_requires_confirmation(action: str, service: Optional[str]) -> bool:
     if not service:
         return False
     service_meta = SERVICE_METADATA[service]
+    # Money-risk services require confirmation for any non-read action even if
+    # that action is not globally marked as confirmation-gated.
     return bool(service_meta.get("money_risk")) and action_meta["category"] != "read"
 
 
@@ -360,12 +361,14 @@ def _get_status_summary(service: str) -> dict[str, Any]:
 
 
 def _get_log_snapshot(service: str, n: int) -> dict[str, Any]:
-    # n is validated in FastAPI or `_parse_log_lines`; shell=False; journalctl accepts
-    # integer -n args safely.
-    result = _run_logs_command(service, n)
+    # n is validated in FastAPI or `_parse_log_lines`. We always read a bounded
+    # max window from journald and slice in Python to avoid dynamic command args.
+    result = _run_logs_command(service)
+    all_lines = result["stdout"].splitlines()
+    lines = all_lines[-n:] if result["returncode"] == 0 else []
     return {
         "service": service,
-        "lines": result["stdout"].splitlines(),
+        "lines": lines,
         "returncode": result["returncode"],
         "stderr": result["stderr"],
     }
