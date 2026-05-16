@@ -19,9 +19,10 @@
 | `VPS_CONTROL_API_KEY` in Vercel | ⬜ Requires operator action | Must match the `VPS_CONTROL_API_KEY` value in `/etc/openclaw-control-api.env` on VPS |
 | `VPS_CONTROL_API_KEY` GitHub Secret | ⬜ Requires operator action | Needed for `verify-vps-api.yml` to authenticate its status check |
 
-> **The API is deployed and the contract exists in this repo.** Link should read
-> `/contract` or `/capabilities` before acting so control, policy, and service
-> metadata come from one source.
+> **The API is deployed and the contract exists in this repo, but production
+> Link still needs the Vercel/GitHub secret wiring above completed.** Once that
+> is done, Link should read `/contract` or `/capabilities` before acting so
+> control, policy, and service metadata come from one source.
 
 ---
 

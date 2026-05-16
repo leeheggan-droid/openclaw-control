@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -92,6 +93,7 @@ _CONFIRMATION_ERROR = "confirmation_required"
 _STABLE_STATES: frozenset[str] = frozenset({"active", "inactive", "failed"})
 
 JOBS: dict[str, dict[str, Any]] = {}
+_JOBS_LOCK = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # App
@@ -154,6 +156,7 @@ def _service_summary(service: str) -> str:
 
 
 def _run(cmd: list[str], timeout: int = 30) -> dict[str, Any]:
+    _assert_allowed_command(cmd)
     try:
         result = subprocess.run(
             cmd,
@@ -189,6 +192,27 @@ def _normalize_state(result: dict[str, Any]) -> dict[str, object]:
     if raw != normalized:
         out["raw_status"] = raw
     return out
+
+
+def _assert_allowed_command(cmd: list[str]) -> None:
+    exact_commands = {
+        tuple(command)
+        for command in (
+            list(_STATUS_CMDS.values())
+            + list(_RESTART_CMDS.values())
+            + list(_DEPLOY_CMDS.values())
+            + [["git", "-C", path, "fetch"] for path in DEPLOY_PATHS.values()]
+            + [["git", "-C", path, "rev-parse", "HEAD"] for path in DEPLOY_PATHS.values()]
+        )
+    }
+    if tuple(cmd) in exact_commands:
+        return
+
+    if len(cmd) == 8 and tuple(cmd[:-2]) in {tuple(command) for command in _LOGS_CMDS.values()}:
+        if cmd[-2] == "-n" and cmd[-1].isdigit():
+            return
+
+    raise HTTPException(status_code=400, detail="Command is not in the allowed control set")
 
 
 def _parse_log_lines(value: Any, *, default: int = _DEFAULT_LOG_LINES) -> int:
@@ -276,7 +300,8 @@ def _confirmation_failure_job(
         artifacts={},
         job={k: v for k, v in job.items() if k != "result"},
     )
-    JOBS[job["id"]] = job
+    with _JOBS_LOCK:
+        JOBS[job["id"]] = job
     return job
 
 
@@ -505,6 +530,16 @@ def _build_job(
         "confirmed": request.confirmed,
         "confirmation_note": request.confirmation_note,
     }
+
+
+def _store_job(job: dict[str, Any]) -> None:
+    with _JOBS_LOCK:
+        JOBS[job["id"]] = job
+
+
+def _load_job(job_id: str) -> Optional[dict[str, Any]]:
+    with _JOBS_LOCK:
+        return JOBS.get(job_id)
 
 
 def _contract_snapshot() -> dict[str, Any]:
@@ -754,7 +789,7 @@ def create_job(
             return job
 
     job = _build_job(request, operator=operator)
-    JOBS[job["id"]] = job
+    _store_job(job)
 
     try:
         job["status"] = "running"
@@ -794,7 +829,7 @@ def create_job(
 def get_job(job_id: str, api_key: str = Security(_api_key_header)) -> dict[str, Any]:
     """Fetch a previously submitted job from the in-memory control room ledger."""
     _auth(api_key)
-    job = JOBS.get(job_id)
+    job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     return job

@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 ROOT = Path(__file__).resolve().parents[1]
 API_PATH = ROOT / "vps-control-api" / "api.py"
 
@@ -30,6 +32,14 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertIn("services", payload)
         self.assertIn("actions", payload)
 
+    def test_capability_endpoints_are_available(self):
+        services = self.api.services(api_key="Bearer test-key")
+        actions = self.api.actions(api_key="Bearer test-key")
+        operators = self.api.operators(api_key="Bearer test-key")
+        self.assertGreaterEqual(len(services["services"]), 1)
+        self.assertGreaterEqual(len(actions["actions"]), 1)
+        self.assertGreaterEqual(len(operators["operators"]), 1)
+
     def test_diagnostics_endpoint_returns_standardized_bundle(self):
         with patch.object(self.api, "_run") as run_mock:
             run_mock.side_effect = [
@@ -55,6 +65,32 @@ class VpsControlApiTests(unittest.TestCase):
         self.assertEqual(payload["error_code"], "confirmation_required")
         self.assertIn("requires explicit confirmation", payload["result"]["reason"])
 
+    def test_job_requires_confirmation_note_for_money_risk_service(self):
+        payload = self.api.create_job(
+            self.api.JobRequest(
+                action="deploy",
+                service="openclaw-crypto.service",
+                confirmed=True,
+            ),
+            api_key="Bearer test-key",
+        )
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error_code"], "confirmation_required")
+        self.assertIn("confirmation_note", payload["result"]["reason"])
+
+    def test_job_validates_log_parameter(self):
+        payload = self.api.create_job(
+            self.api.JobRequest(
+                action="logs",
+                service="openclaw-agent.service",
+                parameters={"n": "not-a-number"},
+            ),
+            api_key="Bearer test-key",
+        )
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["error_code"], "execution_failed")
+        self.assertIn("Parameter 'n' must be an integer", payload["result"]["reason"])
+
     def test_job_executes_status_action_and_records_job(self):
         with patch.object(self.api, "_run") as run_mock:
             run_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
@@ -69,6 +105,11 @@ class VpsControlApiTests(unittest.TestCase):
         fetched = self.api.get_job(job_id, api_key="Bearer test-key")
         self.assertEqual(fetched["id"], job_id)
         self.assertEqual(fetched["status"], "succeeded")
+
+    def test_get_job_returns_not_found_for_unknown_id(self):
+        with self.assertRaises(HTTPException) as context:
+            self.api.get_job("missing-job", api_key="Bearer test-key")
+        self.assertEqual(context.exception.status_code, 404)
 
 
 if __name__ == "__main__":
