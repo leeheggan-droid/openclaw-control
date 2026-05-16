@@ -203,9 +203,9 @@ The canonical workflow input is **`action`**. For compatibility, `task` is also 
 
 | Input | Type | Required | Values |
 |-------|------|----------|--------|
-| `action` | choice | **Yes (or `task`)** | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
-| `task` | string | No | Legacy alias of `action`; send only for backward compatibility |
-| `service` | string | No | Required for `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
+| `action` | choice | **One of `action`/`task` is required** | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
+| `task` | string | **One of `action`/`task` is required** | Legacy alias of `action`; send only for backward compatibility |
+| `service` | string | Conditional | Required for `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
 | `tail_lines` | string | No | Applies to `systemd-logs` and `logs-systemd` |
 
 ---
