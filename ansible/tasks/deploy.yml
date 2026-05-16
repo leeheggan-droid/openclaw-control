@@ -42,7 +42,7 @@
       ansible.builtin.command:
         cmd: "git -C {{ deploy_paths[service] }} pull"
       register: pull_result
-      changed_when: false
+      changed_when: "'Already up to date.' not in pull_result.stdout"
 
     - name: Read commit after deploy
       ansible.builtin.command:
@@ -50,11 +50,16 @@
       register: commit_after
       changed_when: false
 
+    - name: Determine whether deploy changed code
+      ansible.builtin.set_fact:
+        deploy_changed: "{{ commit_before.stdout != commit_after.stdout }}"
+
     - name: Restart deployed service
       ansible.builtin.command:
         cmd: "systemctl restart {{ service }}"
       become: true
       register: restart_result
+      when: deploy_changed
 
     - name: Show post-deploy status
       ansible.builtin.command:
@@ -77,9 +82,10 @@
           - "Repo path: {{ deploy_paths[service] }}"
           - "Commit before: {{ commit_before.stdout }}"
           - "Commit after: {{ commit_after.stdout }}"
+          - "Deploy changed code: {{ deploy_changed }}"
           - "Fetch rc: {{ fetch_result.rc }}"
           - "Pull rc: {{ pull_result.rc }}"
-          - "Restart rc: {{ restart_result.rc }}"
+          - "Restart rc: {{ restart_result.rc | default('skipped (no code change)') }}"
 
     - name: Display status output
       ansible.builtin.debug:

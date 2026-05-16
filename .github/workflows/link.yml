@@ -17,7 +17,7 @@ on:
           - logs-systemd
           - deploy
       task:
-        description: 'Legacy compatibility input (use action when possible)'
+        description: 'Legacy compatibility input (use action when possible; if both provided, values must match)'
         required: false
         type: string
       service:
