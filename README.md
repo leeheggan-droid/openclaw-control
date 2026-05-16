@@ -111,6 +111,31 @@ Live discovery endpoints:
 This lets Link query control capabilities at runtime instead of relying on
 stale markdown assumptions.
 
+### Link migration review + Copilot prompt
+
+This repo now includes follow-up artifacts for migrating the Link repo to the
+contract-first flow:
+
+| File | Purpose |
+|---|---|
+| `link/context/link-control-contract-review.md` | Full review of how the new control API should interact with Link |
+| `link/context/link-contract-migration-prompt.md` | Ready-to-use prompt for Copilot to update Link |
+| `vps-control-api/openclaw-control-api.env.example` | Example env/setup file for the VPS Control API |
+
+### Does control need an LLM API key?
+
+No — **not today**.
+
+The current control API implementation is deterministic and only requires:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `VPS_CONTROL_API_KEY` | Yes | Authenticates direct control API requests |
+
+The contract leaves room for future LLM-backed operators (`groq-optional`), but
+the current Python service does **not** call Groq, Anthropic, OpenAI, or any
+other provider yet.
+
 ### Services
 
 All services are **native systemd units** on the VPS.  There is no Docker web
