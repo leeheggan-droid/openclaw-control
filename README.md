@@ -1,12 +1,15 @@
 # openclaw-control
 
 An Ansible-based control layer for remotely managing the OpenClaw bot stack on
-an Ubuntu VPS.  Operations are triggered via one of three paths: directly via
+an Ubuntu VPS. Operations are triggered via one of three paths: directly via
 `ansible-playbook` on a local machine, via the `openclaw-control:ci` Docker
 container (no Ansible installation required), or automatically through a GitHub
-Actions `workflow_dispatch` event ("Link Control").  All bots run as **native
-systemd services** on the host.  The web UI (`www.leeheggan.tech`) is a
-separate Vercel app (the Link repo) and is not managed here.
+Actions `workflow_dispatch` event ("Link Control"). The repo now also contains a
+direct **VPS Control API** with a versioned machine-readable control contract so
+Link can act as a **control room manager** instead of hard-coding low-level VPS
+behavior. All bots run as **native systemd services** on the host. The web UI
+(`www.leeheggan.tech`) is a separate Vercel app (the Link repo) and is not
+managed here.
 
 ---
 
@@ -76,6 +79,38 @@ separate Vercel app (the Link repo) and is not managed here.
 See `link/context/how-link-interacts.md` for the full end-to-end interaction
 diagram including the GitHub API call format.
 
+### Control room contract
+
+The VPS Control API in `vps-control-api/` exposes a versioned contract that
+defines:
+
+- manager role (`Link`)
+- junior operator roles
+- allowed services
+- allowed actions
+- confirmation policy
+- compatibility notes
+
+Machine-readable source of truth:
+
+```text
+vps-control-api/control_contract.json
+```
+
+Live discovery endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `/contract` | Full control-room contract for Link or any other manager |
+| `/capabilities` | Summarised services, actions, operators, and policies |
+| `/services` | Allowed services + metadata |
+| `/actions` | Allowed actions + metadata |
+| `/operators` | Manager + operator metadata |
+| `/jobs` | Bounded action execution with policy enforcement |
+
+This lets Link query control capabilities at runtime instead of relying on
+stale markdown assumptions.
+
 ### Services
 
 All services are **native systemd units** on the VPS.  There is no Docker web
@@ -116,6 +151,10 @@ The `link/context/` directory holds markdown files that serve as a persistent
 memory store for the Link operational AI assistant.  These files are
 human-readable, version-controlled, and loaded into context at the start of
 each Link session.
+
+Link should now treat these docs as human-readable guidance layered on top of
+the control contract, not as the only machine-readable source of operational
+truth.
 
 **`link/context/environment.md`** is the single source of truth for the active
 execution context (local SSH vs GitHub Actions).  Link must read it before
@@ -392,6 +431,24 @@ Content-Type: application/json
 ```
 
 See `link/context/how-link-interacts.md` for the full API interaction guide.
+
+### Via VPS Control API (contract-first path for Link)
+
+Link should prefer the direct VPS Control API when `VPS_CONTROL_API_URL` and
+`VPS_CONTROL_API_KEY` are configured in Vercel.
+
+Typical call flow:
+
+1. `GET /contract`
+2. `POST /jobs`
+3. `GET /jobs/{job_id}` if Link needs to re-read the result later
+
+Example:
+
+```text
+GET  /contract
+POST /jobs {"action":"diagnostics","service":"openclaw-agent.service","parameters":{"n":20}}
+```
 
 ### Via Docker control runner (LOCAL_DOCKER)
 
