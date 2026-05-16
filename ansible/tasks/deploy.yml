@@ -54,6 +54,11 @@
       ansible.builtin.set_fact:
         deploy_changed: "{{ commit_before.stdout != commit_after.stdout }}"
 
+    - name: Initialize restart result for no-change deploys
+      ansible.builtin.set_fact:
+        restart_result:
+          rc: "skipped (no code change)"
+
     - name: Restart deployed service
       ansible.builtin.command:
         cmd: "systemctl restart {{ service }}"
@@ -85,7 +90,7 @@
           - "Deploy changed code: {{ deploy_changed }}"
           - "Fetch rc: {{ fetch_result.rc }}"
           - "Pull rc: {{ pull_result.rc }}"
-          - "Restart rc: {{ restart_result.rc if deploy_changed else 'skipped (no code change)' }}"
+          - "Restart rc: {{ restart_result.rc }}"
 
     - name: Display status output
       ansible.builtin.debug:

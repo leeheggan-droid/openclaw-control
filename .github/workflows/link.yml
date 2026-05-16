@@ -65,7 +65,7 @@ jobs:
           fi
 
           if [ -n "$ACTION_INPUT" ] && [ -n "$TASK_INPUT" ] && [ "$ACTION_INPUT" != "$TASK_INPUT" ]; then
-            echo "ERROR: inputs.action and inputs.task conflict ('$ACTION_INPUT' vs '$TASK_INPUT')."
+            echo "ERROR: inputs.action and inputs.task conflict ('$ACTION_INPUT' vs '$TASK_INPUT'). Provide only one input or ensure both have the same value."
             exit 1
           fi
 
