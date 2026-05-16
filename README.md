@@ -326,7 +326,8 @@ The single inventory file that tells Ansible which host(s) to manage.
 
 The canonical workflow input key is `action`. For compatibility, `task` is also
 accepted by `link.yml` as a legacy alias. The selected value is used as the
-Ansible `--tags` target.
+Ansible `--tags` target. If both `action` and `task` are provided, they must
+match or the workflow fails fast.
 
 | Tag | Effect | Destructive? |
 |---|---|---|

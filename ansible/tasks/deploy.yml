@@ -61,6 +61,8 @@
         restart_skipped: true
 
     - name: Restart deployed service
+      # Manual safety reminder: before deploying openclaw-crypto.service, confirm
+      # there are no open Kraken positions.
       ansible.builtin.command:
         cmd: "systemctl restart {{ service }}"
       become: true
