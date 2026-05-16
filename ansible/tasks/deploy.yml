@@ -1,0 +1,110 @@
+---
+# deploy.yml — deploy a single configured service by pulling latest code and restarting it.
+# Variables:
+#   service      — exact systemd unit name (required)
+#   tail_lines   — number of journal lines to show after deploy (default: 20)
+# Pass via: -e "service=openclaw-agent.service" -e "tail_lines=20"
+#
+# Deploy is currently configured for:
+#   openclaw-agent.service
+#   openclaw-crypto.service
+# ⚠️ For openclaw-crypto.service, confirm no open Kraken positions before deploy.
+- name: Deploy — {{ service | default('(no service specified)') }}
+  hosts: vps
+  vars:
+    deploy_paths:
+      openclaw-agent.service: /opt/openclaw-agent
+      openclaw-crypto.service: /home/jacks/openclaw-crypto
+  tasks:
+    - name: Validate service variable
+      ansible.builtin.fail:
+        msg: "The 'service' variable is required. Provide -e service=<unit_name>."
+      when: service is not defined or service == ''
+
+    - name: Validate deploy support for service
+      ansible.builtin.fail:
+        msg: "Deploy is not configured for {{ service }}. Supported services: {{ deploy_paths.keys() | list | join(', ') }}"
+      when: service not in deploy_paths
+
+    - name: Read commit before deploy
+      ansible.builtin.command:
+        cmd: "git -C {{ deploy_paths[service] }} rev-parse HEAD"
+      register: commit_before
+      changed_when: false
+
+    - name: Fetch latest changes
+      ansible.builtin.command:
+        cmd: "git -C {{ deploy_paths[service] }} fetch"
+      register: fetch_result
+      changed_when: false
+
+    - name: Pull latest changes
+      ansible.builtin.command:
+        cmd: "git -C {{ deploy_paths[service] }} pull"
+      register: pull_result
+      changed_when: "'Already up to date.' not in pull_result.stdout"
+
+    - name: Read commit after deploy
+      ansible.builtin.command:
+        cmd: "git -C {{ deploy_paths[service] }} rev-parse HEAD"
+      register: commit_after
+      changed_when: false
+
+    - name: Determine whether deploy changed code
+      ansible.builtin.set_fact:
+        deploy_changed: "{{ commit_before.stdout != commit_after.stdout }}"
+
+    - name: Initialize restart result for no-change deploys
+      ansible.builtin.set_fact:
+        restart_result:
+          rc: 0
+        restart_skipped: true
+
+    - name: Restart deployed service
+      # Manual safety reminder: before deploying openclaw-crypto.service, confirm
+      # there are no open Kraken positions.
+      ansible.builtin.command:
+        cmd: "systemctl restart {{ service }}"
+      become: true
+      register: restart_result
+      when: deploy_changed
+
+    - name: Mark restart as executed
+      ansible.builtin.set_fact:
+        restart_skipped: false
+      when: deploy_changed
+
+    - name: Show post-deploy status
+      ansible.builtin.command:
+        cmd: "systemctl status {{ service }} --no-pager"
+      become: true
+      register: post_status
+      failed_when: false
+      changed_when: false
+
+    - name: Show post-deploy logs
+      ansible.builtin.command:
+        cmd: "journalctl -u {{ service }} --no-pager -n {{ tail_lines | default('20') }}"
+      register: journal_output
+      changed_when: false
+
+    - name: Display deploy summary
+      ansible.builtin.debug:
+        msg:
+          - "Service: {{ service }}"
+          - "Repo path: {{ deploy_paths[service] }}"
+          - "Commit before: {{ commit_before.stdout }}"
+          - "Commit after: {{ commit_after.stdout }}"
+          - "Deploy changed code: {{ deploy_changed }}"
+          - "Fetch rc: {{ fetch_result.rc }}"
+          - "Pull rc: {{ pull_result.rc }}"
+          - "Restart rc: {{ restart_result.rc }}"
+          - "Restart skipped: {{ restart_skipped }}"
+
+    - name: Display status output
+      ansible.builtin.debug:
+        msg: "{{ post_status.stdout }}"
+
+    - name: Display log output
+      ansible.builtin.debug:
+        msg: "{{ journal_output.stdout }}"

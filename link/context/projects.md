@@ -7,7 +7,7 @@
 
 ### Current State
 - GitHub Actions workflow (`link.yml`) triggers Ansible playbooks via workflow_dispatch
-- Available actions: `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `logs-systemd`
+- Available actions: `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` (`action` canonical, `task` legacy alias accepted)
 - Link triggers operations via the GitHub API (`workflow_dispatch` POST to `link.yml`)
 - Results visible in GitHub Actions run logs
 

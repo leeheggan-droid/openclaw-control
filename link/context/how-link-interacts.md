@@ -199,12 +199,13 @@ Use fallback only when the direct API is unavailable or unauthenticated.
 
 ## GitHub Actions inputs
 
-The workflow input is named **`action`**.
+The canonical workflow input is **`action`**. For compatibility, `task` is also accepted as a legacy alias (prefer `action`).
 
 | Input | Type | Required | Values |
 |-------|------|----------|--------|
-| `action` | choice | **Yes** | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd` |
-| `service` | string | No | Required for `systemd-stop`, `systemd-start`, `logs-systemd` |
+| `action` | choice | **One of `action`/`task` is required** | `status-all`, `systemd-status`, `systemd-logs`, `systemd-restart`, `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
+| `task` | string | **One of `action`/`task` is required** | Legacy alias of `action`; free-form string input that should match the same values as `action` and be used only for backward compatibility |
+| `service` | string | Conditional | Required for `systemd-stop`, `systemd-start`, `logs-systemd`, `deploy` |
 | `tail_lines` | string | No | Applies to `systemd-logs` and `logs-systemd` |
 
 ---

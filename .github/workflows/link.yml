@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Action to run'
-        required: true
-        default: 'status-all'
+        description: 'Canonical action input (at least one of action/task is required)'
+        required: false
         type: choice
         options:
           - status-all
@@ -16,8 +15,13 @@ on:
           - systemd-stop
           - systemd-start
           - logs-systemd
+          - deploy
+      task:
+        description: 'Legacy alias of action; if both are provided, values must match'
+        required: false
+        type: string
       service:
-        description: 'Systemd unit name — required for systemd-stop, systemd-start, logs-systemd (e.g. alpaca_orb_bite_bot.service)'
+        description: 'Systemd unit name — required for systemd-stop, systemd-start, logs-systemd, deploy (e.g. alpaca_orb_bite_bot.service)'
         required: false
         default: ''
       tail_lines:
@@ -50,9 +54,49 @@ jobs:
       - name: Write inventory
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
-      - name: Run playbook — ${{ inputs.action }}
+      - name: Resolve and validate workflow inputs
+        run: |
+          ACTION_INPUT='${{ inputs.action }}'
+          TASK_INPUT='${{ inputs.task }}'
+
+          if [ -z "$ACTION_INPUT" ] && [ -z "$TASK_INPUT" ]; then
+            echo "ERROR: Provide one of inputs.action or inputs.task."
+            exit 1
+          fi
+
+          if [ -n "$ACTION_INPUT" ] && [ -n "$TASK_INPUT" ] && [ "$ACTION_INPUT" != "$TASK_INPUT" ]; then
+            echo "ERROR: inputs.action and inputs.task conflict ('$ACTION_INPUT' vs '$TASK_INPUT'). Provide only one input or ensure both have the same value."
+            exit 1
+          fi
+
+          EFFECTIVE_ACTION="$ACTION_INPUT"
+          if [ -z "$EFFECTIVE_ACTION" ]; then
+            EFFECTIVE_ACTION="$TASK_INPUT"
+          fi
+
+          case "$EFFECTIVE_ACTION" in
+            status-all|systemd-status|systemd-logs|systemd-restart|systemd-stop|systemd-start|logs-systemd|deploy)
+              ;;
+            *)
+              echo "ERROR: Unsupported action '$EFFECTIVE_ACTION'."
+              exit 1
+              ;;
+          esac
+
+          case "$EFFECTIVE_ACTION" in
+            systemd-stop|systemd-start|logs-systemd|deploy)
+              if [ -z "${{ inputs.service }}" ]; then
+                echo "ERROR: 'service' input is required for action '$EFFECTIVE_ACTION'."
+                exit 1
+              fi
+              ;;
+          esac
+
+          echo "effective_action=$EFFECTIVE_ACTION" >> "$GITHUB_ENV"
+
+      - name: Run playbook — ${{ env.effective_action }}
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/site.yml \
-            --tags "${{ inputs.action }}" \
+            --tags "${{ env.effective_action }}" \
             -e "service=${{ inputs.service }}" \
             -e "tail_lines=${{ inputs.tail_lines }}"
