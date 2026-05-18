@@ -360,6 +360,10 @@ def _get_status_summary(service: str) -> dict[str, Any]:
     return {"service": service, **_normalize_state(result)}
 
 
+def _get_all_status_summaries() -> list[dict[str, Any]]:
+    return [_get_status_summary(service) for service in sorted(ALLOWED_SERVICES)]
+
+
 def _get_log_snapshot(service: str, n: int) -> dict[str, Any]:
     # n is validated in FastAPI or `_parse_log_lines`. We always read a bounded
     # max window from journald and slice in Python to avoid dynamic command args.
@@ -384,6 +388,23 @@ def _execute_status(service: str, *, operator: Optional[str] = None) -> dict[str
         operator=operator,
         data=status_summary,
         artifacts={"status_summary": status_summary},
+    )
+
+
+def _execute_status_all(*, operator: Optional[str] = None) -> dict[str, Any]:
+    statuses = _get_all_status_summaries()
+    active_count = sum(1 for item in statuses if item["active"])
+    return _build_operation_response(
+        action="status-all",
+        service="",
+        ok=True,
+        summary=f"{active_count}/{len(statuses)} services active",
+        operator=operator,
+        data={
+            "service_count": len(statuses),
+            "active_count": active_count,
+        },
+        artifacts={"status_summaries": statuses},
     )
 
 
@@ -543,6 +564,8 @@ def _execute_action(
     parameters: dict[str, Any],
     operator: Optional[str] = None,
 ) -> dict[str, Any]:
+    if action == "status-all":
+        return _execute_status_all(operator=operator)
     if action == "status":
         return _execute_status(service, operator=operator)
     if action == "logs":
@@ -691,6 +714,21 @@ def status(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
     _validate_service(service)
     result = _run_status_command(service)
     return {"service": service, **_normalize_state(result)}
+
+
+@app.get("/status")
+@app.get("/api/status", include_in_schema=False)
+@app.get("/v1/status", include_in_schema=False)
+@app.get("/api/v1/status", include_in_schema=False)
+def status_all(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
+    """Return status summaries for all allowed services."""
+    _auth(api_key)
+    statuses = _get_all_status_summaries()
+    return {
+        "service_count": len(statuses),
+        "active_count": sum(1 for item in statuses if item["active"]),
+        "services": statuses,
+    }
 
 
 @app.get("/logs/{service}")

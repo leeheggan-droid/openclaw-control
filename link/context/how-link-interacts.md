@@ -169,6 +169,7 @@ The following still exist for compatibility:
 
 | Method | Path |
 |--------|------|
+| `GET` | `/status` |
 | `GET` | `/status/{service}` |
 | `GET` | `/logs/{service}` |
 | `GET` | `/diagnostics/{service}` |
