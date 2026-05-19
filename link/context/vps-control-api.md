@@ -86,6 +86,7 @@ The API serves this same contract via `/contract`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/status` | Status summary for all allowed services |
 | `GET` | `/status/{service}` | `systemctl is-active {service}` |
 | `GET` | `/logs/{service}?n=50` | Last N lines of journald logs |
 | `GET` | `/diagnostics/{service}?n=20` | Standardized status + logs bundle |
@@ -96,7 +97,7 @@ The API serves this same contract via `/contract`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/jobs` | Submit a bounded action (`status`, `logs`, `diagnostics`, `restart`, `deploy`) |
+| `POST` | `/jobs` | Submit a bounded action (`status-all`, `status`, `logs`, `diagnostics`, `restart`, `deploy`) |
 | `GET` | `/jobs/{job_id}` | Read a previously submitted in-memory job record |
 
 > New Link integrations should prefer `/contract` + `/jobs`. Legacy endpoints

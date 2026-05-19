@@ -52,7 +52,7 @@ class VpsControlApiTests(unittest.TestCase):
 
     def test_contract_endpoint_exposes_control_room_metadata(self):
         payload = self.api.contract(api_key="Bearer test-key")
-        self.assertEqual(payload["contract_version"], "2026-05-16.1")
+        self.assertEqual(payload["contract_version"], "2026-05-18.1")
         self.assertEqual(payload["manager"]["id"], "link-manager")
         self.assertIn("operators", payload)
         self.assertIn("services", payload)
@@ -179,6 +179,29 @@ class VpsControlApiTests(unittest.TestCase):
         fetched = self.api.get_job(job_id, api_key="Bearer test-key")
         self.assertEqual(fetched["id"], job_id)
         self.assertEqual(fetched["status"], "succeeded")
+
+    def test_job_executes_status_all_action_without_service(self):
+        with patch.object(self.api, "_run_status_command") as status_mock:
+            status_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
+            created = self.api.create_job(
+                self.api.JobRequest(action="status-all"),
+                api_key="Bearer test-key",
+            )
+        self.assertEqual(created["status"], "succeeded")
+        self.assertEqual(created["result"]["action"], "status-all")
+        self.assertGreater(created["result"]["data"]["service_count"], 0)
+        self.assertEqual(
+            created["result"]["data"]["service_count"],
+            created["result"]["data"]["active_count"],
+        )
+
+    def test_status_collection_endpoint_returns_all_services(self):
+        with patch.object(self.api, "_run_status_command") as status_mock:
+            status_mock.return_value = {"stdout": "active", "stderr": "", "returncode": 0}
+            payload = self.api.status_all(api_key="Bearer test-key")
+        self.assertIn("services", payload)
+        self.assertGreaterEqual(payload["service_count"], 1)
+        self.assertEqual(payload["service_count"], len(payload["services"]))
 
     def test_get_job_returns_not_found_for_unknown_id(self):
         with self.assertRaises(HTTPException) as context:

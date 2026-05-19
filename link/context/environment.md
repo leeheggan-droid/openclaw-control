@@ -73,6 +73,7 @@ Authorization: Bearer <VPS_CONTROL_API_KEY>
 
 | What Link is asked                                  | Method | Path |
 |-----------------------------------------------------|--------|------|
+| "Are systemd services running?"                    | `GET`  | `/status` |
 | "Is the agent running?"                            | `GET`  | `/status/openclaw-agent.service` |
 | "Last 10 lines of the agent log"                   | `GET`  | `/logs/openclaw-agent.service?n=10` |
 | "Restart the agent"                                | `POST` | `/restart/openclaw-agent.service` |
