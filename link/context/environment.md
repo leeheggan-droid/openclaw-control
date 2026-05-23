@@ -13,18 +13,28 @@
 | Context      | `VPS_CONTROL_API` |
 | Last updated | 2026-05-06 06:20 UTC |
 | Updated by   | Copilot |
-| Notes        | Direct VPS HTTP control API is deployed and running at `http://72.61.123.4:8765`. Link uses it as primary path **once** `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` are set in Vercel. GitHub Actions remains available as fallback. |
+| Notes        | Direct VPS HTTP control API is deployed and running at `http://72.61.123.4:8765`. Link should use it as the primary path when `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` are present in Vercel. GitHub Actions remains available as fallback. |
 
-### Production Readiness Checklist
+### Setup Requirements (operator-run)
 
-Before treating `VPS_CONTROL_API` as fully active in production, confirm all items:
+Use this procedure instead of unchecked placeholders:
 
-- [x] `openclaw-control-api.service` deployed to VPS at `/opt/openclaw-control-api/` (done 2026-05-06)
-- [x] `/etc/openclaw-control-api.env` contains `VPS_CONTROL_API_KEY=<secret>` on the VPS
-- [ ] Vercel project settings: `VPS_CONTROL_API_URL` = `http://72.61.123.4:8765`
-- [ ] Vercel project settings: `VPS_CONTROL_API_KEY` = same value as VPS env file
-- [ ] GitHub Secret `VPS_CONTROL_API_KEY` set (needed for `verify-vps-api.yml` proof run)
-- [ ] `verify-vps-api.yml` workflow run passes (merge this PR first, then trigger from Actions tab)
+1. Confirm `openclaw-control-api.service` is deployed on the VPS at `/opt/openclaw-control-api/`.
+2. Confirm `/etc/openclaw-control-api.env` exists and contains `VPS_CONTROL_API_KEY=<secret>`.
+3. In Vercel project settings (Link), set:
+   - `VPS_CONTROL_API_URL=http://72.61.123.4:8765`
+   - `VPS_CONTROL_API_KEY=<same secret as /etc/openclaw-control-api.env>`
+4. In GitHub repository secrets (`leeheggan-droid/openclaw-control`), set:
+   - `VPS_CONTROL_API_KEY` (used by `verify-vps-api.yml`)
+   - `VPS_SSH_KEY` and `ANSIBLE_INVENTORY` (used by `link.yml` fallback path)
+5. Trigger `verify-vps-api.yml` and confirm:
+   - `GET /health` returns JSON with `status: "ok"`
+   - Authenticated `GET /status/openclaw-agent.service` succeeds
+
+Canonical env file purpose:
+
+- `/etc/openclaw-control-api.env` is the runtime `EnvironmentFile` for `openclaw-control-api.service`.
+- `/etc/openclaw-control.env` is not referenced anywhere in this repository and should be treated as vestigial unless separately documented in another repo.
 
 > Until the Vercel env vars are set, Link continues to use GitHub Actions (`link.yml`) as its
 > control path. The fallback is safe and produces full audit logs.

@@ -7,22 +7,18 @@
 
 ---
 
-## Current Status
+## Setup requirements
 
-| Component | Status | Confirmed |
-|-----------|--------|-----------|
-| `openclaw-control-api.service` on VPS | ✅ Deployed and running at `72.61.123.4:8765` | 2026-05-06 — service file deployed by Copilot |
-| Versioned control contract | ✅ Present in `vps-control-api/control_contract.json` | 2026-05-16 |
-| Discovery endpoints | ✅ `/contract`, `/capabilities`, `/actions`, `/services`, `/operators` | 2026-05-16 |
-| Job execution endpoint | ✅ `/jobs` with in-memory job ledger | 2026-05-16 |
-| `VPS_CONTROL_API_URL` in Vercel | ⬜ Requires operator action | Set to `http://72.61.123.4:8765` in Vercel project settings |
-| `VPS_CONTROL_API_KEY` in Vercel | ⬜ Requires operator action | Must match the `VPS_CONTROL_API_KEY` value in `/etc/openclaw-control-api.env` on VPS |
-| `VPS_CONTROL_API_KEY` GitHub Secret | ⬜ Requires operator action | Needed for `verify-vps-api.yml` to authenticate its status check |
+| Component | Required value | Purpose |
+|-----------|----------------|---------|
+| VPS systemd env file | `/etc/openclaw-control-api.env` with `VPS_CONTROL_API_KEY=<secret>` | Canonical runtime secret source for `openclaw-control-api.service` |
+| Vercel env (Link) | `VPS_CONTROL_API_URL=http://72.61.123.4:8765` | Direct control API base URL for Link |
+| Vercel env (Link) | `VPS_CONTROL_API_KEY=<same secret as VPS env file>` | Auth header for Link API calls |
+| GitHub repo secret (`openclaw-control`) | `VPS_CONTROL_API_KEY=<same secret as VPS env file>` | Auth for `verify-vps-api.yml` |
+| GitHub repo secrets (`openclaw-control`) | `VPS_SSH_KEY`, `ANSIBLE_INVENTORY` | Fallback `link.yml` workflow path |
 
-> **The API is deployed and the contract exists in this repo, but production
-> Link still needs the Vercel/GitHub secret wiring above completed.** Once that
-> is done, Link should read `/contract` or `/capabilities` before acting so
-> control, policy, and service metadata come from one source.
+> `/etc/openclaw-control.env` is not referenced by this repository and is treated
+> as vestigial here. Do not use it as a source of truth for VPS Control API auth.
 
 > **Migration note:** existing integrations can keep using `/status`, `/logs`,
 > `/restart`, and `/deploy` while Link moves to the `/contract` + `/jobs` flow.
@@ -44,6 +40,19 @@ Authorization: Bearer <VPS_CONTROL_API_KEY>
 ```
 
 The key is stored in Vercel as `VPS_CONTROL_API_KEY`.
+
+## Health-check and auth behavior
+
+- `GET /health` is intentionally unauthenticated and expected to return JSON with `status: "ok"`.
+- All other endpoints (`/contract`, `/status`, `/logs`, `/restart`, `/deploy`, `/jobs`) require:
+  `Authorization: Bearer <VPS_CONTROL_API_KEY>`.
+- If auth is missing/invalid, requests are expected to fail and clients should not treat that as service-health success.
+
+## Network and firewall requirements (port 8765)
+
+- `openclaw-control-api.service` binds to `0.0.0.0:8765`.
+- VPS firewall must allow inbound TCP 8765 from Link runtime and verification path traffic.
+- If 8765 is blocked, Link must report direct API failure and use `link.yml` fallback.
 
 ---
 
