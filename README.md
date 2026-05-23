@@ -347,6 +347,43 @@ match or the workflow fails fast.
 | `VPS_SSH_KEY` | Contents of the private SSH key (written to `~/.ssh/id_rsa` on the runner) |
 | `ANSIBLE_INVENTORY` | Full content of a valid Ansible inventory file (written to `ansible/inventory.ini` at runtime) |
 
+### VPS control environment and secret sources
+
+| Location | Canonical purpose | Notes |
+|---|---|---|
+| `/etc/openclaw-control-api.env` (VPS) | Runtime `EnvironmentFile` for `openclaw-control-api.service` | Must contain `VPS_CONTROL_API_KEY`; this is the canonical VPS-side source |
+| `Vercel project settings` (Link repo) | Link runtime values for `VPS_CONTROL_API_URL` and `VPS_CONTROL_API_KEY` | Must match VPS key value for authenticated calls |
+| `GitHub Secrets` (`openclaw-control` repo) | CI/runtime secrets for workflows | `VPS_CONTROL_API_KEY` is used by `verify-vps-api.yml`; `VPS_SSH_KEY` and `ANSIBLE_INVENTORY` are used by `link.yml` |
+| `/etc/openclaw-control.env` (VPS) | Not used by this repository | Treat as vestigial unless another repository documents active use |
+
+### VPS Control API variables used by workflows and Link
+
+| Variable | Secret? | Used by | Behavior |
+|---|---|---|---|
+| `VPS_CONTROL_API_URL` | No | Link (Vercel), `verify-vps-api.yml` | Base URL for direct API calls (default shown in workflow: `http://72.61.123.4:8765`) |
+| `VPS_CONTROL_API_KEY` | Yes | `openclaw-control-api.service`, Link (Vercel), `verify-vps-api.yml` | Bearer token for all endpoints except `/health` |
+| `VPS_SSH_KEY` | Yes | `link.yml` | Injected private key for SSH from Actions runner to VPS |
+| `ANSIBLE_INVENTORY` | Yes | `link.yml` | Injected inventory content written to `ansible/inventory.ini` |
+
+### `VPS_CONTROL_API_KEY` rotation runbook
+
+Update all of these in one maintenance window:
+
+1. VPS: update `/etc/openclaw-control-api.env` with a new strong value for `VPS_CONTROL_API_KEY`.
+2. VPS: `sudo systemctl restart openclaw-control-api.service`.
+3. Link runtime: update Vercel `VPS_CONTROL_API_KEY` (and any self-hosted `/etc/link.env` value if used outside Vercel).
+4. GitHub (`openclaw-control`): update repository secret `VPS_CONTROL_API_KEY`.
+5. Validate by running `verify-vps-api.yml` and a Link direct API check (`/health` + authenticated endpoint).
+
+If one location is not updated, some control paths will fail (direct Link calls and/or verify workflow).
+
+### VPS Control API network requirements
+
+- Open inbound TCP port `8765` on the VPS firewall for trusted sources that call the control API.
+- Expected health check is `GET /health` (no auth).
+- All non-health endpoints require `Authorization: Bearer <VPS_CONTROL_API_KEY>`.
+- Port `8001` / `openclaw-cockpit` is not part of this repository runtime model.
+
 ---
 
 ## Operator Guide — How OpenClaw Is Started

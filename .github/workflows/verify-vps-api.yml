@@ -7,6 +7,7 @@ permissions:
   contents: read
 
 env:
+  # Non-secret base URL used for connectivity checks; auth is supplied per-step below.
   VPS_CONTROL_API_URL: 'http://72.61.123.4:8765'
 
 jobs:
@@ -26,6 +27,7 @@ jobs:
 
       - name: Status check — openclaw-agent.service (authenticated)
         env:
+          # Must match VPS /etc/openclaw-control-api.env and Link/Vercel VPS_CONTROL_API_KEY.
           VPS_CONTROL_API_KEY: ${{ secrets.VPS_CONTROL_API_KEY }}
         run: |
           echo "=== GET /status/openclaw-agent.service ==="

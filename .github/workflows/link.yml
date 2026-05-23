@@ -47,11 +47,13 @@ jobs:
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
+          # Secret source: VPS_SSH_KEY (private key for jacks@VPS_IP).
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$VPS_IP" >> ~/.ssh/known_hosts
 
       - name: Write inventory
+        # Secret source: ANSIBLE_INVENTORY (runtime-injected inventory for Actions context).
         run: echo "${{ secrets.ANSIBLE_INVENTORY }}" > ansible/inventory.ini
 
       - name: Resolve and validate workflow inputs
