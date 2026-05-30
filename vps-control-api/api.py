@@ -91,10 +91,14 @@ _CONFIRMATION_ERROR = "confirmation_required"
 # Whitelisted log file paths — log_name is validated as a dict key only;
 # user input never flows into file paths.
 _LOG_FILE_PATHS: dict[str, str] = {
-    "trade_journal": "/home/jacks/openclaw-crypto/crypto/logs/trade_journal.jsonl",
-    "trades": "/home/jacks/openclaw-crypto/crypto/logs/trades.jsonl",
-    "events": "/home/jacks/openclaw-crypto/crypto/logs/events.jsonl",
-    "system": "/home/jacks/openclaw-crypto/crypto/logs/system.log",
+    "trade_journal": "/home/jacks/openclaw-crypto/logs/trade_journal.jsonl",
+    "trades": "/home/jacks/openclaw-crypto/logs/trades.jsonl",
+    "events": "/home/jacks/openclaw-crypto/logs/events.jsonl",
+    "system": "/home/jacks/openclaw-crypto/logs/system.log",
+    # Fallback paths if LOG_DIR is not set (logs go to crypto/ sub-package)
+    "trade_journal_legacy": "/home/jacks/openclaw-crypto/crypto/logs/trade_journal.jsonl",
+    "events_legacy": "/home/jacks/openclaw-crypto/crypto/logs/events.jsonl",
+    "system_legacy": "/home/jacks/openclaw-crypto/crypto/logs/system.log",
 }
 
 # Crypto bot data directory — JSON state files written by the bot at runtime.

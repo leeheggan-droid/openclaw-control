@@ -299,7 +299,7 @@
         "log_name": {
           "type": "string",
           "description": "Log file identifier. Available: trade_journal, trades, events, system",
-          "enum": ["trade_journal", "trades", "events", "system"]
+          "enum": ["trade_journal", "trades", "events", "system", "trade_journal_legacy", "events_legacy", "system_legacy"]
         },
         "n": {
           "type": "integer",
