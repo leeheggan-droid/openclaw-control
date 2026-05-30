@@ -131,9 +131,10 @@
       "category": "systemd-service",
       "risk_level": "controlled",
       "money_risk": false,
-      "deployable": false,
+      "deployable": true,
+      "deploy_path": "/home/jacks/alpaca_orb_bite_bot",
       "preconditions": [],
-      "notes": "Paper trading only."
+      "notes": "Paper trading only — safe to auto-deploy."
     },
     {
       "id": "linkedin-news.timer",
