@@ -97,6 +97,9 @@ _LOG_FILE_PATHS: dict[str, str] = {
     "system": "/home/jacks/openclaw-crypto/crypto/logs/system.log",
 }
 
+# Crypto bot data directory — JSON state files written by the bot at runtime.
+_CRYPTO_DATA_DIR = Path("/home/jacks/openclaw-crypto/crypto/data")
+
 # Stable states returned by `systemctl is-active`.
 _STABLE_STATES: frozenset[str] = frozenset({"active", "inactive", "failed"})
 
@@ -544,6 +547,53 @@ def _execute_read_logfile(log_name: str, *, n: int, operator: Optional[str] = No
     )
 
 
+def _read_crypto_json(filename: str) -> dict[str, Any]:
+    """Read a whitelisted JSON data file from the crypto bot's data directory."""
+    allowed = {"system_state.json", "open_positions.json", "backtest_results.json", "trade_history.json"}
+    if filename not in allowed:
+        raise HTTPException(status_code=400, detail=f"'{filename}' is not an allowed data file")
+    path = _CRYPTO_DATA_DIR / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found on disk")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read {filename}: {exc}") from exc
+
+
+def _write_crypto_json(filename: str, data: dict[str, Any]) -> None:
+    """Atomically write a whitelisted JSON data file to the crypto bot's data directory."""
+    allowed = {"system_state.json"}
+    if filename not in allowed:
+        raise HTTPException(status_code=400, detail=f"'{filename}' is not writable via this API")
+    path = _CRYPTO_DATA_DIR / filename
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        os.makedirs(path.parent, exist_ok=True)
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write {filename}: {exc}") from exc
+
+
+def _execute_crypto_unhalt(*, operator: Optional[str] = None) -> dict[str, Any]:
+    state = _read_crypto_json("system_state.json")
+    prev = state.get("system_state", "ACTIVE")
+    state["system_state"] = "ACTIVE"
+    state["daily_loss_gbp"] = 0.0
+    state["last_reset_date"] = datetime.now(timezone.utc).date().isoformat()
+    _write_crypto_json("system_state.json", state)
+    return _build_operation_response(
+        action="crypto_unhalt",
+        service=None,
+        ok=True,
+        summary=f"Crypto bot state reset {prev} → ACTIVE",
+        operator=operator,
+        data={"prev_state": prev, "new_state": "ACTIVE"},
+        artifacts={"system_state": state},
+    )
+
+
 def _execute_deploy(service: str, *, operator: Optional[str] = None) -> dict[str, Any]:
     if service not in _DEPLOY_CMDS:
         raise HTTPException(
@@ -645,6 +695,8 @@ def _execute_action(
             n=min(int(parameters.get("n", _DEFAULT_LOG_LINES)), _MAX_LOG_FILE_LINES),
             operator=operator,
         )
+    if action == "crypto_unhalt":
+        return _execute_crypto_unhalt(operator=operator)
     raise HTTPException(status_code=400, detail=f"Unsupported action '{action}'")
 
 
@@ -929,6 +981,27 @@ def list_logfiles(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
     """List available whitelisted log files."""
     _auth(api_key)
     return {"log_files": sorted(_LOG_FILE_PATHS.keys())}
+
+
+@app.get("/crypto/state")
+def crypto_state(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
+    """Return the crypto bot's current system state (ACTIVE/HALTED/PAUSED, daily loss, suspended pairs)."""
+    _auth(api_key)
+    return _read_crypto_json("system_state.json")
+
+
+@app.get("/crypto/positions")
+def crypto_positions(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
+    """Return all currently open positions tracked by the crypto bot."""
+    _auth(api_key)
+    return _read_crypto_json("open_positions.json")
+
+
+@app.get("/crypto/backtest")
+def crypto_backtest(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
+    """Return the last completed 2-year backtest results."""
+    _auth(api_key)
+    return _read_crypto_json("backtest_results.json")
 
 
 @app.post("/jobs")

@@ -1,5 +1,5 @@
 {
-  "contract_version": "2026-05-30.1",
+  "contract_version": "2026-05-30.2",
   "api_version": "2.0.0",
   "release": {
     "date": "2026-05-16",
@@ -41,7 +41,8 @@
       "id": "service-control-operator",
       "name": "Service Control Operator",
       "scope": [
-        "restart"
+        "restart",
+        "crypto_unhalt"
       ],
       "execution_mode": "deterministic",
       "llm_provider": "none",
@@ -258,6 +259,27 @@
           "log_lines"
         ]
       }
+    },
+    {
+      "id": "crypto_unhalt",
+      "display_name": "Unhalt Crypto Bot",
+      "category": "control",
+      "operator": "service-control-operator",
+      "risk_level": "controlled",
+      "requires_service": false,
+      "requires_confirmation": true,
+      "supports_job_execution": true,
+      "timeout_seconds": 15,
+      "http": {
+        "method": "POST",
+        "path": "/crypto/unhalt (via /jobs)"
+      },
+      "parameters": {},
+      "outputs": {
+        "summary": "Resets system_state HALTED/PAUSED → ACTIVE and clears daily_loss_gbp",
+        "artifacts": ["system_state"]
+      },
+      "notes": "Only needed when the bot is in HALTED or PAUSED state. The risk monitor will re-evaluate on the next cycle and re-halt if limits are genuinely exceeded."
     },
     {
       "id": "read_logfile",
