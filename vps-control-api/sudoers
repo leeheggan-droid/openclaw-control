@@ -10,6 +10,7 @@
 #   sudo visudo -c  # verify syntax before logging out
 
 Cmnd_Alias OPENCLAW_SYSTEMCTL = \
+    /usr/bin/systemctl restart openclaw-control-api.service, \
     /usr/bin/systemctl restart openclaw-agent.service, \
     /usr/bin/systemctl restart openclaw-crypto.service, \
     /usr/bin/systemctl restart openclaw-vibe-gateway.service, \

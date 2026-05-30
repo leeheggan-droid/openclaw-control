@@ -29,4 +29,4 @@ jobs:
       - name: Pull and restart
         run: |
           ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_IP \
-            "sudo git -C $REPO_PATH pull && sudo systemctl restart $SERVICE && systemctl is-active $SERVICE"
+            "git -C $REPO_PATH pull && sudo systemctl restart $SERVICE && systemctl is-active $SERVICE"
