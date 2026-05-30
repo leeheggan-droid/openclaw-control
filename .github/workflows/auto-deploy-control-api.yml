@@ -1,0 +1,32 @@
+name: Auto Deploy — VPS Control API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vps-control-api/**'
+
+permissions:
+  contents: read
+
+env:
+  VPS_IP: '72.61.123.4'
+  VPS_USER: 'jacks'
+  REPO_PATH: '/opt/openclaw-control-api'
+  SERVICE: 'openclaw-control-api.service'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$VPS_IP" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Pull and restart
+        run: |
+          ssh -i ~/.ssh/id_rsa $VPS_USER@$VPS_IP \
+            "sudo git -C $REPO_PATH pull && sudo systemctl restart $SERVICE && systemctl is-active $SERVICE"
