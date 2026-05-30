@@ -91,11 +91,10 @@ _CONFIRMATION_ERROR = "confirmation_required"
 # Whitelisted log file paths — log_name is validated as a dict key only;
 # user input never flows into file paths.
 _LOG_FILE_PATHS: dict[str, str] = {
-    "trade_journal": "/var/log/openclaw-crypto/trade_journal.jsonl",
-    "trade_journal_repo": "/home/jacks/openclaw-crypto/crypto/logs/trade_journal.jsonl",
-    "trades": "/var/log/openclaw-crypto/trades.jsonl",
-    "events": "/var/log/openclaw-crypto/events.jsonl",
-    "system": "/var/log/openclaw-crypto/system.log",
+    "trade_journal": "/home/jacks/openclaw-crypto/crypto/logs/trade_journal.jsonl",
+    "trades": "/home/jacks/openclaw-crypto/crypto/logs/trades.jsonl",
+    "events": "/home/jacks/openclaw-crypto/crypto/logs/events.jsonl",
+    "system": "/home/jacks/openclaw-crypto/crypto/logs/system.log",
 }
 
 # Stable states returned by `systemctl is-active`.

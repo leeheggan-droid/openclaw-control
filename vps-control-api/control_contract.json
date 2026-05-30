@@ -277,7 +277,7 @@
         "log_name": {
           "type": "string",
           "description": "Log file identifier. Available: trade_journal, trades, events, system",
-          "enum": ["trade_journal", "trade_journal_repo", "trades", "events", "system"]
+          "enum": ["trade_journal", "trades", "events", "system"]
         },
         "n": {
           "type": "integer",
