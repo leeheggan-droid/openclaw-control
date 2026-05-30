@@ -85,7 +85,17 @@ _DEPLOY_CMDS: dict[str, list[str]] = {
 _DEFAULT_LOG_LINES = 50
 _DIAGNOSTIC_LOG_LINES = 20
 _MAX_LOG_LINES = 1000
+_MAX_LOG_FILE_LINES = 2000
 _CONFIRMATION_ERROR = "confirmation_required"
+
+# Whitelisted log file paths — log_name is validated as a dict key only;
+# user input never flows into file paths.
+_LOG_FILE_PATHS: dict[str, str] = {
+    "trade_journal": "/var/log/openclaw-crypto/trade_journal.jsonl",
+    "trades": "/var/log/openclaw-crypto/trades.jsonl",
+    "events": "/var/log/openclaw-crypto/events.jsonl",
+    "system": "/var/log/openclaw-crypto/system.log",
+}
 
 # Stable states returned by `systemctl is-active`.
 _STABLE_STATES: frozenset[str] = frozenset({"active", "inactive", "failed"})
@@ -489,6 +499,51 @@ def _execute_restart(service: str, *, operator: Optional[str] = None) -> dict[st
     return diagnostics
 
 
+def _read_log_file(log_name: str, n: int) -> dict[str, Any]:
+    if log_name not in _LOG_FILE_PATHS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Log '{log_name}' is not allowed. Available: {sorted(_LOG_FILE_PATHS)}",
+        )
+    path = Path(_LOG_FILE_PATHS[log_name])
+    if not path.exists():
+        return {"log_name": log_name, "path": str(path), "lines": [], "exists": False, "total_lines": 0}
+    try:
+        all_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return {
+            "log_name": log_name,
+            "path": str(path),
+            "lines": all_lines[-n:],
+            "exists": True,
+            "total_lines": len(all_lines),
+        }
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {exc}") from exc
+
+
+def _execute_read_logfile(log_name: str, *, n: int, operator: Optional[str] = None) -> dict[str, Any]:
+    result = _read_log_file(log_name, n)
+    return _build_operation_response(
+        action="read_logfile",
+        service=None,
+        ok=result["exists"],
+        summary=(
+            f"Read {len(result['lines'])} lines from {log_name}"
+            if result["exists"]
+            else f"Log file '{log_name}' not found on disk"
+        ),
+        operator=operator,
+        data={
+            "log_name": log_name,
+            "path": result["path"],
+            "line_count": len(result["lines"]),
+            "total_lines": result["total_lines"],
+            "exists": result["exists"],
+        },
+        artifacts={"log_lines": result["lines"]},
+    )
+
+
 def _execute_deploy(service: str, *, operator: Optional[str] = None) -> dict[str, Any]:
     if service not in _DEPLOY_CMDS:
         raise HTTPException(
@@ -584,6 +639,12 @@ def _execute_action(
         return _execute_restart(service, operator=operator)
     if action == "deploy":
         return _execute_deploy(service, operator=operator)
+    if action == "read_logfile":
+        return _execute_read_logfile(
+            parameters.get("log_name", ""),
+            n=min(int(parameters.get("n", _DEFAULT_LOG_LINES)), _MAX_LOG_FILE_LINES),
+            operator=operator,
+        )
     raise HTTPException(status_code=400, detail=f"Unsupported action '{action}'")
 
 
@@ -850,6 +911,24 @@ def deploy(service: str, api_key: str = Security(_api_key_header)) -> dict[str, 
         "log_error": log_error,
         "ok": True,
     }
+
+
+@app.get("/logfile/{log_name}")
+def read_logfile(
+    log_name: str,
+    n: int = Query(default=_DEFAULT_LOG_LINES, ge=1, le=_MAX_LOG_FILE_LINES),
+    api_key: str = Security(_api_key_header),
+) -> dict[str, Any]:
+    """Return the last N lines of a whitelisted log file."""
+    _auth(api_key)
+    return _execute_read_logfile(log_name, n=n, operator="read-only-operator")
+
+
+@app.get("/logfile")
+def list_logfiles(api_key: str = Security(_api_key_header)) -> dict[str, Any]:
+    """List available whitelisted log files."""
+    _auth(api_key)
+    return {"log_files": sorted(_LOG_FILE_PATHS.keys())}
 
 
 @app.post("/jobs")

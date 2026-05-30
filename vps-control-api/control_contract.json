@@ -1,5 +1,5 @@
 {
-  "contract_version": "2026-05-18.1",
+  "contract_version": "2026-05-30.1",
   "api_version": "2.0.0",
   "release": {
     "date": "2026-05-16",
@@ -29,7 +29,8 @@
       "scope": [
         "status",
         "logs",
-        "diagnostics"
+        "diagnostics",
+        "read_logfile"
       ],
       "execution_mode": "deterministic",
       "llm_provider": "groq-optional",
@@ -254,6 +255,40 @@
         "summary": "Status + log bundle",
         "artifacts": [
           "status_summary",
+          "log_lines"
+        ]
+      }
+    },
+    {
+      "id": "read_logfile",
+      "display_name": "Read Log File",
+      "category": "read",
+      "operator": "read-only-operator",
+      "risk_level": "read-only",
+      "requires_service": false,
+      "requires_confirmation": false,
+      "supports_job_execution": true,
+      "timeout_seconds": 15,
+      "http": {
+        "method": "GET",
+        "path": "/logfile/{log_name}"
+      },
+      "parameters": {
+        "log_name": {
+          "type": "string",
+          "description": "Log file identifier. Available: trade_journal, trades, events, system",
+          "enum": ["trade_journal", "trades", "events", "system"]
+        },
+        "n": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 2000
+        }
+      },
+      "outputs": {
+        "summary": "Last N lines of the requested log file",
+        "artifacts": [
           "log_lines"
         ]
       }
